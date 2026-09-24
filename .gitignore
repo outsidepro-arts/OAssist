@@ -1,0 +1,32 @@
+# --- Gradle ---
+.gradle/
+build/
+**/build/
+local.properties
+
+# --- Android Studio / IntelliJ ---
+.idea/
+*.iml
+captures/
+.externalNativeBuild/
+.cxx/
+
+# --- Secrets (никогда не коммитить) ---
+*.jks
+*.keystore
+*.pem
+*.p12
+.env
+.env.*
+secrets.properties
+
+# --- OS ---
+.DS_Store
+Thumbs.db
+
+# --- Kotlin ---
+.kotlin/
+
+# --- Логи/временное ---
+*.log
+*.hprof
