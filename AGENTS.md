@@ -174,4 +174,5 @@ API-ключи, токены, пароли, значения `extraHeaders`, Bas
 - Не тянуть тяжёлые зависимости «на будущее».
 - Не писать секреты в git (`.env`, `local.properties`, ключи) — проверяйте `git status` перед коммитом.
 - Не коммитить без явной просьбы.
+- Git ведём на английском: сообщения коммитов (conventional commits), ветки, теги — только English.
 - Не менять `applicationId`/`namespace` — `ru.outsideproarts.oassist` зафиксирован.
