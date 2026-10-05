@@ -1,0 +1,1 @@
+﻿# OAssist project ProGuard rules

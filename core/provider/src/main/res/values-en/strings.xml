@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="provider_error_auth">Invalid API key or access denied</string>
+    <string name="provider_error_not_found">Endpoint not found — check Base URL</string>
+    <string name="provider_error_http">HTTP error %1$d</string>
+    <string name="provider_error_network">Network unavailable or server not responding</string>
+    <string name="provider_error_protocol">Unsupported response format</string>
+    <string name="provider_error_not_supported">Provider type is not supported yet</string>
+    <string name="provider_error_no_provider">Provider is not configured — open Settings</string>
+    <string name="provider_error_no_model">Model is not selected — refresh the model list</string>
+    <string name="provider_error_name_required">Name is required</string>
+    <string name="provider_error_base_url_required">Base URL is required</string>
+    <string name="provider_error_base_url_invalid">Invalid Base URL</string>
+</resources>

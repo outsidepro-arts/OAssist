@@ -1,0 +1,248 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="settings_title">Settings</string>
+    <string name="settings_language_title">Language</string>
+    <string name="settings_language_subtitle">Interface and speech language</string>
+    <string name="settings_language_system">System</string>
+    <string name="settings_language_russian">Русский</string>
+    <string name="settings_language_english">English</string>
+    <string name="settings_language_picker">Language picker</string>
+
+    <string name="settings_secrets_title">Keys &amp; secrets</string>
+    <string name="settings_secrets_subtitle">API keys, tokens, passwords — encrypted only</string>
+    <string name="settings_secrets_empty">No stored keys</string>
+    <string name="settings_secrets_alias">Key &lt;%1$s&gt; — stored</string>
+    <string name="settings_secrets_clear">Delete all keys</string>
+    <string name="settings_secrets_clear_confirm">Delete all stored keys?</string>
+    <string name="settings_secrets_clear_done">All keys deleted</string>
+
+    <string name="settings_about_title">About</string>
+    <string name="settings_about_version">Version</string>
+    <string name="settings_about_license">License</string>
+    <string name="settings_about_license_value">MIT</string>
+    <string name="app_version">0.1.0</string>
+
+    <string name="state_selected">selected</string>
+    <string name="state_unselected">not selected</string>
+
+    <!-- Providers -->
+    <string name="providers_title">Providers</string>
+    <string name="providers_empty">No saved providers</string>
+    <string name="providers_add">Add provider</string>
+    <string name="provider_edit_add_title">New provider</string>
+    <string name="provider_edit_title">Edit provider</string>
+    <string name="provider_name">Name</string>
+    <string name="provider_kind">Provider type</string>
+    <string name="provider_base_url">Base URL</string>
+    <string name="provider_api_key">API key</string>
+    <string name="provider_api_key_masked">•••• (saved)</string>
+    <string name="provider_basic_user">Username (Basic)</string>
+    <string name="provider_basic_password">Password (Basic)</string>
+    <string name="provider_enabled">Enabled</string>
+    <string name="state_enabled">enabled</string>
+    <string name="state_disabled">disabled</string>
+    <string name="action_save">Save</string>
+    <string name="action_delete">Delete</string>
+    <string name="action_back">Back</string>
+    <string name="action_replace">Replace</string>
+    <string name="action_ok">OK</string>
+
+    <!-- Provider types -->
+    <string name="provider_kind_openai_compat_desc">OpenAI-compatible API (OpenAI, OpenRouter, local servers)</string>
+    <string name="provider_kind_anthropic_desc">Anthropic Messages API — support coming later</string>
+    <string name="provider_kind_gemini_desc">Google Gemini API — support coming later</string>
+    <string name="provider_kind_opencode_desc">OpenCode Zen / Go — OpenAI-compatible API + x-opencode-* headers</string>
+
+    <string name="provider_save_error_title">Failed to save provider</string>
+    <string name="provider_validating">Checking connection…</string>
+
+    <!-- Modes -->
+    <string name="mode_chat">Chat</string>
+    <string name="mode_assistant">Assistant</string>
+    <string name="mode_share">Share</string>
+    <string name="mode_config_title">Mode settings</string>
+    <string name="mode_provider">Provider</string>
+    <string name="mode_model">Model</string>
+    <string name="mode_model_refresh">Refresh model list</string>
+    <string name="mode_model_empty">List is empty — tap “Refresh model list”</string>
+    <string name="mode_model_manual">Or enter ID manually</string>
+    <string name="mode_caps_title">Model capabilities</string>
+    <string name="mode_probe">Probe</string>
+    <string name="mode_probe_hint">Probe is a short request with a dummy tool</string>
+    <string name="cap_tools">Tools</string>
+    <string name="cap_vision">Vision</string>
+    <string name="cap_audio_in">Audio input</string>
+    <string name="cap_reasoning">Reasoning</string>
+    <string name="mode_prompt">Initial prompt</string>
+    <string name="mode_prompt_hint">Leave empty for default prompt</string>
+    <string name="mode_tts_title">Speech output</string>
+    <string name="mode_tts_channel">Channel</string>
+    <string name="mode_tts_off">Off</string>
+    <string name="mode_tts_system">System synthesizer</string>
+    <string name="mode_tts_screen_reader">Screen reader</string>
+    <string name="mode_tts_voice">Voice</string>
+    <string name="mode_tts_voice_default">Default voice</string>
+    <string name="mode_tts_voice_network">(network)</string>
+    <string name="mode_tts_engine">Engine</string>
+    <string name="mode_tts_engine_system">System default</string>
+    <string name="mode_tts_engine_default">(default)</string>
+    <string name="mode_tts_language">Voice language</string>
+    <string name="mode_tts_rate">Rate</string>
+    <string name="mode_tts_pitch">Pitch</string>
+    <string name="mode_tts_volume">Volume</string>
+    <string name="mode_tts_tool_calls">Speak tool calls</string>
+    <string name="mode_tts_tool_calls_hint">Only via the agent’s comment (“looking up contact…”); tool type is never read</string>
+    <string name="mode_tts_narrative">Narrate work</string>
+    <string name="mode_tts_narrative_hint">Agent steps via screen reader and timeline</string>
+    <string name="mode_stt_title">Voice input</string>
+    <string name="mode_stt_system">System STT</string>
+    <string name="mode_stt_model_audio">Model audio</string>
+    <string name="mode_stt_model_audio_hint">Requires the model’s AUDIO_IN flag, otherwise falls back to text recognition</string>
+    <string name="mode_stt_language">Recognition language</string>
+
+    <!-- Approvals -->
+    <string name="approvals_title">Confirmations</string>
+    <string name="approvals_reset">Reset “always allow”</string>
+    <string name="approvals_reset_subtitle">Ask again before every risky action</string>
+    <string name="approvals_reset_done">Tool permissions reset</string>
+
+    <!-- Agent tools -->
+    <string name="tools_settings_title">Agent tools</string>
+    <string name="tools_settings_subtitle">Agent access and action confirmations</string>
+    <string name="tools_section_tools">Tools</string>
+    <string name="tool_enabled">Enabled</string>
+    <string name="tool_ask">Ask before executing</string>
+    <string name="tools_reset">Reset tool settings</string>
+    <string name="tools_reset_subtitle">Restore default enablement and confirmations</string>
+    <string name="tools_reset_done">Tool settings reset</string>
+    <string name="tool_unknown_desc">Agent action</string>
+    <string name="tool_app_launch_title">Launch apps</string>
+    <string name="tool_app_launch_desc">Open apps by package name</string>
+    <string name="tool_web_open_title">Open links</string>
+    <string name="tool_web_open_desc">Navigate to URLs in the browser</string>
+    <string name="tool_web_search_title">Web search</string>
+    <string name="tool_web_search_desc">Search queries via system search</string>
+    <string name="tool_alarm_set_title">Alarms</string>
+    <string name="tool_alarm_set_desc">Set alarms</string>
+    <string name="tool_open_settings_title">System settings</string>
+    <string name="tool_open_settings_desc">Open settings sections</string>
+    <string name="tool_call_place_title">Calls</string>
+    <string name="tool_call_place_desc">Outgoing calls to a number</string>
+    <string name="tool_sms_send_title">SMS</string>
+    <string name="tool_sms_send_desc">Send SMS to a number</string>
+    <string name="tool_contact_find_title">Find contacts</string>
+    <string name="tool_contact_find_desc">Search names and numbers in contacts</string>
+    <string name="tool_calendar_add_title">Calendar events</string>
+    <string name="tool_calendar_add_desc">Add events to the calendar</string>
+    <string name="tool_timer_set_title">Timer</string>
+    <string name="tool_timer_set_desc">Start a countdown timer</string>
+    <string name="tool_device_info_title">Device info</string>
+    <string name="tool_device_info_desc">Model, Android version, locale, time zone</string>
+    <string name="tool_clipboard_copy_title">Clipboard</string>
+    <string name="tool_clipboard_copy_desc">Copy text to the clipboard</string>
+    <string name="tool_ui_get_screen_title">Screen snapshot</string>
+    <string name="tool_ui_get_screen_desc">Read on-screen elements for the agent</string>
+    <string name="tool_ui_click_title">Taps</string>
+    <string name="tool_ui_click_desc">Tap on-screen elements</string>
+    <string name="tool_ui_long_click_title">Long presses</string>
+    <string name="tool_ui_long_click_desc">Long-press on-screen elements</string>
+    <string name="tool_ui_set_text_title">Text input</string>
+    <string name="tool_ui_set_text_desc">Type into on-screen fields</string>
+    <string name="tool_ui_scroll_title">Scrolling</string>
+    <string name="tool_ui_scroll_desc">Scroll on-screen lists</string>
+    <string name="tool_ui_swipe_title">Swipes</string>
+    <string name="tool_ui_swipe_desc">Swipe gestures by coordinates</string>
+    <string name="tool_ui_global_title">System navigation</string>
+    <string name="tool_ui_global_desc">Back/Home/Recents buttons</string>
+    <string name="tool_ui_wait_for_title">Wait for text</string>
+    <string name="tool_ui_wait_for_desc">Wait until text appears on screen</string>
+    <string name="tool_notify_list_title">Notification list</string>
+    <string name="tool_notify_list_desc">Read active notifications</string>
+    <string name="tool_notify_open_title">Open notifications</string>
+    <string name="tool_notify_open_desc">Jump to the app via notification</string>
+    <string name="tool_notify_clear_title">Dismiss notifications</string>
+    <string name="tool_notify_clear_desc">Remove a notification from the shade</string>
+    <string name="tool_web_fetch_title">Read web pages</string>
+    <string name="tool_web_fetch_desc">Automatically read pages into agent context</string>
+    <string name="tool_nav_open_title">Maps and navigation</string>
+    <string name="tool_nav_open_desc">Find places and points on the map</string>
+    <string name="tool_share_text_title">Share text</string>
+    <string name="tool_share_text_desc">Send text via app picker</string>
+    <string name="tool_flashlight_title">Flashlight</string>
+    <string name="tool_flashlight_desc">Turn the torch on and off</string>
+    <string name="tool_media_button_title">Media buttons</string>
+    <string name="tool_media_button_desc">Control the active player</string>
+    <string name="tool_location_get_title">Location</string>
+    <string name="tool_location_get_desc">Current device coordinates</string>
+    <string name="tool_device_state_title">Device state</string>
+    <string name="tool_device_state_desc">Torch, music, Wi-Fi, battery, screen, sound</string>
+    <string name="tool_voice_listen_start_title">Start listening</string>
+    <string name="tool_voice_listen_start_desc">Turn on the mic and await a voice reply</string>
+    <string name="tool_voice_listen_stop_title">Stop and recognize</string>
+    <string name="tool_voice_listen_stop_desc">Stop recording and return recognized text</string>
+    <string name="perm_microphone">Microphone</string>
+    <string name="perm_camera">Camera (torch)</string>
+    <string name="perm_location">Location</string>
+    <string name="tools_perm_note">Some tools need system permissions — grant them below.</string>
+    <string name="tools_perm_grant">Grant permission</string>
+    <string name="perm_call_phone">Phone (calls)</string>
+    <string name="perm_send_sms">SMS (sending)</string>
+    <string name="perm_read_contacts">Contacts (read)</string>
+    <string name="perm_calendar">Calendar (read and write)</string>
+
+    <!-- MCP servers -->
+    <string name="mcp_settings_title">MCP servers</string>
+    <string name="mcp_settings_subtitle">External agent tools</string>
+    <string name="mcp_add">Add server</string>
+    <string name="mcp_empty">No servers — add the first one</string>
+    <string name="mcp_edit_title">Server</string>
+    <string name="mcp_add_title">New server</string>
+    <string name="mcp_name">Name</string>
+    <string name="mcp_url">URL (Streamable HTTP)</string>
+    <string name="mcp_bearer">Bearer token</string>
+    <string name="mcp_test">Test</string>
+
+    <!-- Skills -->
+    <string name="skills_title">Skills</string>
+    <string name="skills_subtitle">Agent instructions (SKILL.md)</string>
+    <string name="skills_empty">No skills — add the first one</string>
+    <string name="skills_add">New skill</string>
+    <string name="skills_edit_title">Skill</string>
+    <string name="skills_name">Name (latin, digits, -, _)</string>
+    <string name="skills_name_bad">Name: latin, digits, “-” and “_” only</string>
+    <string name="skills_heading">Title</string>
+    <string name="skills_body">Skill text (Markdown)</string>
+    <string name="skills_body_empty">Skill text is empty</string>
+    <string name="skills_delete_title">Delete skill “%1$s”?</string>
+    <string name="action_cancel">Cancel</string>
+
+    <!-- Memory -->
+    <string name="memory_title">Memory</string>
+    <string name="memory_subtitle">Facts about you for the agent (MEMORY.md)</string>
+    <string name="memory_hint">One fact per line. Never store passwords, keys or tokens here — SecretStore only.</string>
+    <string name="memory_clear">Clear all</string>
+    <string name="memory_clear_title">Clear all memory?</string>
+    <string name="memory_saved">Memory saved</string>
+
+    <!-- Tools: memory and skills -->
+    <string name="tool_memory_get_title">Read memory</string>
+    <string name="tool_memory_get_desc">Facts about the user from memory</string>
+    <string name="tool_memory_put_title">Write memory</string>
+    <string name="tool_memory_put_desc">Remembering facts about the user</string>
+    <string name="tool_memory_forget_title">Forget memory</string>
+    <string name="tool_memory_forget_desc">Removing facts from memory</string>
+    <string name="tool_skill_list_title">Skill list</string>
+    <string name="tool_skill_list_desc">Enabled agent skills</string>
+    <string name="tool_skill_get_title">Read skill</string>
+    <string name="tool_skill_get_desc">Full skill text by name</string>
+
+    <!-- Mode prompt -->
+    <string name="mode_prompt_placeholders">Placeholders: {locale} {time} {device} {memory} {skills} {screen_context} {shared_content}. Empty — default prompt.</string>
+    <string name="mode_assistant_extras">Assistant behavior</string>
+    <string name="mode_assistant_autospeak">Speak answers aloud</string>
+    <string name="mode_assistant_autoclose">Close panel after answer</string>
+    <string name="mode_assistant_screenshot">Attach screen context</string>
+    <string name="mode_share_extras">Share behavior</string>
+    <string name="mode_share_action">What to do with content</string>
+    <string name="mode_share_show_in_chat">Show in chat</string>
+</resources>

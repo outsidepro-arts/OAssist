@@ -1,0 +1,1 @@
+﻿# OAssist consumer ProGuard rules

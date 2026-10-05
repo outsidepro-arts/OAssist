@@ -1,0 +1,31 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="chat_title">Chat</string>
+    <string name="chat_empty_title">No messages yet</string>
+    <string name="chat_empty_body">Start a conversation with the agent. Provider and model are configured in Settings.</string>
+    <string name="chat_input_hint">Message to the agent</string>
+    <string name="chat_send">Send</string>
+    <string name="chat_stop">Stop</string>
+    <string name="chat_role_user">You</string>
+    <string name="chat_role_assistant">Assistant</string>
+    <string name="chat_approval_title">Allow action “%1$s”?</string>
+    <string name="chat_approval_allow_once">Allow</string>
+    <string name="chat_approval_always">Always</string>
+    <string name="chat_approval_deny">Deny</string>
+    <string name="chat_speak_answer">Speak answer</string>
+    <string name="chat_mic">Voice input</string>
+    <string name="chat_no_recognizer">Speech recognition is unavailable on this device</string>
+    <string name="chat_mic_denied">Allow microphone access for voice input</string>
+    <string name="chat_mic_empty">Didn’t catch that, please repeat</string>
+    <string name="chat_mic_error">Recognition error</string>
+    <string name="chat_hold_hint">Hold the button to talk</string>
+    <string name="chat_voice_short">Too short — hold longer</string>
+    <string name="chat_listening">Listening…</string>
+    <string name="chat_voice_message">Voice message (%1$ds)</string>
+    <string name="chat_timeline_title">Progress</string>
+    <string name="chat_timeline_empty">Nothing yet — the agent has done nothing so far.</string>
+    <string name="chat_timeline_expanded">Expanded</string>
+    <string name="chat_timeline_collapsed">Collapsed</string>
+    <string name="chat_timeline_tool_call">Running: %1$s</string>
+    <string name="chat_timeline_tool_result">Done: %1$s</string>
+</resources>

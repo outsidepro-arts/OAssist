@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="assistant_title">Ассистент</string>
+    <string name="assistant_empty_title">Ассистент пока не настроен</string>
+    <string name="assistant_empty_body">Сделайте OAssist ассистентом по умолчанию и выберите модель в Настройках.</string>
+    <string name="assistant_ask">Вопрос агенту</string>
+    <string name="assistant_response">Ответ агента</string>
+    <string name="assistant_close">Закрыть</string>
+    <string name="assistant_context">Контекст экрана</string>
+    <string name="assistant_access_title">Доступ</string>
+    <string name="assistant_access_a11y">Доступ к экрану</string>
+    <string name="assistant_access_a11y_subtitle">Сервис доступности OAssist: чтение экрана и жесты для ui-инструментов</string>
+    <string name="assistant_access_notif">Доступ к уведомлениям</string>
+    <string name="assistant_access_notif_subtitle">Чтение уведомлений для notify-инструментов</string>
+    <string name="assistant_access_on">Включён</string>
+    <string name="assistant_access_off">Выключен</string>
+    <string name="assistant_speak_answer">Озвучить ответ</string>
+    <string name="assistant_mic">Голосовой ввод</string>
+    <string name="assistant_mic_prompt">Говорите…</string>
+    <string name="assistant_no_recognizer">Распознавание речи недоступно на этом устройстве</string>
+    <string name="assistant_mic_denied">Разрешите доступ к микрофону для голосового ввода</string>
+    <string name="assistant_mic_empty">Не расслышал, повторите</string>
+    <string name="assistant_mic_error">Ошибка распознавания</string>
+    <string name="assistant_listening">Слушаю…</string>
+</resources>

@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="provider_error_auth">Неверный API-ключ или нет доступа</string>
+    <string name="provider_error_not_found">Эндпоинт не найден — проверьте Base URL</string>
+    <string name="provider_error_http">Ошибка HTTP %1$d</string>
+    <string name="provider_error_network">Сеть недоступна или сервер не отвечает</string>
+    <string name="provider_error_protocol">Неподдерживаемый формат ответа</string>
+    <string name="provider_error_not_supported">Тип провайдера пока не поддерживается</string>
+    <string name="provider_error_no_provider">Провайдер не настроен — откройте Настройки</string>
+    <string name="provider_error_no_model">Модель не выбрана — обновите список моделей</string>
+    <string name="provider_error_name_required">Укажите название</string>
+    <string name="provider_error_base_url_required">Укажите Base URL</string>
+    <string name="provider_error_base_url_invalid">Некорректный Base URL</string>
+</resources>

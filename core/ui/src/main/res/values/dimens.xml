@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <dimen name="oassist_space_xxsmall">2dp</dimen>
+    <dimen name="oassist_space_xsmall">4dp</dimen>
+    <dimen name="oassist_space_small">8dp</dimen>
+    <dimen name="oassist_space_medium">12dp</dimen>
+    <dimen name="oassist_space_large">16dp</dimen>
+    <dimen name="oassist_space_xlarge">24dp</dimen>
+    <dimen name="oassist_icon">24dp</dimen>
+</resources>

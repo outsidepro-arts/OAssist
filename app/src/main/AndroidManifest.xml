@@ -1,0 +1,126 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <!-- INTERNET — явное объявление (раньше приходил только транзитивно из okhttp) -->
+    <uses-permission android:name="android.permission.INTERNET" />
+
+    <!-- M2.3: коммуникации и данные для intent-тулов (запрос — из экрана «Инструменты агента») -->
+    <uses-permission android:name="android.permission.CALL_PHONE" />
+    <uses-permission android:name="android.permission.SEND_SMS" />
+    <uses-permission android:name="android.permission.READ_CONTACTS" />
+    <uses-permission android:name="android.permission.READ_CALENDAR" />
+    <uses-permission android:name="android.permission.WRITE_CALENDAR" />
+
+    <!-- M2.7: фонарик и геопозиция для intent-тулов -->
+    <uses-permission android:name="android.permission.CAMERA" />
+    <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />
+    <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
+
+    <!-- device_state: чтение Wi-Fi (normal-разрешение, выдачи не требует) -->
+    <uses-permission android:name="android.permission.ACCESS_WIFI_STATE" />
+
+    <!-- M4.5-фикс: видимость TTS-движков. Без <queries> на API 30+ PackageManager
+         и TextToSpeech.getEngines() видят только системные пакеты (Google TTS),
+         сторонние синтезаторы (RHVoice и др.) из списка пропадают. -->
+    <queries>
+        <intent>
+            <action android:name="android.intent.action.TTS_SERVICE" />
+        </intent>
+    </queries>
+
+    <!-- M4.3: микрофон для системного голосового ввода (RecognizerIntent, запрос из UI) -->
+    <uses-permission android:name="android.permission.RECORD_AUDIO" />
+
+    <!-- CALL_PHONE/SEND_SMS подразумевают телефонию; явно помечаем необязательной для ChromeOS -->
+    <uses-feature android:name="android.hardware.telephony" android:required="false" />
+    <!-- CAMERA нужна только для фонарика; камера как требование не нужна -->
+    <uses-feature android:name="android.hardware.camera" android:required="false" />
+    <!-- Микрофон нужен только голосовому вводу; его отсутствие не блокирует установку -->
+    <uses-feature android:name="android.hardware.microphone" android:required="false" />
+
+    <application
+        android:name=".OAssistApp"
+        android:allowBackup="false"
+        android:fullBackupContent="@xml/backup_rules"
+        android:dataExtractionRules="@xml/data_extraction_rules"
+        android:icon="@drawable/ic_launcher"
+        android:label="@string/app_name"
+        android:supportsRtl="true"
+        android:theme="@style/Theme.OAssist">
+
+        <activity
+            android:name=".MainActivity"
+            android:exported="true"
+            android:launchMode="singleTask"
+            android:theme="@style/Theme.OAssist"
+            android:windowSoftInputMode="adjustResize">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
+
+        <!-- VoiceInteractionService: assist-жест -->
+        <service
+            android:name=".vis.OAssistVoiceInteractionService"
+            android:exported="true"
+            android:label="@string/app_name"
+            android:permission="android.permission.BIND_VOICE_INTERACTION">
+            <meta-data
+                android:name="android.voice_interaction_service"
+                android:resource="@xml/voice_interaction_service" />
+            <intent-filter>
+                <action android:name="android.service.voice.VoiceInteractionService" />
+            </intent-filter>
+        </service>
+
+        <!-- VoiceInteractionSessionService: сессия assist -->
+        <service
+            android:name=".vis.OAssistVoiceInteractionSessionService"
+            android:exported="true"
+            android:label="@string/app_name">
+            <intent-filter>
+                <action android:name="android.service.voice.VoiceInteractionSessionService" />
+            </intent-filter>
+        </service>
+
+        <!-- RecognitionService: стаб для ROLE_ASSISTANT -->
+        <service
+            android:name=".vis.OAssistRecognitionService"
+            android:exported="true"
+            android:label="@string/app_name"
+            android:permission="android.permission.BIND_RECOGNITION_SERVICE">
+            <meta-data
+                android:name="android.speech"
+                android:resource="@xml/recognition_service" />
+            <intent-filter>
+                <action android:name="android.speech.RecognitionService" />
+            </intent-filter>
+        </service>
+
+        <!-- AccessibilityService: пассивный снимок экрана + жесты по запросу тулов -->
+        <service
+            android:name=".a11y.OAssistAccessibilityService"
+            android:exported="true"
+            android:label="@string/app_name"
+            android:permission="android.permission.BIND_ACCESSIBILITY_SERVICE">
+            <meta-data
+                android:name="android.accessibilityservice"
+                android:resource="@xml/accessibility_service" />
+            <intent-filter>
+                <action android:name="android.accessibilityservice.AccessibilityService" />
+            </intent-filter>
+        </service>
+
+        <!-- NotificationListenerService: чтение уведомлений по запросу тулов -->
+        <service
+            android:name=".notify.OAssistNotificationListener"
+            android:exported="true"
+            android:label="@string/app_name"
+            android:permission="android.permission.BIND_NOTIFICATION_LISTENER_SERVICE">
+            <intent-filter>
+                <action android:name="android.service.notification.NotificationListenerService" />
+            </intent-filter>
+        </service>
+    </application>
+</manifest>

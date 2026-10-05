@@ -1,0 +1,718 @@
+package ru.outsideproarts.oassist
+
+import android.os.Bundle
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.compose.setContent
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.appcompat.app.AppCompatActivity
+import androidx.appcompat.app.AppCompatDelegate
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.padding
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.Chat
+import androidx.compose.material.icons.filled.RecordVoiceOver
+import androidx.compose.material.icons.filled.Settings
+import androidx.compose.material3.Icon
+import androidx.compose.material3.NavigationBar
+import androidx.compose.material3.NavigationBarItem
+import androidx.compose.material3.Scaffold
+import androidx.compose.material3.Text
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.stateDescription
+import androidx.core.os.LocaleListCompat
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.navigation.NavGraph.Companion.findStartDestination
+import androidx.navigation.NavType
+import androidx.navigation.compose.NavHost
+import androidx.navigation.compose.composable
+import androidx.navigation.compose.currentBackStackEntryAsState
+import androidx.navigation.compose.rememberNavController
+import androidx.navigation.navArgument
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.launch
+import ru.outsideproarts.oassist.core.a11y.AnnouncerHost
+import ru.outsideproarts.oassist.core.a11y.FlowAnnouncer
+import ru.outsideproarts.oassist.core.a11y.oassistRole
+import ru.outsideproarts.oassist.core.model.AppLanguage
+import ru.outsideproarts.oassist.core.model.AssistMode
+import ru.outsideproarts.oassist.core.model.ModeConfig
+import ru.outsideproarts.oassist.core.provider.ProviderAuth
+import ru.outsideproarts.oassist.core.provider.ProviderValidationResult
+import ru.outsideproarts.oassist.core.provider.ProviderValidator
+import ru.outsideproarts.oassist.core.ui.theme.OAssistTheme
+import ru.outsideproarts.oassist.di.AppGraph
+import ru.outsideproarts.oassist.feature.assistant.AssistantScreen
+import ru.outsideproarts.oassist.feature.chat.ChatScreen
+import ru.outsideproarts.oassist.feature.settings.ModeConfigScreen
+import ru.outsideproarts.oassist.feature.settings.ProviderEditScreen
+import ru.outsideproarts.oassist.feature.settings.ProviderListScreen
+import ru.outsideproarts.oassist.feature.settings.ProviderSecretsInput
+import ru.outsideproarts.oassist.feature.settings.SettingsScreen
+
+class MainActivity : AppCompatActivity() {
+
+    override fun onCreate(savedInstanceState: Bundle?) {
+        super.onCreate(savedInstanceState)
+        val graph = AppGraph.get()
+
+        setContent {
+            OAssistTheme {
+                val language by graph.data.settings.language
+                    .collectAsStateWithLifecycle(initialValue = AppLanguage.DEFAULT)
+
+                LaunchedEffect(language) {
+                    applyLanguage(language)
+                }
+
+                val scope = rememberCoroutineScope()
+                val appContext = LocalContext.current.applicationContext
+                LaunchedEffect(graph) {
+                    // Нарратив работы — только через экранный чтец (звук TTS не занимает).
+                    // Результат тула не зачитываем целиком (шумно): итог — в таймлайне чата.
+                    // Вкл/выкл — флагом narrative в TtsConfig активного режима (ставят UI-старты стримов).
+                    graph.narrator.events.collect { event ->
+                        when (event) {
+                            is ru.outsideproarts.oassist.core.speech.Narrator.NarrativeEvent.ToolCall ->
+                                graph.announcer.announce(appContext.getString(R.string.narrator_tool_call, event.toolName))
+                            is ru.outsideproarts.oassist.core.speech.Narrator.NarrativeEvent.ToolResult ->
+                                graph.announcer.announce(appContext.getString(R.string.narrator_tool_done, event.toolName))
+                            is ru.outsideproarts.oassist.core.speech.Narrator.NarrativeEvent.Thought ->
+                                graph.announcer.announce(event.text.take(500))
+                        }
+                    }
+                }
+                OAssistApp(
+                    graph = graph,
+                    announcer = graph.announcer,
+                    language = language,
+                    onLanguageChange = { lang ->
+                        scope.launch { graph.data.settings.setLanguage(lang) }
+                    },
+                )
+            }
+        }
+    }
+
+    private fun applyLanguage(language: AppLanguage) {
+        val locales = when (language) {
+            AppLanguage.SYSTEM -> LocaleListCompat.getEmptyLocaleList()
+            AppLanguage.RUSSIAN -> LocaleListCompat.forLanguageTags("ru")
+            AppLanguage.ENGLISH -> LocaleListCompat.forLanguageTags("en")
+        }
+        AppCompatDelegate.setApplicationLocales(locales)
+    }
+}
+
+private sealed class TopDest(val route: String, val labelRes: Int) {
+    data object Chat : TopDest("chat", R.string.nav_chat)
+    data object Assistant : TopDest("assistant", R.string.nav_assistant)
+    data object Settings : TopDest("settings", R.string.nav_settings)
+
+    companion object {
+        val ALL = listOf(Chat, Assistant, Settings)
+    }
+}
+
+@Composable
+private fun OAssistApp(
+    graph: AppGraph,
+    announcer: FlowAnnouncer,
+    language: AppLanguage,
+    onLanguageChange: (AppLanguage) -> Unit,
+) {
+    val navController = rememberNavController()
+    val scope = rememberCoroutineScope()
+    val backStack by navController.currentBackStackEntryAsState()
+    val currentRoute = backStack?.destination?.route
+
+    val selectedState = stringResource(R.string.state_selected)
+    val unselectedState = stringResource(R.string.state_unselected)
+
+    Scaffold(
+        modifier = Modifier.fillMaxSize(),
+        bottomBar = {
+            NavigationBar {
+                TopDest.ALL.forEach { dest ->
+                    val selected = currentRoute == dest.route
+                    val label = stringResource(dest.labelRes)
+                    NavigationBarItem(
+                        selected = selected,
+                        onClick = {
+                            navController.navigate(dest.route) {
+                                popUpTo(navController.graph.findStartDestination().id) {
+                                    saveState = true
+                                }
+                                launchSingleTop = true
+                                restoreState = true
+                            }
+                        },
+                        icon = {
+                            Icon(
+                                imageVector = when (dest) {
+                                    TopDest.Chat -> Icons.AutoMirrored.Filled.Chat
+                                    TopDest.Assistant -> Icons.Filled.RecordVoiceOver
+                                    TopDest.Settings -> Icons.Filled.Settings
+                                },
+                                contentDescription = null,
+                            )
+                        },
+                        label = { Text(label) },
+                        modifier = Modifier
+                            .oassistRole(Role.Tab)
+                            .semantics {
+                                stateDescription = if (selected) selectedState else unselectedState
+                            },
+                    )
+                }
+            }
+        },
+    ) { padding ->
+        NavHost(
+            navController = navController,
+            startDestination = TopDest.Chat.route,
+            modifier = Modifier.padding(padding),
+        ) {
+            composable(TopDest.Chat.route) {
+                val modeConfigs by graph.providers.observeModeConfigs()
+                    .collectAsStateWithLifecycle(initialValue = emptyList())
+                val chatConfig = modeConfigs.find { it.mode == AssistMode.CHAT }
+                val providers by graph.providers.observeProviders()
+                    .collectAsStateWithLifecycle(initialValue = emptyList())
+                val chatProvider = providers.find { it.id == chatConfig?.providerId }
+                val context = LocalContext.current
+                // Флаг AUDIO_IN — только ручной Switch capabilities модели.
+                var chatModels by remember { mutableStateOf(emptyList<ru.outsideproarts.oassist.core.model.ModelInfo>()) }
+                LaunchedEffect(chatConfig?.providerId) {
+                    chatModels = chatConfig?.providerId?.let { id ->
+                        graph.providers.observeModelCatalog(id).first()?.models
+                    } ?: emptyList()
+                }
+                val chatAudioIn = chatModels.find { it.id == chatConfig?.modelId }
+                    ?.capabilities?.contains(ru.outsideproarts.oassist.core.model.ModelCapability.AUDIO_IN) == true
+                ChatScreen(
+                    sendMessage = { userMsg, history, audio ->
+                        val profile = chatProvider
+                            ?: throw ru.outsideproarts.oassist.core.provider.ProviderError.NotConfigured(
+                                ru.outsideproarts.oassist.core.provider.ProviderError.NotConfigured.Reason.PROVIDER_MISSING,
+                            )
+                        val modelId = chatConfig?.modelId?.takeIf { it.isNotBlank() }
+                            ?: throw ru.outsideproarts.oassist.core.provider.ProviderError.NotConfigured(
+                                ru.outsideproarts.oassist.core.provider.ProviderError.NotConfigured.Reason.MODEL_MISSING,
+                            )
+                        // Озвучка режима CHAT применяется перед каждым стримом.
+                        graph.applyModeTts(chatConfig?.effectiveTts() ?: ru.outsideproarts.oassist.core.model.TtsConfig.DEFAULT)
+                        val client = graph.modelClientFor(profile)
+                        val prefs = graph.data.toolConfigs.snapshot()
+                        val toolRegistry = ru.outsideproarts.oassist.core.agent.ToolCatalog.createRegistry(
+                            ru.outsideproarts.oassist.core.agent.DeviceActions(
+                                context.applicationContext,
+                                graph.torchTracker,
+                            ),
+                            graph.uiActions,
+                            graph.notifyActions,
+                            graph.webContentActions,
+                            graph.webRenderActions,
+                            graph.voiceCapture,
+                            graph.data.memory,
+                            graph.data.skills,
+                            prefs,
+                        )
+                        val agent = ru.outsideproarts.oassist.core.agent.AgentLoop(
+                            client,
+                            toolRegistry,
+                            approvalPolicy = graph.approvalPolicy,
+                            events = graph.narratorEvents,
+                        )
+                        ru.outsideproarts.oassist.core.agent.AgentSession(
+                            chunks = agent.stream(
+                                modelId = modelId,
+                                systemPrompt = graph.buildSystemPrompt(
+                                    ru.outsideproarts.oassist.core.model.AssistMode.CHAT,
+                                ),
+                                history = history,
+                                userMessage = userMsg,
+                                audio = audio,
+                            ),
+                            agent = agent,
+                        )
+                    },
+                    speakSentence = { graph.speechOutput.speak(it) },
+                    stopSpeech = { graph.speechOutput.stop() },
+                    speakToolCalls = chatConfig?.effectiveTts()?.speakToolCalls ?: true,
+                    stt = chatConfig?.effectiveStt() ?: ru.outsideproarts.oassist.core.model.SttConfig.DEFAULT,
+                    audioIn = chatAudioIn,
+                    timeline = graph.narrator.timeline,
+                )
+            }
+            composable(TopDest.Assistant.route) {
+                val context = LocalContext.current
+                val lifecycleOwner = androidx.lifecycle.compose.LocalLifecycleOwner.current
+                var accessVersion by remember { mutableStateOf(0) }
+                androidx.compose.runtime.DisposableEffect(lifecycleOwner) {
+                    val observer = androidx.lifecycle.LifecycleEventObserver { _, event ->
+                        if (event == androidx.lifecycle.Lifecycle.Event.ON_RESUME) accessVersion++
+                    }
+                    lifecycleOwner.lifecycle.addObserver(observer)
+                    onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
+                }
+                val a11yEnabled = remember(accessVersion) {
+                    ru.outsideproarts.oassist.a11y.OAssistAccessibilityService.isEnabled(context)
+                }
+                val notifEnabled = remember(accessVersion) {
+                    ru.outsideproarts.oassist.notify.OAssistNotificationListener.isEnabled(context)
+                }
+                AssistantScreen(
+                    isAccessibilityEnabled = a11yEnabled,
+                    onOpenAccessibilitySettings = {
+                        context.startActivity(
+                            android.content.Intent(android.provider.Settings.ACTION_ACCESSIBILITY_SETTINGS)
+                                .addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK),
+                        )
+                    },
+                    isNotificationEnabled = notifEnabled,
+                    onOpenNotificationSettings = {
+                        context.startActivity(
+                            android.content.Intent("android.settings.ACTION_NOTIFICATION_LISTENER_SETTINGS")
+                                .addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK),
+                        )
+                    },
+                )
+            }
+            composable(TopDest.Settings.route) {
+                SettingsScreen(
+                    language = language,
+                    onLanguageChange = onLanguageChange,
+                    onNavigateToProviders = { navController.navigate("provider_list") },
+                    onNavigateToModeConfig = { mode -> navController.navigate("mode_config/$mode") },
+                    onNavigateToTools = { navController.navigate("tools_settings") },
+                    onNavigateToMcp = { navController.navigate("mcp_servers") },
+                    onNavigateToSkills = { navController.navigate("skills") },
+                    onNavigateToMemory = { navController.navigate("memory") },
+                )
+            }
+            composable("skills") {
+                var version by remember { mutableStateOf(0) }
+                var skills by remember {
+                    mutableStateOf(emptyList<ru.outsideproarts.oassist.core.model.SkillInfo>())
+                }
+                LaunchedEffect(version) {
+                    skills = runCatching { graph.data.skills.list() }.getOrElse { emptyList() }
+                }
+                ru.outsideproarts.oassist.feature.settings.SkillsScreen(
+                    skills = skills,
+                    onSetEnabled = { name, enabled ->
+                        scope.launch {
+                            graph.data.skills.setEnabled(name, enabled)
+                            version++
+                        }
+                    },
+                    onSave = { name, title, body ->
+                        scope.launch {
+                            runCatching { graph.data.skills.upsert(name, title, body) }
+                            version++
+                        }
+                    },
+                    onDelete = { name ->
+                        scope.launch {
+                            graph.data.skills.delete(name)
+                            version++
+                        }
+                    },
+                    onBack = { navController.popBackStack() },
+                )
+            }
+            composable("memory") {
+                val context = LocalContext.current
+                var text by remember { mutableStateOf<String?>(null) }
+                LaunchedEffect(Unit) {
+                    text = runCatching { graph.data.memory.read() }.getOrElse { "" }
+                }
+                ru.outsideproarts.oassist.feature.settings.MemoryScreen(
+                    text = text,
+                    onSave = { updated ->
+                        scope.launch {
+                            graph.data.memory.write(updated)
+                            text = updated
+                            showToast(context, R.string.memory_saved)
+                        }
+                    },
+                    onClear = {
+                        scope.launch {
+                            graph.data.memory.clear()
+                            text = ""
+                        }
+                    },
+                    onBack = { navController.popBackStack() },
+                )
+            }
+            composable("tools_settings") {
+                val prefs by graph.data.toolConfigs.preferences
+                    .collectAsStateWithLifecycle(
+                        initialValue = ru.outsideproarts.oassist.core.model.ToolPreferences(),
+                    )
+                val context = LocalContext.current
+                var permVersion by remember { mutableStateOf(0) }
+                val tools = remember(context) {
+                    ru.outsideproarts.oassist.core.agent.ToolCatalog.createTools(
+                        ru.outsideproarts.oassist.core.agent.DeviceActions(
+                            context.applicationContext,
+                            graph.torchTracker,
+                        ),
+                        graph.uiActions,
+                        graph.notifyActions,
+                        graph.webContentActions,
+                        graph.webRenderActions,
+                        graph.voiceCapture,
+                        graph.data.memory,
+                        graph.data.skills,
+                    )
+                }
+                val toolPermissions = remember(tools) {
+                    tools.associate { it.schema.name to it.requiredPermissions }
+                }
+                val missingPermissions = remember(permVersion) {
+                    toolPermissions.values.flatten().toSet().filter { permission ->
+                        context.checkSelfPermission(permission) !=
+                            android.content.pm.PackageManager.PERMISSION_GRANTED
+                    }.toSet()
+                }
+                val permLauncher = rememberLauncherForActivityResult(
+                    ActivityResultContracts.RequestMultiplePermissions(),
+                ) { permVersion++ }
+                ru.outsideproarts.oassist.feature.settings.ToolsSettingsScreen(
+                    tools = ru.outsideproarts.oassist.core.agent.ToolCatalog.descriptors(),
+                    disabled = prefs.disabled,
+                    askOverrides = prefs.askOverrides,
+                    toolPermissions = toolPermissions,
+                    missingPermissions = missingPermissions,
+                    onToggleEnabled = { name, enabled ->
+                        scope.launch { graph.data.toolConfigs.setToolEnabled(name, enabled) }
+                    },
+                    onToggleAsk = { name, ask ->
+                        scope.launch { graph.data.toolConfigs.setAskBefore(name, ask) }
+                    },
+                    onGrantPermission = { permission ->
+                        permLauncher.launch(arrayOf(permission))
+                    },
+                    onResetApprovals = {
+                        graph.approvalPolicy.clearAlwaysAllowed()
+                        showToast(context, R.string.approvals_reset_done)
+                    },
+                    onResetTools = {
+                        scope.launch {
+                            graph.data.toolConfigs.resetAll()
+                            showToast(context, R.string.tools_reset_done)
+                        }
+                    },
+                    onBack = { navController.popBackStack() },
+                )
+            }
+            composable("mcp_servers") {
+                val servers by graph.data.mcpServers.observeServers()
+                    .collectAsStateWithLifecycle(initialValue = emptyList())
+                val context = LocalContext.current
+                var testingId by remember { mutableStateOf<String?>(null) }
+                ru.outsideproarts.oassist.feature.settings.McpServersScreen(
+                    servers = servers,
+                    testingId = testingId,
+                    onSave = { updated, secrets ->
+                        scope.launch {
+                            graph.data.mcpServers.upsert(updated)
+                            val bearer = secrets.bearer
+                            when {
+                                secrets.clearBearer -> graph.data.mcpServers.clearBearer(updated.id)
+                                bearer != null -> graph.data.mcpServers.setBearer(updated.id, bearer.toCharArray())
+                            }
+                        }
+                    },
+                    onDelete = { id ->
+                        scope.launch { graph.data.mcpServers.delete(id) }
+                    },
+                    onSetEnabled = { id, enabled ->
+                        scope.launch { graph.data.mcpServers.setEnabled(id, enabled) }
+                    },
+                    onTest = { id ->
+                        scope.launch {
+                            testingId = id
+                            val config = servers.find { it.id == id }
+                            if (config == null) {
+                                showToast(context, R.string.models_provider_not_found)
+                            } else {
+                                runCatching {
+                                    val headers = graph.data.mcpServers.resolveHeaders(config)
+                                    val client = ru.outsideproarts.oassist.core.agent.mcp.McpClient(
+                                        graph.httpClient,
+                                        config.url,
+                                        headers,
+                                    )
+                                    kotlinx.coroutines.withTimeoutOrNull(20_000L) {
+                                        client.listTools()
+                                    } ?: throw java.io.IOException("timeout")
+                                }.onSuccess { tools ->
+                                    showToast(context, R.string.mcp_test_success, config.name, tools.size)
+                                }.onFailure { e ->
+                                    val detail = (e as? ru.outsideproarts.oassist.core.agent.mcp.McpError)?.message
+                                        ?: ru.outsideproarts.oassist.core.provider.ProviderError.from(e)
+                                            .userMessage(context)
+                                    showToast(
+                                        context,
+                                        R.string.mcp_test_error,
+                                        config.name,
+                                        detail,
+                                        duration = android.widget.Toast.LENGTH_LONG,
+                                    )
+                                }
+                            }
+                            testingId = null
+                        }
+                    },
+                    onBack = { navController.popBackStack() },
+                )
+            }
+            composable("provider_list") {                val providers by graph.providers.observeProviders()
+                    .collectAsStateWithLifecycle(initialValue = emptyList())
+                ProviderListScreen(
+                    providers = providers,
+                    onAddProvider = { navController.navigate("provider_edit/new") },
+                    onEditProvider = { id -> navController.navigate("provider_edit/$id") },
+                )
+            }
+            composable(
+                "provider_edit/{id}",
+                arguments = listOf(navArgument("id") { type = NavType.StringType }),
+            ) { backStackEntry ->
+                val id = backStackEntry.arguments?.getString("id")
+                val providers by graph.providers.observeProviders()
+                    .collectAsStateWithLifecycle(initialValue = emptyList())
+                val profile = providers.find { it.id == id }
+                val context = LocalContext.current
+                var isSaving by remember { mutableStateOf(false) }
+                var saveError by remember { mutableStateOf<String?>(null) }
+                ProviderEditScreen(
+                    profile = profile,
+                    isSaving = isSaving,
+                    saveError = saveError,
+                    onDismissSaveError = { saveError = null },
+                    onSave = { updated, secrets ->
+                        scope.launch {
+                            isSaving = true
+                            saveError = null
+                            saveProvider(graph, updated, secrets)
+                                .onSuccess { result ->
+                                    if (result is ProviderValidationResult.Skipped) {
+                                        showToast(context, R.string.provider_save_no_check)
+                                    }
+                                    navController.popBackStack()
+                                }
+                                .onFailure { e ->
+                                    saveError = ru.outsideproarts.oassist.core.provider.ProviderError.from(e)
+                                        .userMessage(context)
+                                }
+                            isSaving = false
+                        }
+                    },
+                    onDelete = { providerId ->
+                        scope.launch {
+                            graph.providers.deleteProvider(providerId)
+                            navController.popBackStack()
+                        }
+                    },
+                    onBack = { navController.popBackStack() },
+                )
+            }
+            composable(
+                "mode_config/{mode}",
+                arguments = listOf(navArgument("mode") { type = NavType.StringType }),
+            ) { backStackEntry ->
+                val modeName = backStackEntry.arguments?.getString("mode") ?: "CHAT"
+                val mode = AssistMode.valueOf(modeName)
+                val modeConfigs by graph.providers.observeModeConfigs()
+                    .collectAsStateWithLifecycle(initialValue = emptyList())
+                val providers by graph.providers.observeProviders()
+                    .collectAsStateWithLifecycle(initialValue = emptyList())
+                val config = modeConfigs.find { it.mode == mode } ?: ModeConfig.default(mode)
+                val context = LocalContext.current
+                var models by remember { mutableStateOf(emptyList<ru.outsideproarts.oassist.core.model.ModelInfo>()) }
+                var isLoadingModels by remember { mutableStateOf(false) }
+                var isProbing by remember { mutableStateOf(false) }
+
+                LaunchedEffect(config.providerId) {
+                    val providerId = config.providerId
+                    models = if (providerId == null) {
+                        emptyList()
+                    } else {
+                        graph.providers.observeModelCatalog(providerId).first()?.models ?: emptyList()
+                    }
+                }
+
+                ModeConfigScreen(
+                    mode = mode,
+                    config = config,
+                    providers = providers,
+                    models = models,
+                    isLoadingModels = isLoadingModels,
+                    onSave = { updated ->
+                        scope.launch {
+                            graph.providers.setModeConfig(updated)
+                            navController.popBackStack()
+                        }
+                    },
+                    onRefreshModels = { providerId ->
+                        scope.launch {
+                            isLoadingModels = true
+                            val profile = providers.find { it.id == providerId }
+                            if (profile == null) {
+                                showToast(context, R.string.models_provider_not_found)
+                                models = emptyList()
+                            } else {
+                                runCatching {
+                                    val client = graph.modelClientFor(profile)
+                                    val fetched = client.fetchModels()
+                                    graph.providers.saveModelCatalog(providerId, fetched)
+                                    fetched
+                                }.onSuccess { fetched ->
+                                    models = fetched
+                                    showToast(context, R.string.models_refresh_success, fetched.size)
+                                }.onFailure { e ->
+                                    models = emptyList()
+                                    val message = ru.outsideproarts.oassist.core.provider.ProviderError.from(e)
+                                        .userMessage(context)
+                                    showToast(
+                                        context,
+                                        R.string.models_refresh_error,
+                                        message,
+                                        duration = android.widget.Toast.LENGTH_LONG,
+                                    )
+                                }
+                            }
+                            isLoadingModels = false
+                        }
+                    },
+                    onProviderSelected = { selectedId ->
+                        scope.launch {
+                            models = graph.providers.observeModelCatalog(selectedId).first()?.models
+                                ?: emptyList()
+                        }
+                    },
+                    isProbing = isProbing,
+                    onProbeModel = { probeProviderId, probeModelId ->
+                        scope.launch {
+                            isProbing = true
+                            val profile = providers.find { it.id == probeProviderId }
+                            if (profile == null) {
+                                showToast(context, R.string.models_provider_not_found)
+                            } else {
+                                runCatching {
+                                    val client = graph.modelClientFor(profile)
+                                    val caps = client.probeCapabilities(probeModelId)
+                                    graph.providers.updateModelCapabilities(probeProviderId, probeModelId, caps)
+                                    caps
+                                }.onSuccess { caps ->
+                                    models = graph.providers.observeModelCatalog(probeProviderId).first()?.models ?: emptyList()
+                                    showToast(
+                                        context,
+                                        if (ru.outsideproarts.oassist.core.model.ModelCapability.TOOLS in caps) {
+                                            R.string.models_probe_tools
+                                        } else {
+                                            R.string.models_probe_no_tools
+                                        },
+                                    )
+                                }.onFailure { e ->
+                                    val message = ru.outsideproarts.oassist.core.provider.ProviderError.from(e)
+                                        .userMessage(context)
+                                    showToast(
+                                        context,
+                                        R.string.models_refresh_error,
+                                        message,
+                                        duration = android.widget.Toast.LENGTH_LONG,
+                                    )
+                                }
+                            }
+                            isProbing = false
+                        }
+                    },
+                    onSaveCapabilities = { capsProviderId, capsModelId, caps ->
+                        scope.launch {
+                            graph.providers.updateModelCapabilities(capsProviderId, capsModelId, caps)
+                            models = graph.providers.observeModelCatalog(capsProviderId).first()?.models ?: emptyList()
+                        }
+                    },
+                    loadVoices = { pkg -> graph.speechOutput.availableVoices(pkg) },
+                    loadEngines = { graph.speechOutput.availableEngines() },
+                    onBack = { navController.popBackStack() },
+                )
+            }
+        }
+    }
+
+    AnnouncerHost(announcer = announcer)
+}
+
+/**
+ * Одноразовый тост из обработчика события. Строка резолвится через [android.content.Context.getString]
+ * в момент клика (а не при композиции), поэтому хелпер — вне @Composable: так не срабатывает
+ * `LocalContextGetResourceValueCall` и текст всегда в актуальной локали.
+ */
+private fun showToast(
+    context: android.content.Context,
+    resId: Int,
+    vararg args: Any,
+    duration: Int = android.widget.Toast.LENGTH_SHORT,
+) {
+    android.widget.Toast.makeText(context, context.getString(resId, *args), duration).show()
+}
+
+/**
+ * Проверка параметров провайдера и сохранение. ANTHROPIC/GEMINI — заглушка (без пробы),
+ * результат возвращается как успех с [ProviderValidationResult.Skipped] — вызывающий
+ * показывает подсказку. Ошибка несохранённых секретов — только через [ProviderAuth].
+ */
+private suspend fun saveProvider(
+    graph: AppGraph,
+    updated: ru.outsideproarts.oassist.core.model.ProviderProfile,
+    secrets: ProviderSecretsInput,
+): Result<ProviderValidationResult> = try {
+    val overrides = ProviderAuth(
+        bearerToken = secrets.apiKey?.toCharArray(),
+        basicUser = secrets.basicUser?.toCharArray(),
+        basicPassword = secrets.basicPassword?.toCharArray(),
+    )
+    val validator = ProviderValidator(graph.data.secretStore, graph.httpClient)
+    when (val result = validator.validate(updated, overrides)) {
+        is ProviderValidationResult.Failure -> Result.failure(result.error)
+        else -> {
+            graph.providers.upsertProvider(updated)
+            val apiKey = secrets.apiKey
+            when {
+                secrets.clearApiKey -> graph.providers.clearApiKey(updated.id)
+                apiKey != null -> graph.providers.setApiKey(updated.id, apiKey.toCharArray())
+            }
+            val basicUser = secrets.basicUser
+            val basicPassword = secrets.basicPassword
+            when {
+                secrets.clearBasic -> graph.providers.clearBasicAuth(updated.id)
+                basicUser != null && basicPassword != null ->
+                    graph.providers.setBasicAuth(updated.id, basicUser.toCharArray(), basicPassword.toCharArray())
+            }
+            if (result is ProviderValidationResult.Success) {
+                graph.providers.saveModelCatalog(updated.id, result.models)
+            }
+            Result.success(result)
+        }
+    }
+} catch (e: kotlinx.coroutines.CancellationException) {
+    throw e
+} catch (e: Throwable) {
+    Result.failure(e)
+}

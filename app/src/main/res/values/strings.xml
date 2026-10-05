@@ -1,0 +1,26 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">OAssist</string>
+
+    <string name="nav_chat">Чат</string>
+    <string name="nav_assistant">Ассистент</string>
+    <string name="nav_settings">Настройки</string>
+
+    <string name="state_selected">выбрано</string>
+    <string name="state_unselected">не выбрано</string>
+
+    <string name="models_refresh_success">Модели загружены: %1$d</string>
+    <string name="models_refresh_error">Не удалось обновить список моделей: %1$s</string>
+    <string name="models_provider_not_found">Провайдер не найден</string>
+    <string name="models_probe_tools">Модель поддерживает инструменты</string>
+    <string name="models_probe_no_tools">Модель без поддержки инструментов</string>
+    <string name="mcp_test_success">MCP %1$s: инструментов: %2$d</string>
+    <string name="mcp_test_error">MCP %1$s: %2$s</string>
+    <string name="provider_save_no_check">Проверка для этого типа появится позже — провайдер сохранён</string>
+    <string name="approvals_reset_done">Разрешения тулов сброшены</string>
+    <string name="tools_reset_done">Настройки инструментов сброшены</string>
+    <string name="a11y_service_description">OAssist читает экран и выполняет жесты только по вашей команде агенту.</string>
+    <string name="narrator_tool_call">Выполняю: %1$s</string>
+    <string name="narrator_tool_done">Готово: %1$s</string>
+    <string name="memory_saved">Память сохранена</string>
+</resources>

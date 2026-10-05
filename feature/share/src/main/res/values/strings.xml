@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="share_activity_label">OAssist — общий доступ</string>
+    <string name="share_title">Отправить в OAssist</string>
+    <string name="share_received_label">Полученный контент</string>
+    <string name="share_empty">Нет контента для отправки</string>
+    <string name="share_open_chat">Открыть чат</string>
+    <string name="share_close">Закрыть</string>
+    <string name="share_images_count">Изображений: %1$d</string>
+    <string name="share_ask_label">Вопрос агенту</string>
+    <string name="share_send">Отправить</string>
+    <string name="share_response">Ответ агента</string>
+    <string name="share_speak_answer">Озвучить ответ</string>
+</resources>

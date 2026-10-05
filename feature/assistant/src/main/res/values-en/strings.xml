@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="assistant_title">Assistant</string>
+    <string name="assistant_empty_title">Assistant is not set up yet</string>
+    <string name="assistant_empty_body">Make OAssist the default assistant and pick a model in Settings.</string>
+    <string name="assistant_ask">Ask the agent</string>
+    <string name="assistant_response">Agent response</string>
+    <string name="assistant_close">Close</string>
+    <string name="assistant_context">Screen context</string>
+    <string name="assistant_access_title">Access</string>
+    <string name="assistant_access_a11y">Screen access</string>
+    <string name="assistant_access_a11y_subtitle">OAssist accessibility service: screen reading and gestures for ui tools</string>
+    <string name="assistant_access_notif">Notification access</string>
+    <string name="assistant_access_notif_subtitle">Read notifications for notify tools</string>
+    <string name="assistant_access_on">Enabled</string>
+    <string name="assistant_access_off">Disabled</string>
+    <string name="assistant_speak_answer">Speak answer</string>
+    <string name="assistant_mic">Voice input</string>
+    <string name="assistant_mic_prompt">Speak…</string>
+    <string name="assistant_no_recognizer">Speech recognition is unavailable on this device</string>
+    <string name="assistant_mic_denied">Allow microphone access for voice input</string>
+    <string name="assistant_mic_empty">Didn’t catch that, please repeat</string>
+    <string name="assistant_mic_error">Recognition error</string>
+    <string name="assistant_listening">Listening…</string>
+</resources>

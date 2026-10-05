@@ -1,0 +1,468 @@
+package ru.outsideproarts.oassist.core.agent
+
+import android.Manifest
+import android.app.SearchManager
+import android.content.ClipData
+import android.content.ClipboardManager
+import android.content.Context
+import android.content.Intent
+import android.content.pm.PackageManager
+import android.net.Uri
+import android.os.Build
+import android.provider.AlarmClock
+import android.provider.CalendarContract
+import android.provider.ContactsContract
+import android.telephony.SmsManager
+import android.provider.Settings
+import java.util.Locale
+import java.util.TimeZone
+import kotlinx.coroutines.CompletableDeferred
+
+/**
+ * Обёртка над Android-интентами для инструментов агента.
+ * [torchTracker] — процесс-скоп трекер фонарика (синглтон графа, не сообщения).
+ */
+class DeviceActions(
+    private val context: Context,
+    private val torchTracker: TorchTracker? = null,
+) {
+
+    fun launchApp(packageName: String): ToolResult {
+        val intent = context.packageManager.getLaunchIntentForPackage(packageName)
+            ?: return ToolResult(false, "Приложение '$packageName' не найдено")
+        intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        context.startActivity(intent)
+        return ToolResult(true, "Приложение '$packageName' запущено")
+    }
+
+    fun openWeb(url: String): ToolResult {
+        val normalized = if (url.startsWith("http://") || url.startsWith("https://")) url else "https://$url"
+        val intent = Intent(Intent.ACTION_VIEW, Uri.parse(normalized)).apply {
+            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        }
+        return runCatching {
+            context.startActivity(intent)
+            ToolResult(true, "Открыт URL: $normalized")
+        }.getOrElse { ToolResult(false, "Не удалось открыть URL: ${it.message}") }
+    }
+
+    fun webSearch(query: String): ToolResult {
+        if (query.isBlank()) {
+            return ToolResult(false, "Не указан query — передайте поисковый запрос в параметре query")
+        }
+        val intent = Intent(Intent.ACTION_WEB_SEARCH).apply {
+            putExtra(SearchManager.QUERY, query)
+            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        }
+        val handled = intent.resolveActivity(context.packageManager) != null &&
+            runCatching { context.startActivity(intent) }.isSuccess
+        if (handled) return ToolResult(true, "Поиск в сети: '$query'")
+        // Фолбэк: системного поиска нет (AOSP без Google-приложения и т.п.) — ищем через браузер.
+        val url = "https://www.google.com/search?q=" + java.net.URLEncoder.encode(query, "UTF-8")
+        val fallback = openWeb(url)
+        return if (fallback.success) {
+            ToolResult(true, "Поиск в сети через браузер: '$query'")
+        } else {
+            ToolResult(false, "Не удалось выполнить поиск: нет обработчика и браузер недоступен")
+        }
+    }
+
+    fun setAlarm(hour: Int, minute: Int, label: String?): ToolResult {
+        val intent = Intent(AlarmClock.ACTION_SET_ALARM).apply {
+            putExtra(AlarmClock.EXTRA_HOUR, hour)
+            putExtra(AlarmClock.EXTRA_MINUTES, minute)
+            label?.let { putExtra(AlarmClock.EXTRA_MESSAGE, it) }
+            putExtra(AlarmClock.EXTRA_SKIP_UI, true)
+            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        }
+        return runCatching {
+            context.startActivity(intent)
+            val labelText = label?.let { " с меткой '$it'" } ?: ""
+            ToolResult(true, "Будильник установлен на %02d:%02d%s".format(hour, minute, labelText))
+        }.getOrElse { ToolResult(false, "Не удалось установить будильник: ${it.message}") }
+    }
+
+    fun openSettings(action: String?): ToolResult {
+        val intent = when (action) {
+            "wifi" -> Intent(Settings.ACTION_WIFI_SETTINGS)
+            "bluetooth" -> Intent(Settings.ACTION_BLUETOOTH_SETTINGS)
+            "display" -> Intent(Settings.ACTION_DISPLAY_SETTINGS)
+            "sound" -> Intent(Settings.ACTION_SOUND_SETTINGS)
+            "location" -> Intent(Settings.ACTION_LOCATION_SOURCE_SETTINGS)
+            else -> Intent(Settings.ACTION_SETTINGS)
+        }.apply { addFlags(Intent.FLAG_ACTIVITY_NEW_TASK) }
+        return runCatching {
+            context.startActivity(intent)
+            ToolResult(true, "Настройки открыты")
+        }.getOrElse { ToolResult(false, "Не удалось открыть настройки: ${it.message}") }
+    }
+
+    // --- M2.3: коммуникации и данные ---
+
+    private fun hasPermission(permission: String): Boolean =
+        context.checkSelfPermission(permission) == PackageManager.PERMISSION_GRANTED
+
+    private fun noPermissionResult(permission: String): ToolResult =
+        ToolResult(false, "Нет разрешения $permission — выдайте его в разделе «Инструменты агента»")
+
+    fun placeCall(number: String): ToolResult {
+        if (!hasPermission(Manifest.permission.CALL_PHONE)) {
+            return noPermissionResult(Manifest.permission.CALL_PHONE)
+        }
+        val intent = Intent(Intent.ACTION_CALL, Uri.parse("tel:$number")).apply {
+            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        }
+        return runCatching {
+            context.startActivity(intent)
+            ToolResult(true, "Звонок на номер $number")
+        }.getOrElse { ToolResult(false, "Не удалось позвонить: ${it.message}") }
+    }
+
+    fun sendSms(to: String, body: String): ToolResult {
+        if (!hasPermission(Manifest.permission.SEND_SMS)) {
+            return noPermissionResult(Manifest.permission.SEND_SMS)
+        }
+        return runCatching {
+            @Suppress("DEPRECATION")
+            val smsManager = context.getSystemService(SmsManager::class.java) ?: SmsManager.getDefault()
+            val parts = smsManager.divideMessage(body)
+            if (parts.size <= 1) {
+                smsManager.sendTextMessage(to, null, body, null, null)
+            } else {
+                smsManager.sendMultipartTextMessage(to, null, parts, null, null)
+            }
+            ToolResult(true, "SMS на номер $to отправлено")
+        }.getOrElse { ToolResult(false, "Не удалось отправить SMS: ${it.message}") }
+    }
+
+    fun findContacts(query: String): ToolResult {
+        if (!hasPermission(Manifest.permission.READ_CONTACTS)) {
+            return noPermissionResult(Manifest.permission.READ_CONTACTS)
+        }
+        return runCatching {
+            val found = mutableListOf<String>()
+            context.contentResolver.query(
+                ContactsContract.CommonDataKinds.Phone.CONTENT_URI,
+                arrayOf(
+                    ContactsContract.CommonDataKinds.Phone.DISPLAY_NAME,
+                    ContactsContract.CommonDataKinds.Phone.NUMBER,
+                ),
+                "${ContactsContract.CommonDataKinds.Phone.DISPLAY_NAME} LIKE ?",
+                arrayOf("%$query%"),
+                "${ContactsContract.CommonDataKinds.Phone.DISPLAY_NAME} ASC",
+            )?.use { cursor ->
+                val nameIdx = cursor.getColumnIndex(ContactsContract.CommonDataKinds.Phone.DISPLAY_NAME)
+                val numberIdx = cursor.getColumnIndex(ContactsContract.CommonDataKinds.Phone.NUMBER)
+                while (cursor.moveToNext() && found.size < MAX_CONTACT_RESULTS) {
+                    found.add("${cursor.getString(nameIdx)} — ${cursor.getString(numberIdx)}")
+                }
+            }
+            if (found.isEmpty()) {
+                ToolResult(true, "Контакты по запросу «$query» не найдены")
+            } else {
+                ToolResult(true, "Найдено: ${found.joinToString("; ")}")
+            }
+        }.getOrElse { ToolResult(false, "Не удалось найти контакты: ${it.message}") }
+    }
+
+    fun addCalendarEvent(title: String, startMillis: Long, endMillis: Long, description: String?): ToolResult {
+        if (!hasPermission(Manifest.permission.WRITE_CALENDAR)) {
+            return noPermissionResult(Manifest.permission.WRITE_CALENDAR)
+        }
+        return runCatching {
+            val calendarId = context.contentResolver.query(
+                CalendarContract.Calendars.CONTENT_URI,
+                arrayOf(CalendarContract.Calendars._ID, CalendarContract.Calendars.IS_PRIMARY),
+                "${CalendarContract.Calendars.CALENDAR_ACCESS_LEVEL} >= ${CalendarContract.Calendars.CAL_ACCESS_CONTRIBUTOR}",
+                null,
+                null,
+            )?.use { cursor ->
+                var first: Long? = null
+                var primary: Long? = null
+                val idIdx = cursor.getColumnIndex(CalendarContract.Calendars._ID)
+                val primaryIdx = cursor.getColumnIndex(CalendarContract.Calendars.IS_PRIMARY)
+                while (cursor.moveToNext()) {
+                    val id = cursor.getLong(idIdx)
+                    if (first == null) first = id
+                    if (cursor.getInt(primaryIdx) == 1) primary = id
+                }
+                primary ?: first
+            } ?: throw IllegalStateException("Нет доступного календаря")
+            val values = android.content.ContentValues().apply {
+                put(CalendarContract.Events.CALENDAR_ID, calendarId)
+                put(CalendarContract.Events.TITLE, title)
+                put(CalendarContract.Events.DTSTART, startMillis)
+                put(CalendarContract.Events.DTEND, endMillis)
+                put(CalendarContract.Events.EVENT_TIMEZONE, TimeZone.getDefault().id)
+                description?.let { put(CalendarContract.Events.DESCRIPTION, it) }
+            }
+            context.contentResolver.insert(CalendarContract.Events.CONTENT_URI, values)
+                ?: throw IllegalStateException("Провайдер календаря отклонил вставку")
+            ToolResult(true, "Событие «$title» добавлено в календарь")
+        }.getOrElse { ToolResult(false, "Не удалось добавить событие: ${it.message}") }
+    }
+
+    fun setTimer(seconds: Int, label: String?): ToolResult {
+        if (seconds <= 0) return ToolResult(false, "Длительность таймера должна быть положительной")
+        val intent = Intent(AlarmClock.ACTION_SET_TIMER).apply {
+            putExtra(AlarmClock.EXTRA_LENGTH, seconds)
+            label?.let { putExtra(AlarmClock.EXTRA_MESSAGE, it) }
+            putExtra(AlarmClock.EXTRA_SKIP_UI, true)
+            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        }
+        return runCatching {
+            context.startActivity(intent)
+            ToolResult(true, "Таймер на $seconds с. запущен")
+        }.getOrElse { ToolResult(false, "Не удалось запустить таймер: ${it.message}") }
+    }
+
+    fun deviceInfo(): ToolResult {
+        val info = "Устройство: ${Build.MANUFACTURER} ${Build.MODEL}; " +
+            "Android ${Build.VERSION.RELEASE} (API ${Build.VERSION.SDK_INT}); " +
+            "локаль ${Locale.getDefault().toLanguageTag()}; " +
+            "часовой пояс ${TimeZone.getDefault().id}"
+        return ToolResult(true, info)
+    }
+
+    fun copyToClipboard(text: String): ToolResult {
+        return runCatching {
+            val clipboard = context.getSystemService(ClipboardManager::class.java)
+                ?: return ToolResult(false, "Буфер обмена недоступен")
+            clipboard.setPrimaryClip(ClipData.newPlainText("OAssist", text))
+            ToolResult(true, "Текст скопирован в буфер обмена")
+        }.getOrElse { ToolResult(false, "Не удалось скопировать: ${it.message}") }
+    }
+
+    // --- M2.7: интент-хвосты ---
+
+    fun openNavigation(query: String?, latitude: Double?, longitude: Double?): ToolResult {
+        val uri = when {
+            latitude != null && longitude != null -> Uri.parse("geo:$latitude,$longitude?q=$latitude,$longitude")
+            !query.isNullOrBlank() -> {
+                val encoded = java.net.URLEncoder.encode(query, "UTF-8")
+                Uri.parse("geo:0,0?q=$encoded")
+            }
+            else -> return ToolResult(false, "Укажите query или координаты lat/lng")
+        }
+        val intent = Intent(Intent.ACTION_VIEW, uri).apply {
+            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        }
+        if (intent.resolveActivity(context.packageManager) == null) {
+            val target = query ?: "$latitude,$longitude"
+            val encoded = java.net.URLEncoder.encode(target, "UTF-8")
+            return openWeb("https://www.google.com/maps/search/?api=1&query=$encoded")
+        }
+        return runCatching {
+            context.startActivity(intent)
+            ToolResult(true, "Карты открыты")
+        }.getOrElse { ToolResult(false, "Не удалось открыть карты: ${it.message}") }
+    }
+
+    fun shareText(text: String): ToolResult {
+        if (text.isBlank()) return ToolResult(false, "Не указан text")
+        val intent = Intent(Intent.ACTION_SEND).apply {
+            type = "text/plain"
+            putExtra(Intent.EXTRA_TEXT, text)
+            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        }
+        val chooser = Intent.createChooser(intent, null).apply {
+            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        }
+        return runCatching {
+            context.startActivity(chooser)
+            ToolResult(true, "Выбор приложения для отправки открыт")
+        }.getOrElse { ToolResult(false, "Не удалось поделиться: ${it.message}") }
+    }
+
+    fun setFlashlight(on: Boolean): ToolResult {
+        if (!hasPermission(Manifest.permission.CAMERA)) {
+            return noPermissionResult(Manifest.permission.CAMERA)
+        }
+        return runCatching {
+            val cameraManager = context.getSystemService(android.hardware.camera2.CameraManager::class.java)
+                ?: return ToolResult(false, "Камера недоступна")
+            val cameraId = cameraManager.cameraIdList.firstOrNull { id ->
+                cameraManager.getCameraCharacteristics(id)
+                    .get(android.hardware.camera2.CameraCharacteristics.FLASH_INFO_AVAILABLE) == true
+            } ?: return ToolResult(false, "На устройстве нет вспышки")
+            cameraManager.setTorchMode(cameraId, on)
+            torchTracker?.onTorchChanged(cameraId, on)
+            ToolResult(true, if (on) "Фонарик включён" else "Фонарик выключен")
+        }.getOrElse { ToolResult(false, "Не удалось переключить фонарик: ${it.message}") }
+    }
+
+    fun pressMediaButton(button: String): ToolResult {
+        val keyCode = when (button.lowercase()) {
+            "play_pause" -> android.view.KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE
+            "next" -> android.view.KeyEvent.KEYCODE_MEDIA_NEXT
+            "prev", "previous" -> android.view.KeyEvent.KEYCODE_MEDIA_PREVIOUS
+            else -> return ToolResult(false, "Кнопка: play_pause/next/prev")
+        }
+        return runCatching {
+            val audio = context.getSystemService(android.media.AudioManager::class.java)
+                ?: return ToolResult(false, "Аудиосервис недоступен")
+            val down = android.view.KeyEvent(android.view.KeyEvent.ACTION_DOWN, keyCode)
+            val up = android.view.KeyEvent(android.view.KeyEvent.ACTION_UP, keyCode)
+            audio.dispatchMediaKeyEvent(down)
+            audio.dispatchMediaKeyEvent(up)
+            ToolResult(true, "Медиа-кнопка нажата: $button")
+        }.getOrElse { ToolResult(false, "Не удалось нажать медиа-кнопку: ${it.message}") }
+    }
+
+    // Разрешение проверяется в рантайме выше + try/catch вокруг вызова: lint этого не видит.
+    // Кэшу (getLastKnownLocation) здесь нет сознательно: он отдавал чужие точки
+    // (прецедент — Кремль человеку, который там не был). Только свежий фикс.
+    @android.annotation.SuppressLint("MissingPermission")
+    suspend fun freshLocation(): ToolResult {
+        if (!hasPermission(Manifest.permission.ACCESS_FINE_LOCATION) &&
+            !hasPermission(Manifest.permission.ACCESS_COARSE_LOCATION)
+        ) {
+            return noPermissionResult(Manifest.permission.ACCESS_FINE_LOCATION)
+        }
+        return runCatching {
+            val locationManager = context.getSystemService(android.location.LocationManager::class.java)
+                ?: return ToolResult(false, "Сервис геопозиции недоступен")
+            val enabled = locationManager.getProviders(true)
+            val wantGps = enabled.contains(android.location.LocationManager.GPS_PROVIDER)
+            val wantNet = enabled.contains(android.location.LocationManager.NETWORK_PROVIDER)
+            if (!wantGps && !wantNet) {
+                return ToolResult(false, "Геопозиция выключена — включите её в настройках")
+            }
+            val fix = awaitFreshFix(locationManager, wantGps, wantNet)
+                ?: return ToolResult(false, NO_FIX_MESSAGE)
+            @Suppress("DEPRECATION")
+            val mock = fix.isMock
+            ToolResult(
+                true,
+                formatFix(
+                    latitude = fix.latitude,
+                    longitude = fix.longitude,
+                    accuracyM = fix.accuracy.toInt(),
+                    provider = fix.provider ?: "unknown",
+                    mock = mock,
+                ),
+            )
+        }.getOrElse { ToolResult(false, "Не удалось получить координаты: ${it.message}") }
+    }
+
+    /**
+     * Ждать живого фикса: GPS и сеть параллельно, победа точного (≤50 м).
+     * К таймауту — лучший свежий из пришедших, если он не грубее 500 м
+     * (VPN/эмуляторные точки в километрах отбрасываются, а не презентуются).
+     * Мок-флаги не фильтруем, но помечаем в ответе — пусть модель решает.
+     * Разрешение проверено вызывающим + try/catch: lint этого не видит.
+     */
+    @android.annotation.SuppressLint("MissingPermission")
+    private suspend fun awaitFreshFix(
+        locationManager: android.location.LocationManager,
+        wantGps: Boolean,
+        wantNet: Boolean,
+    ): android.location.Location? {
+        val done = CompletableDeferred<Unit>()
+        var finalResult: android.location.Location? = null
+        val listener = android.location.LocationListener { loc ->
+            if (done.isCompleted) return@LocationListener
+            val current = finalResult
+            if (loc.accuracy <= GOOD_ACCURACY_M) {
+                finalResult = loc
+                done.complete(Unit)
+            } else if (current == null || loc.accuracy < current.accuracy) {
+                finalResult = loc
+            }
+        }
+        // Колбэки — на Main-лупере явно (без Dispatchers.Main, как в UiActions).
+        val looper = android.os.Looper.getMainLooper()
+        try {
+            if (wantGps) {
+                locationManager.requestLocationUpdates(
+                    android.location.LocationManager.GPS_PROVIDER, 0L, 0f, listener, looper,
+                )
+            }
+            if (wantNet) {
+                locationManager.requestLocationUpdates(
+                    android.location.LocationManager.NETWORK_PROVIDER, 0L, 0f, listener, looper,
+                )
+            }
+            kotlinx.coroutines.withTimeoutOrNull(FIX_TIMEOUT_MS) { done.await() }
+        } catch (e: SecurityException) {
+            return null
+        } finally {
+            runCatching { locationManager.removeUpdates(listener) }
+        }
+        return finalResult?.takeIf { it.accuracy <= MAX_ACCEPTABLE_ACCURACY_M }
+    }
+
+    companion object {
+        private const val MAX_CONTACT_RESULTS = 5
+        private const val FIX_TIMEOUT_MS = 20_000L
+        private const val GOOD_ACCURACY_M = 50f
+        private const val MAX_ACCEPTABLE_ACCURACY_M = 500f
+        private const val NO_FIX_MESSAGE =
+            "Не удалось определить местоположение за 20 с: выйдите на открытое место, " +
+                "включите GPS и Wi-Fi в настройках"
+    }
+
+    /** Живой снимок состояния: всё read-only, без runtime-разрешений. */
+    fun deviceState(): ToolResult {
+        return runCatching {
+            val audio = context.getSystemService(android.media.AudioManager::class.java)
+            val music = audio?.isMusicActive == true
+            val ringer = when (audio?.ringerMode) {
+                android.media.AudioManager.RINGER_MODE_VIBRATE -> RingerMode.VIBRATE
+                android.media.AudioManager.RINGER_MODE_SILENT -> RingerMode.SILENT
+                else -> RingerMode.NORMAL
+            }
+            val wifi = context.getSystemService(android.net.wifi.WifiManager::class.java)
+                ?.isWifiEnabled == true
+            val batteryIntent = context.registerReceiver(
+                null,
+                android.content.IntentFilter(Intent.ACTION_BATTERY_CHANGED),
+            )
+            val level = batteryIntent?.getIntExtra(
+                android.os.BatteryManager.EXTRA_LEVEL, -1,
+            ) ?: -1
+            val scale = batteryIntent?.getIntExtra(
+                android.os.BatteryManager.EXTRA_SCALE, -1,
+            ) ?: -1
+            val batteryPct = if (level >= 0 && scale > 0) (level * 100 / scale) else null
+            val status = batteryIntent?.getIntExtra(
+                android.os.BatteryManager.EXTRA_STATUS, -1,
+            ) ?: -1
+            val charging = when (status) {
+                android.os.BatteryManager.BATTERY_STATUS_CHARGING,
+                android.os.BatteryManager.BATTERY_STATUS_FULL -> true
+                -1 -> null
+                else -> false
+            }
+            val screen = context.getSystemService(android.os.PowerManager::class.java)
+                ?.isInteractive == true
+            ToolResult(
+                true,
+                formatDeviceState(
+                    LiveDeviceState(
+                        torchOn = torchTracker?.snapshot(),
+                        musicActive = music,
+                        wifiOn = wifi,
+                        batteryPct = batteryPct,
+                        charging = charging,
+                        screenOn = screen,
+                        ringer = ringer,
+                    ),
+                ),
+            )
+        }.getOrElse { ToolResult(false, "Не удалось прочитать состояние: ${it.message}") }
+    }
+}
+
+/** Чистое форматирование свежего фикса (провайдер и mock видны модели явно). */
+fun formatFix(
+    latitude: Double,
+    longitude: Double,
+    accuracyM: Int,
+    provider: String,
+    mock: Boolean,
+): String {
+    return "Координаты: $latitude,$longitude " +
+        "(точность $accuracyM м, свежий фикс, $provider" +
+        (if (mock) ", mock" else "") + ")"
+}

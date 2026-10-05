@@ -1,0 +1,246 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="settings_title">Настройки</string>
+    <string name="settings_language_title">Язык</string>
+    <string name="settings_language_subtitle">Язык интерфейса и речи</string>
+    <string name="settings_language_system">Системный</string>
+    <string name="settings_language_russian">Русский</string>
+    <string name="settings_language_english">English</string>
+    <string name="settings_language_picker">Выбор языка</string>
+
+    <string name="settings_secrets_title">Ключи и секреты</string>
+    <string name="settings_secrets_subtitle">API-ключи, токены, пароли — только в зашифрованном виде</string>
+    <string name="settings_secrets_empty">Сохранённых ключей нет</string>
+    <string name="settings_secrets_alias">Ключ &lt;%1$s&gt; — сохранён</string>
+    <string name="settings_secrets_clear">Удалить все ключи</string>
+    <string name="settings_secrets_clear_confirm">Удалить все сохранённые ключи?</string>
+    <string name="settings_secrets_clear_done">Все ключи удалены</string>
+
+    <string name="settings_about_title">О приложении</string>
+    <string name="settings_about_version">Версия</string>
+    <string name="settings_about_license">Лицензия</string>
+    <string name="settings_about_license_value">MIT</string>
+    <string name="app_version">0.1.0</string>
+
+    <string name="state_selected">Выбран</string>
+    <string name="state_unselected">Не выбран</string>
+
+    <!-- Провайдеры -->
+    <string name="providers_title">Провайдеры</string>
+    <string name="providers_empty">Нет сохранённых провайдеров</string>
+    <string name="providers_add">Добавить провайдера</string>
+    <string name="provider_edit_add_title">Новый провайдер</string>
+    <string name="provider_edit_title">Редактировать провайдера</string>
+    <string name="provider_name">Название</string>
+    <string name="provider_kind">Тип провайдера</string>
+    <string name="provider_base_url">Base URL</string>
+    <string name="provider_api_key">API-ключ</string>
+    <string name="provider_api_key_masked">•••• (сохранён)</string>
+    <string name="provider_basic_user">Имя пользователя (Basic)</string>
+    <string name="provider_basic_password">Пароль (Basic)</string>
+    <string name="provider_enabled">Активен</string>
+    <string name="state_enabled">включён</string>
+    <string name="state_disabled">выключен</string>
+    <string name="action_save">Сохранить</string>
+    <string name="action_delete">Удалить</string>
+    <string name="action_back">Назад</string>
+    <string name="action_replace">Заменить</string>
+    <string name="action_ok">ОК</string>
+
+    <!-- Типы провайдеров -->
+    <string name="provider_kind_openai_compat_desc">OpenAI-совместимый API (OpenAI, OpenRouter, локальные серверы)</string>
+    <string name="provider_kind_anthropic_desc">Anthropic Messages API — поддержка появится позже</string>
+    <string name="provider_kind_gemini_desc">Google Gemini API — поддержка появится позже</string>
+    <string name="provider_kind_opencode_desc">OpenCode Zen / Go — OpenAI-совместимый API + заголовки x-opencode-*</string>
+
+    <string name="provider_save_error_title">Не удалось сохранить провайдера</string>
+    <string name="provider_validating">Проверка подключения…</string>
+
+    <!-- Режимы -->
+    <string name="mode_chat">Чат</string>
+    <string name="mode_assistant">Ассистент</string>
+    <string name="mode_share">Отправить</string>
+    <string name="mode_config_title">Настройки режима</string>
+    <string name="mode_provider">Провайдер</string>
+    <string name="mode_model">Модель</string>
+    <string name="mode_model_refresh">Обновить список моделей</string>
+    <string name="mode_model_empty">Список пуст — нажмите «Обновить список моделей»</string>
+    <string name="mode_model_manual">Или введите ID вручную</string>
+    <string name="mode_caps_title">Возможности модели</string>
+    <string name="mode_probe">Проверить</string>
+    <string name="mode_probe_hint">Проба — короткий запрос с фиктивным инструментом</string>
+    <string name="cap_tools">Инструменты</string>
+    <string name="cap_vision">Зрение</string>
+    <string name="cap_audio_in">Аудиовход</string>
+    <string name="cap_reasoning">Рассуждения</string>
+    <string name="mode_prompt">Начальный промпт</string>
+    <string name="mode_prompt_hint">Оставьте пустым для промпта по умолчанию</string>
+    <string name="mode_tts_title">Озвучка</string>
+    <string name="mode_tts_channel">Канал</string>
+    <string name="mode_tts_off">Выключена</string>
+    <string name="mode_tts_system">Системный синтезатор</string>
+    <string name="mode_tts_screen_reader">Экранный чтец</string>
+    <string name="mode_tts_voice">Голос</string>
+    <string name="mode_tts_voice_default">Голос по умолчанию</string>
+    <string name="mode_tts_voice_network">(сеть)</string>
+    <string name="mode_tts_engine">Движок</string>
+    <string name="mode_tts_engine_system">Системный по умолчанию</string>
+    <string name="mode_tts_engine_default">(по умолчанию)</string>
+    <string name="mode_tts_language">Язык голоса</string>
+    <string name="mode_tts_rate">Скорость</string>
+    <string name="mode_tts_pitch">Тон</string>
+    <string name="mode_tts_volume">Громкость</string>
+    <string name="mode_tts_tool_calls">Озвучивать вызовы инструментов</string>
+    <string name="mode_tts_tool_calls_hint">Только комментарием агента («ищу контакт…»); тип инструмента не зачитывается</string>
+    <string name="mode_tts_narrative">Рассказывать о работе</string>
+    <string name="mode_tts_narrative_hint">Шаги агента — через экранный чтец и ленту</string>
+    <string name="mode_stt_title">Голосовой ввод</string>
+    <string name="mode_stt_system">Системный STT</string>
+    <string name="mode_stt_model_audio">Аудио модели</string>
+    <string name="mode_stt_model_audio_hint">Нужен флаг AUDIO_IN у модели, иначе — распознавание в текст</string>
+    <string name="mode_stt_language">Язык распознавания</string>
+
+    <!-- Подтверждения -->
+    <string name="approvals_title">Подтверждения</string>
+    <string name="approvals_reset">Сбросить «всегда разрешать»</string>
+    <string name="approvals_reset_subtitle">Снова спрашивать перед каждым опасным действием</string>
+    <string name="approvals_reset_done">Разрешения тулов сброшены</string>
+
+    <!-- Инструменты агента -->
+    <string name="tools_settings_title">Инструменты агента</string>    <string name="tools_settings_subtitle">Доступ агенту и подтверждения действий</string>
+    <string name="tools_section_tools">Инструменты</string>
+    <string name="tool_enabled">Включён</string>
+    <string name="tool_ask">Спрашивать перед выполнением</string>
+    <string name="tools_reset">Сбросить настройки инструментов</string>
+    <string name="tools_reset_subtitle">Вернуть включение и вопросы к значениям по умолчанию</string>
+    <string name="tools_reset_done">Настройки инструментов сброшены</string>
+    <string name="tool_unknown_desc">Действие агента</string>
+    <string name="tool_app_launch_title">Запуск приложений</string>
+    <string name="tool_app_launch_desc">Открытие приложений по имени пакета</string>
+    <string name="tool_web_open_title">Открытие ссылок</string>
+    <string name="tool_web_open_desc">Переход по URL в браузере</string>
+    <string name="tool_web_search_title">Поиск в интернете</string>
+    <string name="tool_web_search_desc">Поисковые запросы через системный поиск</string>
+    <string name="tool_alarm_set_title">Будильники</string>
+    <string name="tool_alarm_set_desc">Установка будильников</string>
+    <string name="tool_open_settings_title">Системные настройки</string>
+    <string name="tool_open_settings_desc">Открытие разделов настроек</string>
+    <string name="tool_call_place_title">Звонки</string>
+    <string name="tool_call_place_desc">Исходящие звонки на номер</string>
+    <string name="tool_sms_send_title">SMS</string>
+    <string name="tool_sms_send_desc">Отправка SMS на номер</string>
+    <string name="tool_contact_find_title">Поиск контактов</string>
+    <string name="tool_contact_find_desc">Поиск имён и номеров в контактах</string>
+    <string name="tool_calendar_add_title">События календаря</string>
+    <string name="tool_calendar_add_desc">Добавление событий в календарь</string>
+    <string name="tool_timer_set_title">Таймер</string>
+    <string name="tool_timer_set_desc">Запуск таймера обратного отсчёта</string>
+    <string name="tool_device_info_title">Сведения об устройстве</string>
+    <string name="tool_device_info_desc">Модель, версия Android, локаль, часовой пояс</string>
+    <string name="tool_clipboard_copy_title">Буфер обмена</string>
+    <string name="tool_clipboard_copy_desc">Копирование текста в буфер обмена</string>
+    <string name="tool_ui_get_screen_title">Снимок экрана</string>
+    <string name="tool_ui_get_screen_desc">Чтение элементов экрана для агента</string>
+    <string name="tool_ui_click_title">Нажатия</string>
+    <string name="tool_ui_click_desc">Нажатие на элементы экрана</string>
+    <string name="tool_ui_long_click_title">Долгие нажатия</string>
+    <string name="tool_ui_long_click_desc">Долгое нажатие на элементы экрана</string>
+    <string name="tool_ui_set_text_title">Ввод текста</string>
+    <string name="tool_ui_set_text_desc">Ввод текста в поля на экране</string>
+    <string name="tool_ui_scroll_title">Прокрутка</string>
+    <string name="tool_ui_scroll_desc">Прокрутка списков на экране</string>
+    <string name="tool_ui_swipe_title">Свайпы</string>
+    <string name="tool_ui_swipe_desc">Жесты свайпа по координатам</string>
+    <string name="tool_ui_global_title">Системная навигация</string>
+    <string name="tool_ui_global_desc">Кнопки Назад/Домой/Недавние</string>
+    <string name="tool_ui_wait_for_title">Ожидание текста</string>
+    <string name="tool_ui_wait_for_desc">Ожидание появления текста на экране</string>
+    <string name="tool_notify_list_title">Список уведомлений</string>
+    <string name="tool_notify_list_desc">Чтение активных уведомлений</string>
+    <string name="tool_notify_open_title">Открытие уведомлений</string>
+    <string name="tool_notify_open_desc">Переход в приложение по уведомлению</string>
+    <string name="tool_notify_clear_title">Скрытие уведомлений</string>
+    <string name="tool_notify_clear_desc">Убрать уведомление из шторки</string>
+    <string name="tool_web_fetch_title">Чтение веб-страниц</string>
+    <string name="tool_web_fetch_desc">Автоматическое чтение страниц в контекст агента</string>
+    <string name="tool_nav_open_title">Карты и навигация</string>
+    <string name="tool_nav_open_desc">Поиск мест и точек на карте</string>
+    <string name="tool_share_text_title">Поделиться текстом</string>
+    <string name="tool_share_text_desc">Отправка текста через выбор приложения</string>
+    <string name="tool_flashlight_title">Фонарик</string>
+    <string name="tool_flashlight_desc">Включение и выключение вспышки</string>
+    <string name="tool_media_button_title">Медиа-кнопки</string>
+    <string name="tool_media_button_desc">Управление активным плеером</string>
+    <string name="tool_location_get_title">Местоположение</string>
+    <string name="tool_location_get_desc">Текущие координаты устройства</string>
+    <string name="tool_device_state_title">Состояние устройства</string>
+    <string name="tool_device_state_desc">Фонарик, музыка, Wi-Fi, батарея, экран, звук</string>
+    <string name="tool_voice_listen_start_title">Начать слушать</string>
+    <string name="tool_voice_listen_start_desc">Включить микрофон и ждать голосовой ответ</string>
+    <string name="tool_voice_listen_stop_title">Остановить и распознать</string>
+    <string name="tool_voice_listen_stop_desc">Остановить запись и вернуть распознанный текст</string>
+    <string name="perm_microphone">Микрофон</string>
+    <string name="perm_camera">Камера (фонарик)</string>
+    <string name="perm_location">Местоположение</string>
+    <string name="tools_perm_note">Для части инструментов нужны системные разрешения — выдайте их ниже.</string>
+    <string name="tools_perm_grant">Выдать разрешение</string>
+    <string name="perm_call_phone">Телефон (звонки)</string>
+    <string name="perm_send_sms">SMS (отправка)</string>
+    <string name="perm_read_contacts">Контакты (чтение)</string>
+    <string name="perm_calendar">Календарь (чтение и запись)</string>
+
+    <!-- MCP-серверы -->
+    <string name="mcp_settings_title">MCP-серверы</string>    <string name="mcp_settings_subtitle">Внешние инструменты агента</string>
+    <string name="mcp_add">Добавить сервер</string>
+    <string name="mcp_empty">Нет серверов — добавьте первый</string>
+    <string name="mcp_edit_title">Сервер</string>
+    <string name="mcp_add_title">Новый сервер</string>
+    <string name="mcp_name">Название</string>
+    <string name="mcp_url">URL (Streamable HTTP)</string>
+    <string name="mcp_bearer">Bearer-токен</string>
+    <string name="mcp_test">Проверить</string>
+
+    <!-- Навыки -->
+    <string name="skills_title">Навыки</string>
+    <string name="skills_subtitle">Инструкции для агента (SKILL.md)</string>
+    <string name="skills_empty">Нет навыков — добавьте первый</string>
+    <string name="skills_add">Новый навык</string>
+    <string name="skills_edit_title">Навык</string>
+    <string name="skills_name">Имя (латиница, цифры, -, _)</string>
+    <string name="skills_name_bad">Имя: только латиница, цифры, «-» и «_»</string>
+    <string name="skills_heading">Заголовок</string>
+    <string name="skills_body">Текст навыка (Markdown)</string>
+    <string name="skills_body_empty">Текст навыка пуст</string>
+    <string name="skills_delete_title">Удалить навык «%1$s»?</string>
+    <string name="action_cancel">Отмена</string>
+
+    <!-- Память -->
+    <string name="memory_title">Память</string>
+    <string name="memory_subtitle">Факты о вас для агента (MEMORY.md)</string>
+    <string name="memory_hint">По одному факту на строку. Не храните здесь пароли, ключи и токены — только в SecretStore.</string>
+    <string name="memory_clear">Очистить всё</string>
+    <string name="memory_clear_title">Очистить всю память?</string>
+    <string name="memory_saved">Память сохранена</string>
+
+    <!-- Инструменты: память и навыки -->
+    <string name="tool_memory_get_title">Чтение памяти</string>
+    <string name="tool_memory_get_desc">Факты о пользователе из памяти</string>
+    <string name="tool_memory_put_title">Запись в память</string>
+    <string name="tool_memory_put_desc">Запоминание фактов о пользователе</string>
+    <string name="tool_memory_forget_title">Стирание памяти</string>
+    <string name="tool_memory_forget_desc">Удаление фактов из памяти</string>
+    <string name="tool_skill_list_title">Список навыков</string>
+    <string name="tool_skill_list_desc">Включённые навыки агента</string>
+    <string name="tool_skill_get_title">Чтение навыка</string>
+    <string name="tool_skill_get_desc">Полный текст навыка по имени</string>
+
+    <!-- Промпт режима -->
+    <string name="mode_prompt_placeholders">Плейсхолдеры: {locale} {time} {device} {memory} {skills} {screen_context} {shared_content}. Пусто — промпт по умолчанию.</string>
+    <string name="mode_assistant_extras">Поведение ассистента</string>
+    <string name="mode_assistant_autospeak">Озвучивать ответы</string>
+    <string name="mode_assistant_autoclose">Закрывать панель после ответа</string>
+    <string name="mode_assistant_screenshot">Прикреплять контекст экрана</string>
+    <string name="mode_share_extras">Поведение отправки</string>
+    <string name="mode_share_action">Что делать с контентом</string>
+    <string name="mode_share_show_in_chat">Показывать в чате</string>
+</resources>
