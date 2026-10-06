@@ -11,7 +11,9 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
+import androidx.compose.material3.minimumInteractiveComponentSize
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -24,6 +26,8 @@ import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.material3.Icon
 import ru.outsideproarts.oassist.core.a11y.oassistHeading
+import ru.outsideproarts.oassist.core.a11y.oassistMergedContent
+import ru.outsideproarts.oassist.core.a11y.oassistSwitchRow
 import ru.outsideproarts.oassist.core.a11y.oassistTouchTarget
 import ru.outsideproarts.oassist.core.ui.OAssistDimens
 
@@ -47,12 +51,18 @@ fun OAssistSectionHeading(
 /**
  * Карточка-панель с именем для TalkBack.
  * [stateDescription] — например, «выбрано» / «не выбрано».
+ * [showTitle] — рендерить ли заголовок визуально как Text (и тогда `paneTitle` не ставится —
+ *   заголовок виден и читается как heading TalkBack);
+ *   если [showTitle] = false, заголовок существует только как `paneTitle` для TalkBack
+ *   (визуально заголовок НЕ отображается — избегаем дубля «paneTitle + Text(title)»).
+ *   По умолчанию `false` — заголовок только в семантике.
  */
 @Composable
 fun OAssistPanel(
     title: String,
     modifier: Modifier = Modifier,
     stateDescription: String? = null,
+    showTitle: Boolean = false,
     content: @Composable ColumnScope.() -> Unit,
 ) {
     val stateMod = if (stateDescription != null) {
@@ -60,10 +70,15 @@ fun OAssistPanel(
     } else {
         Modifier
     }
+    val paneMod = if (!showTitle) {
+        Modifier.semantics { paneTitle = title }
+    } else {
+        Modifier
+    }
     Card(
         modifier = modifier
             .fillMaxWidth()
-            .semantics { paneTitle = title }
+            .then(paneMod)
             .then(stateMod),
         colors = CardDefaults.cardColors(
             containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.35f),
@@ -72,12 +87,24 @@ fun OAssistPanel(
         Column(
             modifier = Modifier.padding(OAssistDimens.ScreenPadding),
             verticalArrangement = Arrangement.spacedBy(OAssistDimens.ItemSpacing),
-            content = content,
-        )
+        ) {
+            if (showTitle) {
+                Text(
+                    text = title,
+                    style = MaterialTheme.typography.titleSmall,
+                    color = MaterialTheme.colorScheme.onSurface,
+                    modifier = Modifier.oassistHeading(),
+                )
+            }
+            content()
+        }
     }
 }
 
-/** Строка настроек: иконка + заголовок + опционально значение. Вся строка — один touch target. */
+/**
+ * Строка настроек: иконка + заголовок + опционально значение. Вся строка — один touch target.
+ * Контент карточки мержится для TalkBack (один свайп = вся строка, не поле-в-поле).
+ */
 @Composable
 fun OAssistSettingRow(
     title: String,
@@ -90,6 +117,7 @@ fun OAssistSettingRow(
     val base = modifier
         .fillMaxWidth()
         .oassistTouchTarget()
+        .oassistMergedContent()
         .padding(vertical = OAssistDimens.OptionRowSpacing, horizontal = OAssistDimens.ScreenPadding)
     val clickableMod = if (onClick != null) {
         Modifier.clickable(role = Role.Button, onClick = onClick)
@@ -133,6 +161,48 @@ fun OAssistSettingRow(
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
         }
+    }
+}
+
+/**
+ * Канонический Switch-ряд (WCAG 4.1.2 / CVS Health SwitchControls.md).
+ * - `Row` целиком становится фокусируемым узлом с `Role.Switch` (через `oassistSwitchRow`).
+ * - Внутри `Text(label)` (без модификаторов) и `Switch(onCheckedChange = null, minimumInteractiveComponentSize)`.
+ * - `stateDescription` объявляет состояние TalkBack («Включён» / «Выключен»).
+ * - Жест = один тап по строке = переключение. Дополнительных custom-actions не требуется.
+ */
+@Composable
+fun OAssistSwitchRow(
+    checked: Boolean,
+    onCheckedChange: (Boolean) -> Unit,
+    label: String,
+    stateLabelOn: String,
+    stateLabelOff: String,
+    modifier: Modifier = Modifier,
+    enabled: Boolean = true,
+) {
+    val state = if (checked) stateLabelOn else stateLabelOff
+    Row(
+        modifier = modifier
+            .fillMaxWidth()
+            .oassistTouchTarget()
+            .oassistSwitchRow(checked = checked, enabled = enabled, onValueChange = onCheckedChange)
+            .semantics { stateDescription = state },
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(OAssistDimens.DenseSpacing),
+    ) {
+        Text(
+            text = label,
+            style = MaterialTheme.typography.bodyLarge,
+            color = MaterialTheme.colorScheme.onSurface,
+            modifier = Modifier.weight(1f),
+        )
+        Switch(
+            checked = checked,
+            onCheckedChange = null,
+            enabled = enabled,
+            modifier = Modifier.minimumInteractiveComponentSize(),
+        )
     }
 }
 

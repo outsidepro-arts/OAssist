@@ -26,10 +26,16 @@
         <intent>
             <action android:name="android.intent.action.TTS_SERVICE" />
         </intent>
+        <!-- M5.1: видимость приложения Shizuku для запроса разрешения -->
+        <package android:name="moe.shizuku.privileged.api" />
     </queries>
 
     <!-- M4.3: микрофон для системного голосового ввода (RecognizerIntent, запрос из UI) -->
     <uses-permission android:name="android.permission.RECORD_AUDIO" />
+
+    <!-- M5.3: foreground-сервис долгих операций (гео-фикс, WebView-рендер) -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
 
     <!-- CALL_PHONE/SEND_SMS подразумевают телефонию; явно помечаем необязательной для ChromeOS -->
     <uses-feature android:name="android.hardware.telephony" android:required="false" />
@@ -63,6 +69,7 @@
         <!-- VoiceInteractionService: assist-жест -->
         <service
             android:name=".vis.OAssistVoiceInteractionService"
+            android:directBootAware="true"
             android:exported="true"
             android:label="@string/app_name"
             android:permission="android.permission.BIND_VOICE_INTERACTION">
@@ -77,6 +84,7 @@
         <!-- VoiceInteractionSessionService: сессия assist -->
         <service
             android:name=".vis.OAssistVoiceInteractionSessionService"
+            android:directBootAware="true"
             android:exported="true"
             android:label="@string/app_name">
             <intent-filter>
@@ -87,6 +95,7 @@
         <!-- RecognitionService: стаб для ROLE_ASSISTANT -->
         <service
             android:name=".vis.OAssistRecognitionService"
+            android:directBootAware="true"
             android:exported="true"
             android:label="@string/app_name"
             android:permission="android.permission.BIND_RECOGNITION_SERVICE">
@@ -101,6 +110,7 @@
         <!-- AccessibilityService: пассивный снимок экрана + жесты по запросу тулов -->
         <service
             android:name=".a11y.OAssistAccessibilityService"
+            android:directBootAware="true"
             android:exported="true"
             android:label="@string/app_name"
             android:permission="android.permission.BIND_ACCESSIBILITY_SERVICE">
@@ -115,6 +125,7 @@
         <!-- NotificationListenerService: чтение уведомлений по запросу тулов -->
         <service
             android:name=".notify.OAssistNotificationListener"
+            android:directBootAware="true"
             android:exported="true"
             android:label="@string/app_name"
             android:permission="android.permission.BIND_NOTIFICATION_LISTENER_SERVICE">
@@ -122,5 +133,20 @@
                 <action android:name="android.service.notification.NotificationListenerService" />
             </intent-filter>
         </service>
+
+        <!-- M5.3: держатель foreground-статуса долгих операций, тип specialUse -->
+        <service
+            android:name=".tasks.OAssistTaskService"
+            android:exported="false"
+            android:foregroundServiceType="specialUse" />
+
+        <!-- M5.1: Shizuku — получение Binder от Shizuku/Sui -->
+        <provider
+            android:name="rikka.shizuku.ShizukuProvider"
+            android:authorities="${applicationId}.shizuku"
+            android:enabled="true"
+            android:exported="true"
+            android:multiprocess="false"
+            android:permission="android.permission.INTERACT_ACROSS_USERS_FULL" />
     </application>
 </manifest>

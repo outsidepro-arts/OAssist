@@ -2,6 +2,7 @@ package ru.outsideproarts.oassist.core.agent
 
 import ru.outsideproarts.oassist.core.data.memory.MemoryStore
 import ru.outsideproarts.oassist.core.data.skill.SkillStore
+import ru.outsideproarts.oassist.core.device.PrivExecutor
 import ru.outsideproarts.oassist.core.model.ActionRisk
 import ru.outsideproarts.oassist.core.model.ToolPreferences
 import ru.outsideproarts.oassist.core.speech.VoiceCaptureController
@@ -60,6 +61,13 @@ object ToolCatalog {
         ToolDescriptor("memory_forget", ActionRisk.ASK),
         ToolDescriptor("skill_list", ActionRisk.AUTO),
         ToolDescriptor("skill_get", ActionRisk.AUTO),
+        ToolDescriptor("shell_exec", ActionRisk.ASK),
+        ToolDescriptor("shell_get_setting", ActionRisk.AUTO),
+        ToolDescriptor("shell_put_setting", ActionRisk.ASK),
+        ToolDescriptor("notify_reply", ActionRisk.ASK),
+        ToolDescriptor("volume_set", ActionRisk.ASK),
+        ToolDescriptor("dnd_set", ActionRisk.ASK),
+        ToolDescriptor("brightness_set", ActionRisk.ASK),
     )
 
     fun createTools(
@@ -71,6 +79,7 @@ object ToolCatalog {
         voiceCapture: VoiceCaptureController,
         memory: MemoryStore,
         skills: SkillStore,
+        priv: PrivExecutor,
     ): List<Tool> = listOf(
         AppLaunchTool(actions),
         WebOpenTool(actions),
@@ -95,6 +104,7 @@ object ToolCatalog {
         NotifyListTool(notify),
         NotifyOpenTool(notify),
         NotifyClearTool(notify),
+        NotifyReplyTool(notify),
         WebFetchTool(WebFetcher(webContent, webRender)),
         NavOpenTool(actions),
         ShareTextTool(actions),
@@ -102,6 +112,9 @@ object ToolCatalog {
         MediaButtonTool(actions),
         LocationGetTool(actions),
         DeviceStateTool(actions),
+        VolumeSetTool(actions),
+        DndSetTool(actions),
+        BrightnessSetTool(actions),
         VoiceListenStartTool(voiceCapture),
         VoiceListenStopTool(voiceCapture),
         MemoryGetTool(memory),
@@ -109,6 +122,9 @@ object ToolCatalog {
         MemoryForgetTool(memory),
         SkillListTool(skills),
         SkillGetTool(skills),
+        ShellExecTool(priv),
+        ShellGetSettingTool(priv),
+        ShellPutSettingTool(priv),
     )
 
     fun createRegistry(
@@ -121,9 +137,10 @@ object ToolCatalog {
         memory: MemoryStore,
         skills: SkillStore,
         prefs: ToolPreferences,
+        priv: PrivExecutor,
         externalTools: List<Tool> = emptyList(),
     ): ToolRegistry {
-        val builtIn = createTools(actions, ui, notify, webContent, webRender, voiceCapture, memory, skills)
+        val builtIn = createTools(actions, ui, notify, webContent, webRender, voiceCapture, memory, skills, priv)
         val builtInNames = builtIn.map { it.schema.name }.toSet()
         // Внешние имена с коллизией отбрасываются: встроенные в приоритете.
         val external = externalTools.filter { it.schema.name !in builtInNames }

@@ -7,12 +7,20 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.selection.selectable
-import androidx.compose.foundation.selection.selectableGroup
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Visibility
+import androidx.compose.material.icons.filled.VisibilityOff
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.ExposedDropdownMenuAnchorType
+import androidx.compose.material3.ExposedDropdownMenuBox
+import androidx.compose.material3.ExposedDropdownMenuDefaults
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
@@ -32,8 +40,14 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.heading
 import androidx.compose.ui.semantics.paneTitle
+import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.stateDescription
+import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.text.input.PasswordVisualTransformation
+import androidx.compose.ui.text.input.VisualTransformation
+import ru.outsideproarts.oassist.core.a11y.oassistDropdownClassName
 import ru.outsideproarts.oassist.core.a11y.oassistHeading
 import ru.outsideproarts.oassist.core.a11y.oassistRole
 import ru.outsideproarts.oassist.core.a11y.oassistTouchTarget
@@ -41,21 +55,19 @@ import ru.outsideproarts.oassist.core.model.ProviderKind
 import ru.outsideproarts.oassist.core.model.ProviderProfile
 import ru.outsideproarts.oassist.core.ui.OAssistDimens
 import ru.outsideproarts.oassist.core.ui.components.OAssistPanel
+import ru.outsideproarts.oassist.core.ui.components.OAssistSwitchRow
 import ru.outsideproarts.oassist.core.ui.components.OAssistSectionHeading
 
 /**
  * Секреты из полей ввода при сохранении. Null — значение не менялось;
- * [clearApiKey]/[clearBasic] — явное удаление сохранённого.
- * Basic Auth — только для OPENCODE_ZEN (свой `opencode serve`).
+ * [clearApiKey] — явное удаление сохранённого.
  */
 data class ProviderSecretsInput(
     val apiKey: String? = null,
     val clearApiKey: Boolean = false,
-    val basicUser: String? = null,
-    val basicPassword: String? = null,
-    val clearBasic: Boolean = false,
 )
 
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun ProviderEditScreen(
     profile: ProviderProfile?,
@@ -75,10 +87,10 @@ fun ProviderEditScreen(
     var apiKeyInput by remember { mutableStateOf("") }
     var hasSavedKey by remember { mutableStateOf(profile?.apiKeyRef != null) }
     var clearApiKey by remember { mutableStateOf(false) }
-    var basicUserInput by remember { mutableStateOf("") }
-    var basicPasswordInput by remember { mutableStateOf("") }
-    var hasSavedBasic by remember { mutableStateOf(profile?.basicAuthPasswordRef != null) }
-    var clearBasic by remember { mutableStateOf(false) }
+    // Показ секрета ввода: по умолчанию маскирован.
+    var apiKeyVisible by remember { mutableStateOf(false) }
+    // Тип провайдера — чистый dropdown (без ввода): значение только из списка.
+    var kindExpanded by remember { mutableStateOf(false) }
 
     LaunchedEffect(profile?.id) {
         if (profile != null) {
@@ -88,10 +100,7 @@ fun ProviderEditScreen(
             enabled = profile.enabled
             hasSavedKey = profile.apiKeyRef != null
             clearApiKey = false
-            hasSavedBasic = profile.basicAuthPasswordRef != null
-            clearBasic = false
-            basicUserInput = ""
-            basicPasswordInput = ""
+            apiKeyInput = ""
         }
     }
 
@@ -108,6 +117,8 @@ fun ProviderEditScreen(
     val enabledState = stringResource(R.string.state_enabled)
     val disabledState = stringResource(R.string.state_disabled)
     val maskedLabel = stringResource(R.string.provider_api_key_masked)
+    val showPasswordLabel = stringResource(R.string.password_show)
+    val hidePasswordLabel = stringResource(R.string.password_hide)
     val validatingLabel = stringResource(R.string.provider_validating)
 
     Column(
@@ -127,67 +138,78 @@ fun ProviderEditScreen(
         )
 
         OAssistPanel(title = title) {
+            // Служебные поля — каждый своим видом: имя — однострочный редактор
+            // без автокоррекции, URL — URL-клавиатура, секреты — пароли.
+            val nameLabel = stringResource(R.string.field_provider_name)
             OutlinedTextField(
                 value = name,
                 onValueChange = { name = it },
                 label = { Text(stringResource(R.string.provider_name)) },
                 singleLine = true,
-                modifier = Modifier.fillMaxWidth(),
+                keyboardOptions = KeyboardOptions(autoCorrectEnabled = false),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .semantics { contentDescription = nameLabel },
             )
 
             OAssistSectionHeading(text = stringResource(R.string.provider_kind))
-            val kindLabel = stringResource(R.string.provider_kind)
-            val selectedLabel = stringResource(R.string.state_selected)
-            val unselectedLabel = stringResource(R.string.state_unselected)
-            Column(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .selectableGroup()
-                    .semantics { paneTitle = kindLabel },
-                verticalArrangement = Arrangement.spacedBy(OAssistDimens.DenseSpacing),
+            ExposedDropdownMenuBox(
+                expanded = kindExpanded,
+                onExpandedChange = { kindExpanded = it },
             ) {
-                ProviderKind.entries.forEach { k ->
-                    val selected = kind == k
-                    val state = if (selected) selectedLabel else unselectedLabel
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .oassistTouchTarget()
-                            .selectable(
-                                selected = selected,
-                                role = Role.RadioButton,
-                                onClick = { kind = k },
-                            )
-                            .semantics { stateDescription = state }
-                            .padding(horizontal = OAssistDimens.DenseSpacing, vertical = OAssistDimens.ItemSpacing),
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(OAssistDimens.OptionRowSpacing),
-                    ) {
-                        RadioButton(selected = selected, onClick = null)
-                        Column(modifier = Modifier.weight(1f)) {
-                            Text(
-                                text = k.name,
-                                style = MaterialTheme.typography.bodyLarge,
-                                modifier = Modifier.oassistRole(Role.RadioButton),
-                            )
-                            Text(
-                                text = kindDescription(k),
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            )
-                        }
+                OutlinedTextField(
+                    value = kind.name,
+                    onValueChange = {},
+                    label = { Text(stringResource(R.string.provider_kind)) },
+                    readOnly = true,
+                    trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = kindExpanded) },
+                    supportingText = { Text(kindDescription(kind)) },
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .menuAnchor(ExposedDropdownMenuAnchorType.PrimaryNotEditable)
+                        .oassistDropdownClassName(),
+                )
+                ExposedDropdownMenu(
+                    expanded = kindExpanded,
+                    onDismissRequest = { kindExpanded = false },
+                ) {
+                    ProviderKind.entries.forEach { k ->
+                        DropdownMenuItem(
+                            text = {
+                                Column {
+                                    Text(k.name)
+                                    Text(
+                                        text = kindDescription(k),
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    )
+                                }
+                            },
+                            onClick = {
+                                kind = k
+                                kindExpanded = false
+                            },
+                        )
                     }
                 }
             }
 
+            val baseUrlLabel = stringResource(R.string.field_provider_url)
             OutlinedTextField(
                 value = baseUrl,
                 onValueChange = { baseUrl = it },
                 label = { Text(stringResource(R.string.provider_base_url)) },
                 singleLine = true,
-                modifier = Modifier.fillMaxWidth(),
+                keyboardOptions = KeyboardOptions(
+                    keyboardType = KeyboardType.Uri,
+                    autoCorrectEnabled = false,
+                ),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .semantics { contentDescription = baseUrlLabel },
             )
 
+            val apiKeyLabel = stringResource(R.string.field_provider_key)
             OutlinedTextField(
                 value = apiKeyInput,
                 onValueChange = {
@@ -204,7 +226,31 @@ fun ProviderEditScreen(
                     )
                 },
                 singleLine = true,
-                modifier = Modifier.fillMaxWidth(),
+                visualTransformation = if (apiKeyVisible) {
+                    VisualTransformation.None
+                } else {
+                    PasswordVisualTransformation()
+                },
+                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
+                trailingIcon = {
+                    IconButton(onClick = { apiKeyVisible = !apiKeyVisible }) {
+                        Icon(
+                            imageVector = if (apiKeyVisible) {
+                                Icons.Filled.VisibilityOff
+                            } else {
+                                Icons.Filled.Visibility
+                            },
+                            contentDescription = if (apiKeyVisible) {
+                                hidePasswordLabel
+                            } else {
+                                showPasswordLabel
+                            },
+                        )
+                    }
+                },
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .semantics { contentDescription = apiKeyLabel },
             )
             if (hasSavedKey && !clearApiKey) {
                 Row(horizontalArrangement = Arrangement.spacedBy(OAssistDimens.DenseSpacing)) {
@@ -230,80 +276,13 @@ fun ProviderEditScreen(
                 }
             }
 
-            if (kind == ProviderKind.OPENCODE_ZEN) {
-                OutlinedTextField(
-                    value = basicUserInput,
-                    onValueChange = {
-                        basicUserInput = it
-                        if (it.isNotEmpty()) clearBasic = false
-                    },
-                    label = { Text(stringResource(R.string.provider_basic_user)) },
-                    singleLine = true,
-                    modifier = Modifier.fillMaxWidth(),
-                )
-                OutlinedTextField(
-                    value = basicPasswordInput,
-                    onValueChange = {
-                        basicPasswordInput = it
-                        if (it.isNotEmpty()) clearBasic = false
-                    },
-                    label = {
-                        Text(
-                            if (hasSavedBasic) {
-                                maskedLabel
-                            } else {
-                                stringResource(R.string.provider_basic_password)
-                            },
-                        )
-                    },
-                    singleLine = true,
-                    modifier = Modifier.fillMaxWidth(),
-                )
-                if (hasSavedBasic && !clearBasic) {
-                    Row(horizontalArrangement = Arrangement.spacedBy(OAssistDimens.DenseSpacing)) {
-                        OutlinedButton(
-                            onClick = {
-                                hasSavedBasic = false
-                                basicUserInput = ""
-                                basicPasswordInput = ""
-                            },
-                            modifier = Modifier.oassistTouchTarget(),
-                        ) {
-                            Text(replaceLabel)
-                        }
-                        OutlinedButton(
-                            onClick = {
-                                hasSavedBasic = false
-                                clearBasic = true
-                                basicUserInput = ""
-                                basicPasswordInput = ""
-                            },
-                            modifier = Modifier.oassistTouchTarget(),
-                        ) {
-                            Text(deleteLabel)
-                        }
-                    }
-                }
-            }
-
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                Text(
-                    text = enabledLabel,
-                    style = MaterialTheme.typography.bodyLarge,
-                    modifier = Modifier.oassistRole(Role.Switch),
-                )
-                Switch(
-                    checked = enabled,
-                    onCheckedChange = { enabled = it },
-                    modifier = Modifier.semantics {
-                        stateDescription = if (enabled) enabledState else disabledState
-                    },
-                )
-            }
+            OAssistSwitchRow(
+                checked = enabled,
+                onCheckedChange = { enabled = it },
+                label = enabledLabel,
+                stateLabelOn = enabledState,
+                stateLabelOff = disabledState,
+            )
         }
 
         Row(
@@ -323,9 +302,6 @@ fun ProviderEditScreen(
                         ProviderSecretsInput(
                             apiKey = apiKeyInput.ifBlank { null },
                             clearApiKey = clearApiKey,
-                            basicUser = basicUserInput.ifBlank { null },
-                            basicPassword = basicPasswordInput.ifBlank { null },
-                            clearBasic = clearBasic,
                         ),
                     )
                 },

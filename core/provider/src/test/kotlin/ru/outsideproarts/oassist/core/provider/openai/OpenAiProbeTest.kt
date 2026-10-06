@@ -71,8 +71,12 @@ class OpenAiProbeTest {
         assertEquals(emptySet<ModelCapability>(), client(engine).probeCapabilities("m1"))
     }
 
+    /**
+     * Zen и совместимые API — только Bearer (API-ключ). Basic Auth удалён:
+     * стандартный сервер opencode.ai его не поддерживает.
+     */
     @Test
-    fun basicAuth_sendsBasicHeaderInsteadOfBearer() = runTest {
+    fun bearerAuth_sendsSingleBearerHeader() = runTest {
         var authorization: String? = null
         val engine = MockEngine { request ->
             authorization = request.headers["Authorization"]
@@ -92,22 +96,17 @@ class OpenAiProbeTest {
             id = "p1",
             name = "Zen",
             kind = ProviderKind.OPENCODE_ZEN,
-            baseUrl = "https://zen.example.com/v1",
+            baseUrl = "https://opencode.ai/zen/v1",
         )
         val zen = kotlinx.coroutines.runBlocking {
             OpenAiCompatibleClient.fromProfile(
                 profile,
                 emptySecrets,
                 http,
-                overrides = ProviderAuth(
-                    bearerToken = "bearer".toCharArray(),
-                    basicUser = "u".toCharArray(),
-                    basicPassword = "p".toCharArray(),
-                ),
+                overrides = ProviderAuth(bearerToken = "zen-key".toCharArray()),
             )
         }
         zen.fetchModels()
-        val expected = "Basic " + kotlin.io.encoding.Base64.encode("u:p".toByteArray())
-        assertEquals(expected, authorization)
+        assertEquals("Bearer zen-key", authorization)
     }
 }

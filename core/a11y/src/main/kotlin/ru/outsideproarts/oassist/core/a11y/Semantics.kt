@@ -1,10 +1,18 @@
 package ru.outsideproarts.oassist.core.a11y
 
 import androidx.compose.foundation.layout.defaultMinSize
+import androidx.compose.foundation.selection.toggleable
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.input.key.Key
+import androidx.compose.ui.input.key.KeyEventType
+import androidx.compose.ui.input.key.key
+import androidx.compose.ui.input.key.onKeyEvent
+import androidx.compose.ui.input.key.type
 import androidx.compose.ui.semantics.CustomAccessibilityAction
 import androidx.compose.ui.semantics.LiveRegionMode
 import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.accessibilityClassName
+import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.customActions
 import androidx.compose.ui.semantics.heading
 import androidx.compose.ui.semantics.liveRegion
@@ -63,3 +71,77 @@ fun Modifier.oassistCustomActions(actions: List<Pair<String, () -> Boolean>>): M
 
 /** Явный порядок чтения, когда Compose-порядок спорит с визуальным. */
 fun Modifier.oassistTraversalIndex(index: Float): Modifier = semantics { traversalIndex = index }
+
+/**
+ * Чистый выпадающий список для TalkBack.
+ * `OutlinedTextField(readOnly=true)` внутри `ExposedDropdownMenuBox` остаётся
+ * `EditText`-классом → TalkBack читает «Окно редактирования» + роль «Выпадающий список».
+ * `accessibilityClassName = "android.widget.Spinner"` перезаписывает класс
+ * → TalkBack читает чистое «Выпадающий список».
+ */
+fun Modifier.oassistDropdownClassName(): Modifier = semantics {
+    accessibilityClassName = "android.widget.Spinner"
+}
+
+/**
+ * Канонический Switch-ряд (WCAG 4.1.2, CVS Health SwitchControls.md).
+ * Обёртка над `toggleable(role = Role.Switch)` — оборачивающий `Row` становится
+ * единым фокусируемым узлом: TalkBack читает лейбл + состояние + Switch одним блоком.
+ * Внутри Switch `onCheckedChange` обнуляется.
+ */
+fun Modifier.oassistSwitchRow(
+    checked: Boolean,
+    enabled: Boolean = true,
+    onValueChange: (Boolean) -> Unit,
+): Modifier = this.toggleable(
+    value = checked,
+    enabled = enabled,
+    role = Role.Switch,
+    onValueChange = onValueChange,
+)
+
+/**
+ * Группировка содержимого карточки для TalkBack (CVS Health ContentGrouping.md).
+ * `mergeDescendants = true` — TalkBack читает всю карточку одним блоком;
+ * один свайп = переход к следующей карточке. Визуально не меняется.
+ */
+fun Modifier.oassistMergedContent(): Modifier =
+    semantics(mergeDescendants = true) {}
+
+/**
+ * Канонический Slider (WCAG 2.5.3 / 2.1.1 / 4.1.2, CVS Health SliderAndRangeSliderControls.md).
+ * - contentDescription дублирует визуальный label (Label-in-Name);
+ * - stateDescription объявляет текущее значение;
+ * - liveRegion Polite — TalkBack читает изменение, даже если фокус не на слайдере;
+ * - onKeyEvent — D-PAD влево/вправо двигают значение (BT-клавиатура и внешний D-pad).
+ *
+ * [stepIncrement] — шаг одной клавишной операции.
+ */
+fun Modifier.oassistSlider(
+    label: String,
+    valueText: String,
+    range: ClosedFloatingPointRange<Float>,
+    onValueChange: (Float) -> Unit,
+    stepIncrement: Float,
+    currentValue: () -> Float,
+): Modifier = this
+    .semantics {
+        contentDescription = label
+        stateDescription = valueText
+        liveRegion = LiveRegionMode.Polite
+    }
+    .onKeyEvent { keyEvent ->
+        if (keyEvent.type != KeyEventType.KeyUp) return@onKeyEvent false
+        val current = currentValue()
+        val next = when (keyEvent.key) {
+            Key.DirectionLeft -> current - stepIncrement
+            Key.DirectionRight -> current + stepIncrement
+            else -> return@onKeyEvent false
+        }
+        if (range.contains(next)) {
+            onValueChange(next)
+            true
+        } else {
+            false
+        }
+    }

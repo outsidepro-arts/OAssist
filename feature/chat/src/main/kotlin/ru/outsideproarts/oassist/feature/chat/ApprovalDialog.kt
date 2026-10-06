@@ -49,19 +49,19 @@ fun ApprovalDialog(
             ) {
                 TextButton(
                     onClick = { onDecision(ApprovalDecision.ALLOW_ONCE) },
-                    modifier = Modifier.oassistTouchTarget().oassistRole(Role.Button),
+                    modifier = Modifier.oassistTouchTarget(),
                 ) {
                     Text(stringResource(R.string.chat_approval_allow_once))
                 }
                 TextButton(
                     onClick = { onDecision(ApprovalDecision.ALWAYS_ALLOW) },
-                    modifier = Modifier.oassistTouchTarget().oassistRole(Role.Button),
+                    modifier = Modifier.oassistTouchTarget(),
                 ) {
                     Text(stringResource(R.string.chat_approval_always))
                 }
                 TextButton(
                     onClick = { onDecision(ApprovalDecision.DENY) },
-                    modifier = Modifier.oassistTouchTarget().oassistRole(Role.Button),
+                    modifier = Modifier.oassistTouchTarget(),
                 ) {
                     Text(stringResource(R.string.chat_approval_deny))
                 }

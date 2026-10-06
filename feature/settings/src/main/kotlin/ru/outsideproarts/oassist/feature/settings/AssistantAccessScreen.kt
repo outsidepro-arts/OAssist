@@ -1,4 +1,4 @@
-package ru.outsideproarts.oassist.feature.assistant
+package ru.outsideproarts.oassist.feature.settings
 
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
@@ -10,6 +10,7 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ChevronRight
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
@@ -22,20 +23,29 @@ import ru.outsideproarts.oassist.core.a11y.oassistRole
 import ru.outsideproarts.oassist.core.a11y.oassistTouchTarget
 import ru.outsideproarts.oassist.core.ui.OAssistDimens
 import ru.outsideproarts.oassist.core.ui.components.OAssistPanel
-import ru.outsideproarts.oassist.core.ui.components.OAssistSectionHeading
 import ru.outsideproarts.oassist.core.ui.components.OAssistSettingRow
 
+/**
+ * Раздел «Ассистент» в настройках: системные доступы (экран, уведомления,
+ * Shizuku/root). Сюда переехал бывший таб «Ассистент» — отдельного таба нет.
+ */
 @Composable
-fun AssistantScreen(
+fun AssistantAccessScreen(
     isAccessibilityEnabled: Boolean = false,
     onOpenAccessibilitySettings: () -> Unit = {},
     isNotificationEnabled: Boolean = false,
     onOpenNotificationSettings: () -> Unit = {},
+    isShizukuGranted: Boolean = false,
+    onRequestShizuku: () -> Unit = {},
+    isRootAvailable: Boolean = false,
+    onBack: () -> Unit = {},
     modifier: Modifier = Modifier,
 ) {
-    val title = stringResource(R.string.assistant_title)
-    val emptyTitle = stringResource(R.string.assistant_empty_title)
-    val emptyBody = stringResource(R.string.assistant_empty_body)
+    val title = stringResource(R.string.settings_assistant_title)
+    val sectionTitle = stringResource(R.string.assistant_access_title)
+    val backLabel = stringResource(R.string.action_back)
+    val onState = stringResource(R.string.assistant_access_on)
+    val offState = stringResource(R.string.assistant_access_off)
 
     Column(
         modifier = modifier
@@ -53,62 +63,48 @@ fun AssistantScreen(
                 .oassistHeading(),
         )
 
-        OAssistPanel(title = emptyTitle) {
-            Text(
-                text = emptyTitle,
-                style = MaterialTheme.typography.titleMedium,
-                color = MaterialTheme.colorScheme.onSurface,
-            )
-            Text(
-                text = emptyBody,
-                style = MaterialTheme.typography.bodyMedium,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-        }
-
-        AccessSection(
-            isAccessibilityEnabled = isAccessibilityEnabled,
-            onOpenAccessibilitySettings = onOpenAccessibilitySettings,
-            isNotificationEnabled = isNotificationEnabled,
-            onOpenNotificationSettings = onOpenNotificationSettings,
-        )
-    }
-}
-
-@Composable
-private fun AccessSection(
-    isAccessibilityEnabled: Boolean,
-    onOpenAccessibilitySettings: () -> Unit,
-    isNotificationEnabled: Boolean,
-    onOpenNotificationSettings: () -> Unit,
-) {
-    val sectionTitle = stringResource(R.string.assistant_access_title)
-    val a11yTitle = stringResource(R.string.assistant_access_a11y)
-    val a11ySubtitle = stringResource(R.string.assistant_access_a11y_subtitle)
-    val notifTitle = stringResource(R.string.assistant_access_notif)
-    val notifSubtitle = stringResource(R.string.assistant_access_notif_subtitle)
-    val onState = stringResource(R.string.assistant_access_on)
-    val offState = stringResource(R.string.assistant_access_off)
-
-    Column(verticalArrangement = Arrangement.spacedBy(OAssistDimens.ItemSpacing)) {
-        OAssistSectionHeading(text = sectionTitle)
         OAssistPanel(title = sectionTitle) {
             AccessRow(
-                title = a11yTitle,
-                subtitle = a11ySubtitle,
+                title = stringResource(R.string.assistant_access_a11y),
+                subtitle = stringResource(R.string.assistant_access_a11y_subtitle),
                 enabled = isAccessibilityEnabled,
                 onState = onState,
                 offState = offState,
                 onClick = onOpenAccessibilitySettings,
             )
             AccessRow(
-                title = notifTitle,
-                subtitle = notifSubtitle,
+                title = stringResource(R.string.assistant_access_notif),
+                subtitle = stringResource(R.string.assistant_access_notif_subtitle),
                 enabled = isNotificationEnabled,
                 onState = onState,
                 offState = offState,
                 onClick = onOpenNotificationSettings,
             )
+            AccessRow(
+                title = stringResource(R.string.assistant_access_shizuku),
+                subtitle = stringResource(R.string.assistant_access_shizuku_subtitle),
+                enabled = isShizukuGranted,
+                onState = onState,
+                offState = offState,
+                onClick = onRequestShizuku,
+            )
+            AccessRow(
+                title = stringResource(R.string.assistant_access_root),
+                subtitle = stringResource(R.string.assistant_access_root_subtitle),
+                enabled = isRootAvailable,
+                onState = onState,
+                offState = offState,
+                onClick = null,
+            )
+        }
+
+        OutlinedButton(
+            onClick = onBack,
+            modifier = Modifier
+                .fillMaxWidth()
+                .oassistTouchTarget(),
+        ) {
+            Text(backLabel)
         }
     }
 }
@@ -120,17 +116,18 @@ private fun AccessRow(
     enabled: Boolean,
     onState: String,
     offState: String,
-    onClick: () -> Unit,
+    onClick: (() -> Unit)?,
 ) {
     val state = if (enabled) onState else offState
+    val roleMod = if (onClick != null) Modifier else Modifier
     OAssistSettingRow(
         title = title,
         subtitle = subtitle,
         value = state,
-        icon = Icons.Default.ChevronRight,
+        icon = if (onClick != null) Icons.Default.ChevronRight else null,
         onClick = onClick,
         modifier = Modifier
-            .oassistRole(Role.Button)
+            .then(roleMod)
             .oassistTouchTarget()
             .semantics { stateDescription = state },
     )

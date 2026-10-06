@@ -25,6 +25,7 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -76,11 +77,11 @@ class ShareActivity : AppCompatActivity() {
                         val agent = agentFactory.agentFor(profile, ru.outsideproarts.oassist.core.model.AssistMode.SHARE)
 
                         val contentDesc = buildString {
-                            payload.text?.let { append("Текст: $it\n") }
-                            payload.imageUris.forEach { append("Изображение: $it\n") }
-                            payload.otherUris.forEach { append("Файл: $it\n") }
+                            payload.text?.let { append(getString(R.string.share_prompt_text, it)) }
+                            payload.imageUris.forEach { append(getString(R.string.share_prompt_image, it)) }
+                            payload.otherUris.forEach { append(getString(R.string.share_prompt_file, it)) }
                         }
-                        val userMsg = "$contentDesc\nВопрос: $question"
+                        val userMsg = getString(R.string.share_prompt_question, contentDesc, question)
 
                         ru.outsideproarts.oassist.core.agent.AgentSession(
                             chunks = agent.stream(
@@ -163,7 +164,9 @@ private fun ShareScreen(
     val textToShow = remember(payload) { payload.text?.trim().orEmpty() }
 
     var question by remember { mutableStateOf("") }
+    var thought by remember { mutableStateOf("") }
     var response by remember { mutableStateOf("") }
+    val shareTools = remember { mutableStateListOf<ru.outsideproarts.oassist.core.agent.AgentToolEvent>() }
     var isStreaming by remember { mutableStateOf(false) }
     val scope = rememberCoroutineScope()
 
@@ -188,7 +191,7 @@ private fun ShareScreen(
         )
 
         if (payload.isEmpty) {
-            OAssistPanel(title = empty) {
+            OAssistPanel(title = empty, showTitle = true) {
                 Text(
                     text = empty,
                     style = MaterialTheme.typography.bodyLarge,
@@ -196,13 +199,7 @@ private fun ShareScreen(
                 )
             }
         } else {
-            OAssistPanel(title = receivedLabel) {
-                Text(
-                    text = receivedLabel,
-                    style = MaterialTheme.typography.titleMedium,
-                    color = MaterialTheme.colorScheme.onSurface,
-                    modifier = Modifier.oassistHeading(),
-                )
+            OAssistPanel(title = receivedLabel, showTitle = true) {
                 if (textToShow.isNotEmpty()) {
                     Text(
                         text = textToShow,
@@ -237,7 +234,11 @@ private fun ShareScreen(
                             isStreaming = true
                             // Barge-in: новый вопрос прерывает озвучку предыдущего ответа.
                             SpeechHandle.get()?.stop()
+                            val thoughtSb = StringBuilder()
                             val sb = StringBuilder()
+                            thought = ""
+                            response = ""
+                            shareTools.clear()
                             scope.launch {
                                 val tts = runCatching {
                                     ru.outsideproarts.oassist.core.agent.AgentFactory.get()
@@ -248,21 +249,46 @@ private fun ShareScreen(
                                 // Озвучка режима SHARE применяется перед каждым стримом.
                                 speech?.applyTts(tts)
                                 speech?.setNarrativeEnabled(tts.narrative)
-                                val speaker = StreamSpeaker(
+                                val thoughtSpeaker = StreamSpeaker(
                                     speak = { speech?.speak(it) },
                                     speakToolCalls = tts.speakToolCalls,
+                                )
+                                val answerSpeaker = StreamSpeaker(
+                                    speak = { speech?.speak(it) },
                                 )
                                 val session = onAskAgent(question.trim())
                                 val error = session.chunks.collectSafe { chunk ->
                                     when (chunk) {
                                         is ChatChunk.Content -> {
-                                            sb.append(chunk.delta)
-                                            response = sb.toString()
-                                            speaker.onText(sb.toString(), chunk.isToolComment)
+                                            if (chunk.isToolComment) {
+                                                thoughtSb.append(chunk.delta)
+                                                thought = thoughtSb.toString()
+                                                thoughtSpeaker.onText(thoughtSb.toString(), true)
+                                            } else {
+                                                sb.append(chunk.delta)
+                                                response = sb.toString()
+                                                answerSpeaker.onText(sb.toString(), false)
+                                            }
                                         }
                                         is ChatChunk.ToolCall -> {
-                                            sb.append("\n[${chunk.name}]\n")
-                                            response = sb.toString()
+                                            shareTools.add(
+                                                ru.outsideproarts.oassist.core.agent.AgentToolEvent(
+                                                    name = chunk.name,
+                                                ),
+                                            )
+                                        }
+                                        is ChatChunk.ToolResult -> {
+                                            val pending = shareTools.indexOfLast {
+                                                it.name == chunk.name && it.output == null
+                                            }
+                                            val event =
+                                                ru.outsideproarts.oassist.core.agent.AgentToolEvent(
+                                                    name = chunk.name,
+                                                    output = chunk.output,
+                                                    isError = chunk.isError,
+                                                )
+                                            if (pending >= 0) shareTools[pending] = event
+                                            else shareTools.add(event)
                                         }
                                         // В Share нет диалога: опасные действия отклоняем сразу.
                                         is ChatChunk.ApprovalNeeded -> {
@@ -272,7 +298,8 @@ private fun ShareScreen(
                                             )
                                         }
                                         is ChatChunk.Finish -> {
-                                            speaker.onFinish(sb.toString())
+                                            thoughtSpeaker.onFinish(thoughtSb.toString())
+                                            answerSpeaker.onFinish(sb.toString())
                                             isStreaming = false
                                         }
                                     }
@@ -290,21 +317,15 @@ private fun ShareScreen(
                     Icon(
                         imageVector = Icons.AutoMirrored.Filled.Send,
                         contentDescription = sendLabel,
-                        modifier = Modifier.oassistRole(Role.Button),
                     )
                 }
             }
 
             if (response.isNotEmpty()) {
-                OAssistPanel(title = responseLabel) {
-                    Text(
-                        text = responseLabel,
-                        style = MaterialTheme.typography.titleMedium,
-                        color = MaterialTheme.colorScheme.onSurface,
-                        modifier = Modifier.oassistHeading(),
-                    )
+                OAssistPanel(title = responseLabel, showTitle = true) {
                     // Видимый текст — НЕ live region. Озвучка — через канал речи
-                    // режима SHARE; повтор — действием «Озвучить ответ».
+                    // режима SHARE; повтор — действием «Озвучить ответ» (только ответ,
+                    // без мысли и тулов).
                     Text(
                         text = response,
                         style = MaterialTheme.typography.bodyLarge,
@@ -313,9 +334,7 @@ private fun ShareScreen(
                             customActions = listOf(
                                 CustomAccessibilityAction(speakLabel) {
                                     val speech = SpeechHandle.get() ?: return@CustomAccessibilityAction false
-                                    SentenceSplitter.splitSentences(
-                                        SentenceSplitter.stripServiceLines(response),
-                                    ).forEach { speech.speak(it) }
+                                    SentenceSplitter.splitSentences(response).forEach { speech.speak(it) }
                                     true
                                 },
                             )

@@ -10,13 +10,14 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.Chat
-import androidx.compose.material.icons.filled.RecordVoiceOver
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.Icon
 import androidx.compose.material3.NavigationBar
 import androidx.compose.material3.NavigationBarItem
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
+import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -52,13 +53,14 @@ import ru.outsideproarts.oassist.core.provider.ProviderValidationResult
 import ru.outsideproarts.oassist.core.provider.ProviderValidator
 import ru.outsideproarts.oassist.core.ui.theme.OAssistTheme
 import ru.outsideproarts.oassist.di.AppGraph
-import ru.outsideproarts.oassist.feature.assistant.AssistantScreen
 import ru.outsideproarts.oassist.feature.chat.ChatScreen
+import ru.outsideproarts.oassist.feature.settings.AssistantAccessScreen
 import ru.outsideproarts.oassist.feature.settings.ModeConfigScreen
 import ru.outsideproarts.oassist.feature.settings.ProviderEditScreen
 import ru.outsideproarts.oassist.feature.settings.ProviderListScreen
 import ru.outsideproarts.oassist.feature.settings.ProviderSecretsInput
 import ru.outsideproarts.oassist.feature.settings.SettingsScreen
+import ru.outsideproarts.oassist.feature.settings.R as SettingsR
 
 class MainActivity : AppCompatActivity() {
 
@@ -84,9 +86,19 @@ class MainActivity : AppCompatActivity() {
                     graph.narrator.events.collect { event ->
                         when (event) {
                             is ru.outsideproarts.oassist.core.speech.Narrator.NarrativeEvent.ToolCall ->
-                                graph.announcer.announce(appContext.getString(R.string.narrator_tool_call, event.toolName))
+                                graph.announcer.announce(
+                                    appContext.getString(
+                                        R.string.narrator_tool_call,
+                                        displayToolName(appContext, event.toolName),
+                                    ),
+                                )
                             is ru.outsideproarts.oassist.core.speech.Narrator.NarrativeEvent.ToolResult ->
-                                graph.announcer.announce(appContext.getString(R.string.narrator_tool_done, event.toolName))
+                                graph.announcer.announce(
+                                    appContext.getString(
+                                        R.string.narrator_tool_done,
+                                        displayToolName(appContext, event.toolName),
+                                    ),
+                                )
                             is ru.outsideproarts.oassist.core.speech.Narrator.NarrativeEvent.Thought ->
                                 graph.announcer.announce(event.text.take(500))
                         }
@@ -116,11 +128,10 @@ class MainActivity : AppCompatActivity() {
 
 private sealed class TopDest(val route: String, val labelRes: Int) {
     data object Chat : TopDest("chat", R.string.nav_chat)
-    data object Assistant : TopDest("assistant", R.string.nav_assistant)
     data object Settings : TopDest("settings", R.string.nav_settings)
 
     companion object {
-        val ALL = listOf(Chat, Assistant, Settings)
+        val ALL = listOf(Chat, Settings)
     }
 }
 
@@ -161,7 +172,6 @@ private fun OAssistApp(
                             Icon(
                                 imageVector = when (dest) {
                                     TopDest.Chat -> Icons.AutoMirrored.Filled.Chat
-                                    TopDest.Assistant -> Icons.Filled.RecordVoiceOver
                                     TopDest.Settings -> Icons.Filled.Settings
                                 },
                                 contentDescription = null,
@@ -218,6 +228,7 @@ private fun OAssistApp(
                             ru.outsideproarts.oassist.core.agent.DeviceActions(
                                 context.applicationContext,
                                 graph.torchTracker,
+                                graph.foregroundRunner,
                             ),
                             graph.uiActions,
                             graph.notifyActions,
@@ -227,6 +238,7 @@ private fun OAssistApp(
                             graph.data.memory,
                             graph.data.skills,
                             prefs,
+                            graph.privilegeExecutor(),
                         )
                         val agent = ru.outsideproarts.oassist.core.agent.AgentLoop(
                             client,
@@ -255,7 +267,7 @@ private fun OAssistApp(
                     timeline = graph.narrator.timeline,
                 )
             }
-            composable(TopDest.Assistant.route) {
+            composable("assistant_access") {
                 val context = LocalContext.current
                 val lifecycleOwner = androidx.lifecycle.compose.LocalLifecycleOwner.current
                 var accessVersion by remember { mutableStateOf(0) }
@@ -272,7 +284,16 @@ private fun OAssistApp(
                 val notifEnabled = remember(accessVersion) {
                     ru.outsideproarts.oassist.notify.OAssistNotificationListener.isEnabled(context)
                 }
-                AssistantScreen(
+                var shizukuGranted by remember { mutableStateOf(false) }
+                val rootAvailable = remember(accessVersion) {
+                    ru.outsideproarts.oassist.core.device.RootExecutor.hasSuBinary()
+                }
+                androidx.compose.runtime.LaunchedEffect(accessVersion) {
+                    shizukuGranted = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+                        runCatching { graph.shizukuExecutor.isPermissionGranted() }.getOrDefault(false)
+                    }
+                }
+                AssistantAccessScreen(
                     isAccessibilityEnabled = a11yEnabled,
                     onOpenAccessibilitySettings = {
                         context.startActivity(
@@ -287,9 +308,62 @@ private fun OAssistApp(
                                 .addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK),
                         )
                     },
+                    isShizukuGranted = shizukuGranted,
+                    onRequestShizuku = {
+                        runCatching { graph.shizukuExecutor.requestPermission() }
+                    },
+                    isRootAvailable = rootAvailable,
+                    onBack = { navController.popBackStack() },
                 )
             }
             composable(TopDest.Settings.route) {
+                val context = LocalContext.current
+                var showWipeDialog by remember { mutableStateOf(false) }
+                val backup = remember { ru.outsideproarts.oassist.core.data.backup.BackupManager(graph.data) }
+                val exportLauncher = rememberLauncherForActivityResult(
+                    ActivityResultContracts.CreateDocument("application/json"),
+                ) { uri ->
+                    if (uri == null) return@rememberLauncherForActivityResult
+                    scope.launch {
+                        val json = runCatching { backup.export() }.getOrElse { null }
+                        if (json == null) {
+                            showToast(context, SettingsR.string.data_import_error, "?")
+                            return@launch
+                        }
+                        val ok = runCatching {
+                            context.contentResolver.openOutputStream(uri)?.use { out ->
+                                out.write(json.toByteArray(Charsets.UTF_8))
+                            } ?: throw IllegalStateException("Нет потока записи")
+                        }.isSuccess
+                        if (ok) showToast(context, SettingsR.string.data_export_done)
+                        else showToast(context, SettingsR.string.data_import_error, "?")
+                    }
+                }
+                val importLauncher = rememberLauncherForActivityResult(
+                    ActivityResultContracts.OpenDocument(),
+                ) { uri ->
+                    if (uri == null) return@rememberLauncherForActivityResult
+                    scope.launch {
+                        val raw = runCatching {
+                            context.contentResolver.openInputStream(uri)?.use { input ->
+                                input.readBytes().toString(Charsets.UTF_8)
+                            }
+                        }.getOrNull()
+                        if (raw == null) {
+                            showToast(context, SettingsR.string.data_import_error, "?")
+                            return@launch
+                        }
+                        backup.import(raw).fold(
+                            onSuccess = {
+                                showToast(context, SettingsR.string.data_import_done)
+                            },
+                            onFailure = {
+                                val reason = it.message?.take(200) ?: "?"
+                                showToast(context, SettingsR.string.data_import_error, reason)
+                            },
+                        )
+                    }
+                }
                 SettingsScreen(
                     language = language,
                     onLanguageChange = onLanguageChange,
@@ -299,7 +373,41 @@ private fun OAssistApp(
                     onNavigateToMcp = { navController.navigate("mcp_servers") },
                     onNavigateToSkills = { navController.navigate("skills") },
                     onNavigateToMemory = { navController.navigate("memory") },
+                    onNavigateToAssistant = { navController.navigate("assistant_access") },
+                    onExport = { exportLauncher.launch("oassist-backup.json") },
+                    onImport = { importLauncher.launch(arrayOf("application/json")) },
+                    onWipe = { showWipeDialog = true },
                 )
+                if (showWipeDialog) {
+                    AlertDialog(
+                        onDismissRequest = { showWipeDialog = false },
+                        title = { Text(stringResource(SettingsR.string.data_wipe_title)) },
+                        text = { Text(stringResource(SettingsR.string.data_wipe_body)) },
+                        confirmButton = {
+                            TextButton(onClick = {
+                                showWipeDialog = false
+                                scope.launch {
+                                    backup.wipe().fold(
+                                        onSuccess = {
+                                            showToast(context, SettingsR.string.data_wipe_done)
+                                        },
+                                        onFailure = {
+                                            val reason = it.message?.take(200) ?: "?"
+                                            showToast(context, SettingsR.string.data_import_error, reason)
+                                        },
+                                    )
+                                }
+                            }) {
+                                Text(stringResource(SettingsR.string.data_wipe_confirm))
+                            }
+                        },
+                        dismissButton = {
+                            TextButton(onClick = { showWipeDialog = false }) {
+                                Text(stringResource(SettingsR.string.action_cancel))
+                            }
+                        },
+                    )
+                }
             }
             composable("skills") {
                 var version by remember { mutableStateOf(0) }
@@ -376,6 +484,9 @@ private fun OAssistApp(
                         graph.voiceCapture,
                         graph.data.memory,
                         graph.data.skills,
+                        // Экран настроек использует только метаданные (разрешения);
+                        // исполнение здесь не нужно — достаточно Noop.
+                        graph.noopExecutor,
                     )
                 }
                 val toolPermissions = remember(tools) {
@@ -674,6 +785,21 @@ private fun showToast(
 }
 
 /**
+ * Человекочитаемое имя тула для нарратора (TalkBack не должен слышать сырой
+ * идентификатор «web_fetch» / «device_state»). Ищем строковый ресурс
+ * `tool_<name>_title` в пакете; MCP-тулы (`mcp_<id>__<tool>`) оставляем как есть —
+ * у них нет локализованного имени, лучше показать идентификатор, чем молчать.
+ */
+private fun displayToolName(context: android.content.Context, toolName: String): String {
+    val resId = context.resources.getIdentifier(
+        "tool_${toolName.replace("-", "_")}_title",
+        "string",
+        context.packageName,
+    )
+    return if (resId != 0) context.getString(resId) else toolName
+}
+
+/**
  * Проверка параметров провайдера и сохранение. ANTHROPIC/GEMINI — заглушка (без пробы),
  * результат возвращается как успех с [ProviderValidationResult.Skipped] — вызывающий
  * показывает подсказку. Ошибка несохранённых секретов — только через [ProviderAuth].
@@ -685,8 +811,6 @@ private suspend fun saveProvider(
 ): Result<ProviderValidationResult> = try {
     val overrides = ProviderAuth(
         bearerToken = secrets.apiKey?.toCharArray(),
-        basicUser = secrets.basicUser?.toCharArray(),
-        basicPassword = secrets.basicPassword?.toCharArray(),
     )
     val validator = ProviderValidator(graph.data.secretStore, graph.httpClient)
     when (val result = validator.validate(updated, overrides)) {
@@ -697,13 +821,6 @@ private suspend fun saveProvider(
             when {
                 secrets.clearApiKey -> graph.providers.clearApiKey(updated.id)
                 apiKey != null -> graph.providers.setApiKey(updated.id, apiKey.toCharArray())
-            }
-            val basicUser = secrets.basicUser
-            val basicPassword = secrets.basicPassword
-            when {
-                secrets.clearBasic -> graph.providers.clearBasicAuth(updated.id)
-                basicUser != null && basicPassword != null ->
-                    graph.providers.setBasicAuth(updated.id, basicUser.toCharArray(), basicPassword.toCharArray())
             }
             if (result is ProviderValidationResult.Success) {
                 graph.providers.saveModelCatalog(updated.id, result.models)

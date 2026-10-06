@@ -34,18 +34,24 @@ data class RenderedPage(
  * файловый доступ закрыт, JS-моста в приложение нет, после рендера —
  * `destroy()` и чистка хранилищ. Один рендер за раз ([mutex]).
  */
-class WebRenderActions(private val appContext: Context) {
+class WebRenderActions(
+    private val appContext: Context,
+    private val foreground: ForegroundRunner = NoopForegroundRunner(),
+) {
 
     private val mutex = Mutex()
 
     suspend fun render(url: String, loadImages: Boolean): Result<RenderedPage> {
-        return mutex.withLock {
-            val result = withTimeoutOrNull(RENDER_TIMEOUT_MS) {
-                runCatching { doRender(url, loadImages).getOrThrow() }
-            } ?: return Result.failure(
-                java.util.concurrent.TimeoutException("Рендер превысил $RENDER_TIMEOUT_MS мс: $url"),
-            )
-            result
+        // Рендер до ~30 с — под foreground-сервисом (M5.3).
+        return foreground.run {
+            mutex.withLock {
+                val result = withTimeoutOrNull(RENDER_TIMEOUT_MS) {
+                    runCatching { doRender(url, loadImages).getOrThrow() }
+                } ?: return@run Result.failure(
+                    java.util.concurrent.TimeoutException("Рендер превысил $RENDER_TIMEOUT_MS мс: $url"),
+                )
+                result
+            }
         }
     }
 

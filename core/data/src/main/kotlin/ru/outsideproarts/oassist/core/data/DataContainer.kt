@@ -9,6 +9,8 @@ import ru.outsideproarts.oassist.core.data.memory.FileMemoryStore
 import ru.outsideproarts.oassist.core.data.memory.MemoryStore
 import ru.outsideproarts.oassist.core.data.prefs.SettingsDataStore
 import ru.outsideproarts.oassist.core.data.prefs.ToolConfigStore
+import ru.outsideproarts.oassist.core.data.prefs.ApprovalStore
+import ru.outsideproarts.oassist.core.data.prefs.DataStoreApprovalStore
 import ru.outsideproarts.oassist.core.data.skill.FileSkillStore
 import ru.outsideproarts.oassist.core.data.skill.SkillStore
 import ru.outsideproarts.oassist.core.data.provider.ProviderConfigStore
@@ -39,6 +41,10 @@ class DataContainer(
 
     val toolConfigs: ToolConfigStore by lazy {
         ToolConfigStore(deviceContext)
+    }
+
+    val approvals: ApprovalStore by lazy {
+        DataStoreApprovalStore(deviceContext)
     }
 
     val providers: ProviderRepository by lazy {

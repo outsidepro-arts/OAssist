@@ -11,4 +11,8 @@
     <string name="share_send">Отправить</string>
     <string name="share_response">Ответ агента</string>
     <string name="share_speak_answer">Озвучить ответ</string>
+    <string name="share_prompt_text">Текст: %1$s\n</string>
+    <string name="share_prompt_image">Изображение: %1$s\n</string>
+    <string name="share_prompt_file">Файл: %1$s\n</string>
+    <string name="share_prompt_question">%1$s\nВопрос: %2$s</string>
 </resources>

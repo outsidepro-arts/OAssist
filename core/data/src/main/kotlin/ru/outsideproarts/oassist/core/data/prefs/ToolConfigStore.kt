@@ -57,6 +57,17 @@ class ToolConfigStore(private val context: Context) {
         }
     }
 
+    /** Replace для импорта: стереть всё и применить снапшот целиком. */
+    suspend fun replace(prefs: ToolPreferences) {
+        resetAll()
+        context.toolConfigDataStore.edit { store ->
+            prefs.disabled.forEach { store[booleanPreferencesKey(PREFIX_ENABLED + it)] = false }
+            prefs.askOverrides.forEach { (name, ask) ->
+                store[booleanPreferencesKey(PREFIX_ASK + name)] = ask
+            }
+        }
+    }
+
     companion object {
         private const val PREFIX_ENABLED = "tool.enabled."
         private const val PREFIX_ASK = "tool.ask."

@@ -5,15 +5,16 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
-import androidx.compose.foundation.selection.selectable
-import androidx.compose.foundation.selection.selectableGroup
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.ExposedDropdownMenuAnchorType
 import androidx.compose.material3.ExposedDropdownMenuBox
 import androidx.compose.material3.ExposedDropdownMenuDefaults
 import androidx.compose.material3.MaterialTheme
@@ -22,7 +23,9 @@ import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.RadioButton
 import androidx.compose.material3.Slider
 import androidx.compose.material3.Switch
+import androidx.compose.material3.minimumInteractiveComponentSize
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -33,11 +36,17 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.paneTitle
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.stateDescription
+import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.ui.text.input.KeyboardCapitalization
+import ru.outsideproarts.oassist.core.a11y.oassistDropdownClassName
 import ru.outsideproarts.oassist.core.a11y.oassistHeading
 import ru.outsideproarts.oassist.core.a11y.oassistRole
+import ru.outsideproarts.oassist.core.a11y.oassistSlider
+import ru.outsideproarts.oassist.core.a11y.oassistSwitchRow
 import ru.outsideproarts.oassist.core.a11y.oassistTouchTarget
 import ru.outsideproarts.oassist.core.model.AssistMode
 import ru.outsideproarts.oassist.core.model.AssistantExtras
@@ -56,6 +65,7 @@ import ru.outsideproarts.oassist.core.speech.voiceLanguageTags
 import ru.outsideproarts.oassist.core.ui.OAssistDimens
 import ru.outsideproarts.oassist.core.ui.components.OAssistPanel
 import ru.outsideproarts.oassist.core.ui.components.OAssistSectionHeading
+import ru.outsideproarts.oassist.core.ui.components.OAssistSwitchRow
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -82,7 +92,9 @@ fun ModeConfigScreen(
     var modelId by remember { mutableStateOf(config.modelId ?: "") }
     var initialPrompt by remember { mutableStateOf(config.initialPrompt ?: "") }
     var providerExpanded by remember { mutableStateOf(false) }
-    var modelExpanded by remember { mutableStateOf(false) }
+    // ID модели — обычное поле ввода (ручной ввод); выбор из списка —
+    // отдельной кнопкой «Выбрать модель» с диалогом-пикером ниже.
+    var modelPickerOpen by remember { mutableStateOf(false) }
     var autoSpeak by remember { mutableStateOf(config.assistant?.autoSpeak ?: true) }
     var autoClose by remember { mutableStateOf(config.assistant?.autoClose ?: true) }
     var attachScreenshot by remember { mutableStateOf(config.assistant?.attachScreenshot ?: true) }
@@ -156,7 +168,6 @@ fun ModeConfigScreen(
     val backLabel = stringResource(R.string.action_back)
     val selectProviderLabel = stringResource(R.string.mode_provider)
     val selectModelLabel = stringResource(R.string.mode_model)
-    val manualInputLabel = stringResource(R.string.mode_model_manual)
 
     Column(
         modifier = modifier
@@ -188,7 +199,8 @@ fun ModeConfigScreen(
                     trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = providerExpanded) },
                     modifier = Modifier
                         .fillMaxWidth()
-                        .menuAnchor(),
+                        .menuAnchor(ExposedDropdownMenuAnchorType.PrimaryNotEditable)
+                        .oassistDropdownClassName(),
                 )
                 ExposedDropdownMenu(
                     expanded = providerExpanded,
@@ -212,66 +224,50 @@ fun ModeConfigScreen(
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.spacedBy(OAssistDimens.DenseSpacing),
+                verticalAlignment = Alignment.CenterVertically,
             ) {
-                ExposedDropdownMenuBox(
-                    expanded = modelExpanded,
-                    onExpandedChange = { modelExpanded = it },
-                    modifier = Modifier.weight(1f),
-                ) {
-                    OutlinedTextField(
-                        value = modelId,
-                        onValueChange = { modelId = it },
-                        label = { Text(selectModelLabel) },
-                        trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = modelExpanded) },
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .menuAnchor(),
-                    )
-                    ExposedDropdownMenu(
-                        expanded = modelExpanded,
-                        onDismissRequest = { modelExpanded = false },
-                    ) {
-                        if (models.isEmpty()) {
-                            DropdownMenuItem(
-                                text = {
-                                    Text(stringResource(R.string.mode_model_empty))
-                                },
-                                enabled = false,
-                                onClick = { modelExpanded = false },
-                            )
-                        }
-                        models.forEach { m ->
-                            DropdownMenuItem(
-                                text = { Text(m.id) },
-                                onClick = {
-                                    modelId = m.id
-                                    modelExpanded = false
-                                },
-                            )
-                        }
-                    }
-                }
+                val modelIdLabel = stringResource(R.string.field_mode_model_id)
+                OutlinedTextField(
+                    value = modelId,
+                    // ID модели — однострочный редактор без автокоррекции:
+                    // клавиатура не должна править идентификатор.
+                    onValueChange = { modelId = it },
+                    label = { Text(selectModelLabel) },
+                    singleLine = true,
+                    keyboardOptions = KeyboardOptions(
+                        autoCorrectEnabled = false,
+                        capitalization = KeyboardCapitalization.None,
+                    ),
+                    placeholder = { Text(stringResource(R.string.mode_model_manual)) },
+                    modifier = Modifier
+                        .weight(1f)
+                        .semantics { contentDescription = modelIdLabel },
+                )
                 OutlinedButton(
-                    onClick = { onRefreshModels(providerId) },
+                    onClick = {
+                        // Перед открытием пикера подтягиваем свежий каталог выбранного провайдера.
+                        onProviderSelected(providerId)
+                        modelPickerOpen = true
+                    },
                     modifier = Modifier.oassistTouchTarget(),
-                    enabled = !isLoadingModels && providerId.isNotBlank(),
+                    enabled = providerId.isNotBlank(),
                 ) {
-                    if (isLoadingModels) {
-                        CircularProgressIndicator(
-                            modifier = Modifier.padding(OAssistDimens.DenseSpacing),
-                            strokeWidth = OAssistDimens.HairlineSpacing,
-                        )
-                    } else {
-                        Text(stringResource(R.string.mode_model_refresh))
-                    }
+                    Text(stringResource(R.string.mode_model_pick))
                 }
             }
 
-            Text(
-                text = manualInputLabel,
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
+            if (modelPickerOpen) {
+                ModelPickerDialog(
+                    models = models,
+                    isLoading = isLoadingModels,
+                    onRefresh = { onRefreshModels(providerId) },
+                    onPick = {
+                        modelId = it
+                        modelPickerOpen = false
+                    },
+                    onDismiss = { modelPickerOpen = false },
+                )
+            }
 
             OAssistSectionHeading(text = stringResource(R.string.mode_caps_title))
             val currentCaps = models.find { it.id == modelId }?.capabilities ?: emptySet()
@@ -279,34 +275,23 @@ fun ModeConfigScreen(
             val offState = stringResource(R.string.state_disabled)
             ModelCapability.entries.forEach { cap ->
                 val checked = cap in currentCaps
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(OAssistDimens.DenseSpacing),
-                ) {
-                    Text(
-                        text = capabilityLabel(cap),
-                        style = MaterialTheme.typography.bodyLarge,
-                        color = MaterialTheme.colorScheme.onSurface,
-                        modifier = Modifier.weight(1f),
-                    )
-                    Switch(
-                        checked = checked,
-                        onCheckedChange = { on ->
-                            if (modelId.isNotBlank()) {
-                                onSaveCapabilities(
-                                    providerId,
-                                    modelId,
-                                    if (on) currentCaps + cap else currentCaps - cap,
-                                )
-                            }
-                        },
-                        enabled = modelId.isNotBlank(),
-                        modifier = Modifier
-                            .oassistTouchTarget()
-                            .semantics { stateDescription = if (checked) onState else offState },
-                    )
-                }
+                val capEnabled = modelId.isNotBlank()
+                OAssistSwitchRow(
+                    checked = checked,
+                    onCheckedChange = { on ->
+                        if (capEnabled) {
+                            onSaveCapabilities(
+                                providerId,
+                                modelId,
+                                if (on) currentCaps + cap else currentCaps - cap,
+                            )
+                        }
+                    },
+                    label = capabilityLabel(cap),
+                    stateLabelOn = onState,
+                    stateLabelOff = offState,
+                    enabled = capEnabled,
+                )
             }
             Row(
                 modifier = Modifier.fillMaxWidth(),
@@ -555,39 +540,37 @@ private fun TtsSection(
         SpeechOutputChannel.SYSTEM_TTS to stringResource(R.string.mode_tts_system),
         SpeechOutputChannel.SCREEN_READER to stringResource(R.string.mode_tts_screen_reader),
     )
+    var channelExpanded by remember { mutableStateOf(false) }
 
     OAssistSectionHeading(text = stringResource(R.string.mode_tts_title))
 
-    Column(
-        modifier = Modifier
-            .fillMaxWidth()
-            .selectableGroup()
-            .semantics { paneTitle = groupLabel },
-        verticalArrangement = Arrangement.spacedBy(OAssistDimens.DenseSpacing),
+    // Канал — чистый dropdown (без ввода): значение только из списка.
+    ExposedDropdownMenuBox(
+        expanded = channelExpanded,
+        onExpandedChange = { channelExpanded = it },
     ) {
-        options.forEach { (value, label) ->
-            val selected = channel == value
-            val state = if (selected) onState else offState
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .oassistTouchTarget()
-                    .selectable(
-                        selected = selected,
-                        role = Role.RadioButton,
-                        onClick = { onChannelChange(value) },
-                    )
-                    .semantics { stateDescription = state }
-                    .padding(horizontal = OAssistDimens.DenseSpacing, vertical = OAssistDimens.ItemSpacing),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(OAssistDimens.OptionRowSpacing),
-            ) {
-                RadioButton(selected = selected, onClick = null)
-                Text(
-                    text = label,
-                    style = MaterialTheme.typography.bodyLarge,
-                    color = MaterialTheme.colorScheme.onSurface,
-                    modifier = Modifier.oassistRole(Role.RadioButton),
+        OutlinedTextField(
+            value = options.firstOrNull { it.first == channel }?.second ?: groupLabel,
+            onValueChange = {},
+            label = { Text(groupLabel) },
+            readOnly = true,
+            trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = channelExpanded) },
+            modifier = Modifier
+                .fillMaxWidth()
+                .menuAnchor(ExposedDropdownMenuAnchorType.PrimaryNotEditable)
+                        .oassistDropdownClassName(),
+        )
+        ExposedDropdownMenu(
+            expanded = channelExpanded,
+            onDismissRequest = { channelExpanded = false },
+        ) {
+            options.forEach { (value, label) ->
+                DropdownMenuItem(
+                    text = { Text(label) },
+                    onClick = {
+                        onChannelChange(value)
+                        channelExpanded = false
+                    },
                 )
             }
         }
@@ -605,7 +588,8 @@ private fun TtsSection(
             trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = engineExpanded) },
             modifier = Modifier
                 .fillMaxWidth()
-                .menuAnchor(),
+                .menuAnchor(ExposedDropdownMenuAnchorType.PrimaryNotEditable)
+                        .oassistDropdownClassName(),
         )
         ExposedDropdownMenu(
             expanded = engineExpanded,
@@ -642,7 +626,8 @@ private fun TtsSection(
             trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = localeExpanded) },
             modifier = Modifier
                 .fillMaxWidth()
-                .menuAnchor(),
+                .menuAnchor(ExposedDropdownMenuAnchorType.PrimaryNotEditable)
+                        .oassistDropdownClassName(),
         )
         ExposedDropdownMenu(
             expanded = localeExpanded,
@@ -674,7 +659,8 @@ private fun TtsSection(
             trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = voiceExpanded) },
             modifier = Modifier
                 .fillMaxWidth()
-                .menuAnchor(),
+                .menuAnchor(ExposedDropdownMenuAnchorType.PrimaryNotEditable)
+                        .oassistDropdownClassName(),
         )
         ExposedDropdownMenu(
             expanded = voiceExpanded,
@@ -747,9 +733,11 @@ private fun TtsSlider(
     steps: Int,
     onChange: (Float) -> Unit,
 ) {
+    val valueText = "%.2f".format(value)
+    val stepIncrement = (range.endInclusive - range.start) / 20f
     Column(modifier = Modifier.fillMaxWidth()) {
         Text(
-            text = "$label: ${"%.2f".format(value)}",
+            text = "$label: $valueText",
             style = MaterialTheme.typography.bodyLarge,
             color = MaterialTheme.colorScheme.onSurface,
         )
@@ -760,7 +748,15 @@ private fun TtsSlider(
             steps = steps,
             modifier = Modifier
                 .fillMaxWidth()
-                .oassistTouchTarget(),
+                .oassistTouchTarget()
+                .oassistSlider(
+                    label = label,
+                    valueText = valueText,
+                    range = range,
+                    onValueChange = onChange,
+                    stepIncrement = stepIncrement,
+                    currentValue = { value },
+                ),
         )
     }
 }
@@ -774,8 +770,13 @@ private fun TtsSwitch(
     onState: String,
     offState: String,
 ) {
+    val state = if (checked) onState else offState
     Row(
-        modifier = Modifier.fillMaxWidth(),
+        modifier = Modifier
+            .fillMaxWidth()
+            .oassistTouchTarget()
+            .oassistSwitchRow(checked = checked, onValueChange = onCheckedChange)
+            .semantics { stateDescription = state },
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(OAssistDimens.DenseSpacing),
     ) {
@@ -793,14 +794,13 @@ private fun TtsSwitch(
         }
         Switch(
             checked = checked,
-            onCheckedChange = onCheckedChange,
-            modifier = Modifier
-                .oassistTouchTarget()
-                .semantics { stateDescription = if (checked) onState else offState },
+            onCheckedChange = null,
+            modifier = Modifier.minimumInteractiveComponentSize(),
         )
     }
 }
 
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun SttSection(
     engine: SttEngine,
@@ -813,36 +813,37 @@ private fun SttSection(
         SttEngine.SYSTEM to stringResource(R.string.mode_stt_system),
         SttEngine.MODEL_AUDIO to stringResource(R.string.mode_stt_model_audio),
     )
+    var expanded by remember { mutableStateOf(false) }
 
     OAssistSectionHeading(text = groupLabel)
 
-    Column(
-        modifier = Modifier
-            .fillMaxWidth()
-            .selectableGroup()
-            .semantics { paneTitle = groupLabel },
-        verticalArrangement = Arrangement.spacedBy(OAssistDimens.DenseSpacing),
+    // Движок — чистый dropdown (без ввода): значение только из списка.
+    ExposedDropdownMenuBox(
+        expanded = expanded,
+        onExpandedChange = { expanded = it },
     ) {
-        options.forEach { (value, label) ->
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .oassistTouchTarget()
-                    .selectable(
-                        selected = engine == value,
-                        role = Role.RadioButton,
-                        onClick = { onEngineChange(value) },
-                    )
-                    .padding(horizontal = OAssistDimens.DenseSpacing, vertical = OAssistDimens.ItemSpacing),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(OAssistDimens.OptionRowSpacing),
-            ) {
-                RadioButton(selected = engine == value, onClick = null)
-                Text(
-                    text = label,
-                    style = MaterialTheme.typography.bodyLarge,
-                    color = MaterialTheme.colorScheme.onSurface,
-                    modifier = Modifier.oassistRole(Role.RadioButton),
+        OutlinedTextField(
+            value = options.firstOrNull { it.first == engine }?.second ?: groupLabel,
+            onValueChange = {},
+            label = { Text(groupLabel) },
+            readOnly = true,
+            trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = expanded) },
+            modifier = Modifier
+                .fillMaxWidth()
+                .menuAnchor(ExposedDropdownMenuAnchorType.PrimaryNotEditable)
+                        .oassistDropdownClassName(),
+        )
+        ExposedDropdownMenu(
+            expanded = expanded,
+            onDismissRequest = { expanded = false },
+        ) {
+            options.forEach { (value, label) ->
+                DropdownMenuItem(
+                    text = { Text(label) },
+                    onClick = {
+                        onEngineChange(value)
+                        expanded = false
+                    },
                 )
             }
         }
@@ -852,12 +853,16 @@ private fun SttSection(
         style = MaterialTheme.typography.bodySmall,
         color = MaterialTheme.colorScheme.onSurfaceVariant,
     )
+    val sttLangLabel = stringResource(R.string.field_mode_stt_lang)
     OutlinedTextField(
         value = language,
         onValueChange = onLanguageChange,
         label = { Text(stringResource(R.string.mode_stt_language)) },
         singleLine = true,
-        modifier = Modifier.fillMaxWidth(),
+        keyboardOptions = KeyboardOptions(autoCorrectEnabled = false),
+        modifier = Modifier
+            .fillMaxWidth()
+            .semantics { contentDescription = sttLangLabel },
     )
 }
 
@@ -869,8 +874,13 @@ private fun ModeSwitch(
     onState: String,
     offState: String,
 ) {
+    val state = if (checked) onState else offState
     Row(
-        modifier = Modifier.fillMaxWidth(),
+        modifier = Modifier
+            .fillMaxWidth()
+            .oassistTouchTarget()
+            .oassistSwitchRow(checked = checked, onValueChange = onCheckedChange)
+            .semantics { stateDescription = state },
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(OAssistDimens.DenseSpacing),
     ) {
@@ -882,10 +892,8 @@ private fun ModeSwitch(
         )
         Switch(
             checked = checked,
-            onCheckedChange = onCheckedChange,
-            modifier = Modifier
-                .oassistTouchTarget()
-                .semantics { stateDescription = if (checked) onState else offState },
+            onCheckedChange = null,
+            modifier = Modifier.minimumInteractiveComponentSize(),
         )
     }
 }
@@ -896,4 +904,79 @@ private fun capabilityLabel(cap: ModelCapability): String = when (cap) {
     ModelCapability.VISION -> stringResource(R.string.cap_vision)
     ModelCapability.AUDIO_IN -> stringResource(R.string.cap_audio_in)
     ModelCapability.REASONING -> stringResource(R.string.cap_reasoning)
+}
+
+/**
+ * Пикер моделей: диалог со списком от провайдера. Тап по модели заполняет
+ * поле ID модели выбранной. Список обновляется кнопкой «Обновить».
+ */
+@Composable
+private fun ModelPickerDialog(
+    models: List<ModelInfo>,
+    isLoading: Boolean,
+    onRefresh: () -> Unit,
+    onPick: (String) -> Unit,
+    onDismiss: () -> Unit,
+) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text(stringResource(R.string.mode_model_picker_title)) },
+        text = {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .verticalScroll(rememberScrollState()),
+                verticalArrangement = Arrangement.spacedBy(OAssistDimens.DenseSpacing),
+            ) {
+                OutlinedButton(
+                    onClick = onRefresh,
+                    enabled = !isLoading,
+                    modifier = Modifier.oassistTouchTarget(),
+                ) {
+                    if (isLoading) {
+                        CircularProgressIndicator(
+                            modifier = Modifier.padding(OAssistDimens.DenseSpacing),
+                            strokeWidth = OAssistDimens.HairlineSpacing,
+                        )
+                    } else {
+                        Text(stringResource(R.string.mode_model_refresh))
+                    }
+                }
+                if (!isLoading && models.isEmpty()) {
+                    Text(
+                        text = stringResource(R.string.mode_model_empty),
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+                models.forEach { m ->
+                    val itemLabel = stringResource(
+                        R.string.mode_model_pick_item,
+                        m.label?.takeIf { it.isNotBlank() } ?: m.id,
+                    )
+                    TextButton(
+                        onClick = { onPick(m.id) },
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .oassistTouchTarget()
+                            .semantics { contentDescription = itemLabel },
+                    ) {
+                        Text(
+                            text = m.id,
+                            style = MaterialTheme.typography.bodyLarge,
+                            modifier = Modifier.fillMaxWidth(),
+                        )
+                    }
+                }
+            }
+        },
+        confirmButton = {
+            TextButton(
+                onClick = onDismiss,
+                modifier = Modifier.oassistTouchTarget(),
+            ) {
+                Text(stringResource(R.string.action_back))
+            }
+        },
+    )
 }

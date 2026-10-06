@@ -1,6 +1,9 @@
 package ru.outsideproarts.oassist.core.agent
 
 import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.launch
+import ru.outsideproarts.oassist.core.data.prefs.ApprovalStore
 import ru.outsideproarts.oassist.core.model.ActionRisk
 import ru.outsideproarts.oassist.core.model.ApprovalDecision
 import java.util.concurrent.ConcurrentHashMap
@@ -36,6 +39,59 @@ class InMemoryApprovalPolicy : ApprovalPolicy {
 
     override fun clearAlwaysAllowed() {
         alwaysAllowed.clear()
+    }
+}
+
+/**
+ * Персистентная политика (M5.3): записи «всегда разрешать» живут в DataStore.
+ * In-memory снимок для синхронного [shouldAutoApprove]; стор — источник истины,
+ * коллектор в [scope] держит снимок свежим. Запись идёт в обе стороны сразу,
+ * чтобы диалог «Всегда» работал без ожидания эмита Flow.
+ */
+class PersistentApprovalPolicy(
+    private val store: ApprovalStore,
+    scope: CoroutineScope,
+    initial: Set<String> = emptySet(),
+) : ApprovalPolicy {
+    @Volatile
+    private var snapshot: Set<String> = initial
+
+    init {
+        scope.launch {
+            store.alwaysAllowed.collect { snapshot = it }
+        }
+        scope.launch {
+            snapshot = runCatching { store.snapshot() }.getOrDefault(snapshot)
+        }
+    }
+
+    override fun shouldAutoApprove(toolName: String, risk: ActionRisk): Boolean =
+        when (risk) {
+            ActionRisk.AUTO -> true
+            ActionRisk.ASK, ActionRisk.ALWAYS_ASK -> toolName in snapshot
+        }
+
+    override fun setAlwaysAllow(toolName: String, allow: Boolean) {
+        snapshot = if (allow) snapshot + toolName else snapshot - toolName
+        pendingWrite(store, toolName, allow)
+    }
+
+    override fun clearAlwaysAllowed() {
+        snapshot = emptySet()
+        pendingClear(store)
+    }
+
+    companion object {
+        // Записи — через shared IO-скоуп, без привязки к жизненному циклу экрана.
+        private val writeScope = CoroutineScope(kotlinx.coroutines.SupervisorJob() + kotlinx.coroutines.Dispatchers.IO)
+
+        private fun pendingWrite(store: ApprovalStore, toolName: String, allow: Boolean) {
+            writeScope.launch { runCatching { store.setAlwaysAllow(toolName, allow) } }
+        }
+
+        private fun pendingClear(store: ApprovalStore) {
+            writeScope.launch { runCatching { store.clear() } }
+        }
     }
 }
 

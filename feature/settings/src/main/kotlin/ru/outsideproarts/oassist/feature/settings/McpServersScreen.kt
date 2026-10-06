@@ -11,8 +11,12 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.ChevronRight
+import androidx.compose.material.icons.filled.Visibility
+import androidx.compose.material.icons.filled.VisibilityOff
 import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
@@ -28,14 +32,20 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.stateDescription
+import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.text.input.PasswordVisualTransformation
+import androidx.compose.ui.text.input.VisualTransformation
 import ru.outsideproarts.oassist.core.a11y.oassistHeading
 import ru.outsideproarts.oassist.core.a11y.oassistRole
 import ru.outsideproarts.oassist.core.a11y.oassistTouchTarget
 import ru.outsideproarts.oassist.core.model.McpServerConfig
 import ru.outsideproarts.oassist.core.ui.OAssistDimens
 import ru.outsideproarts.oassist.core.ui.components.OAssistPanel
+import ru.outsideproarts.oassist.core.ui.components.OAssistSwitchRow
 import ru.outsideproarts.oassist.core.ui.components.OAssistSectionHeading
 import ru.outsideproarts.oassist.core.ui.components.OAssistSettingRow
 
@@ -134,7 +144,6 @@ private fun McpServersList(
                 title = stringResource(R.string.mcp_add),
                 icon = Icons.Default.Add,
                 onClick = onAdd,
-                modifier = Modifier.oassistRole(Role.Button),
             )
 
             if (servers.isEmpty()) {
@@ -145,31 +154,21 @@ private fun McpServersList(
                 )
             } else {
                 servers.forEach { server ->
-                    Row(
+                    Column(
                         modifier = Modifier.fillMaxWidth(),
-                        verticalAlignment = Alignment.CenterVertically,
                     ) {
                         OAssistSettingRow(
                             title = server.name,
                             subtitle = server.url,
-                            value = if (server.enabled) enabledState else disabledState,
                             icon = Icons.Default.ChevronRight,
                             onClick = { onEdit(server) },
-                            modifier = Modifier
-                                .weight(1f)
-                                .oassistRole(Role.Button)
-                                .semantics {
-                                    stateDescription = if (server.enabled) enabledState else disabledState
-                                },
                         )
-                        Switch(
+                        OAssistSwitchRow(
                             checked = server.enabled,
                             onCheckedChange = { onSetEnabled(server.id, it) },
-                            modifier = Modifier
-                                .oassistTouchTarget()
-                                .semantics {
-                                    stateDescription = if (server.enabled) enabledState else disabledState
-                                },
+                            label = stringResource(R.string.mcp_enabled_label, server.name),
+                            stateLabelOn = enabledState,
+                            stateLabelOff = disabledState,
                         )
                     }
                 }
@@ -204,6 +203,8 @@ private fun McpServerEditor(
     var bearerInput by remember { mutableStateOf("") }
     var hasSavedBearer by remember { mutableStateOf(config?.bearerRef != null) }
     var clearBearer by remember { mutableStateOf(false) }
+    // Показ токена ввода: по умолчанию маскирован.
+    var bearerVisible by remember { mutableStateOf(false) }
 
     LaunchedEffect(config?.id) {
         if (config != null) {
@@ -229,6 +230,8 @@ private fun McpServerEditor(
     val enabledState = stringResource(R.string.state_enabled)
     val disabledState = stringResource(R.string.state_disabled)
     val maskedLabel = stringResource(R.string.provider_api_key_masked)
+    val showPasswordLabel = stringResource(R.string.password_show)
+    val hidePasswordLabel = stringResource(R.string.password_hide)
     val canSave = name.isNotBlank() && url.isNotBlank()
 
     Column(
@@ -248,22 +251,36 @@ private fun McpServerEditor(
         )
 
         OAssistPanel(title = title) {
+            // Служебные поля — каждый своим видом: имя — однострочный редактор
+            // без автокоррекции, URL — URL-клавиатура, токен — пароль.
+            val nameLabel = stringResource(R.string.field_mcp_name)
             OutlinedTextField(
                 value = name,
                 onValueChange = { name = it },
                 label = { Text(stringResource(R.string.mcp_name)) },
                 singleLine = true,
-                modifier = Modifier.fillMaxWidth(),
+                keyboardOptions = KeyboardOptions(autoCorrectEnabled = false),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .semantics { contentDescription = nameLabel },
             )
 
+            val urlLabel = stringResource(R.string.field_mcp_url)
             OutlinedTextField(
                 value = url,
                 onValueChange = { url = it },
                 label = { Text(stringResource(R.string.mcp_url)) },
                 singleLine = true,
-                modifier = Modifier.fillMaxWidth(),
+                keyboardOptions = KeyboardOptions(
+                    keyboardType = KeyboardType.Uri,
+                    autoCorrectEnabled = false,
+                ),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .semantics { contentDescription = urlLabel },
             )
 
+            val bearerLabel = stringResource(R.string.field_mcp_bearer)
             OutlinedTextField(
                 value = bearerInput,
                 onValueChange = {
@@ -280,7 +297,31 @@ private fun McpServerEditor(
                     )
                 },
                 singleLine = true,
-                modifier = Modifier.fillMaxWidth(),
+                visualTransformation = if (bearerVisible) {
+                    VisualTransformation.None
+                } else {
+                    PasswordVisualTransformation()
+                },
+                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
+                trailingIcon = {
+                    IconButton(onClick = { bearerVisible = !bearerVisible }) {
+                        Icon(
+                            imageVector = if (bearerVisible) {
+                                Icons.Filled.VisibilityOff
+                            } else {
+                                Icons.Filled.Visibility
+                            },
+                            contentDescription = if (bearerVisible) {
+                                hidePasswordLabel
+                            } else {
+                                showPasswordLabel
+                            },
+                        )
+                    }
+                },
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .semantics { contentDescription = bearerLabel },
             )
             if (hasSavedBearer && !clearBearer) {
                 Row(horizontalArrangement = Arrangement.spacedBy(OAssistDimens.DenseSpacing)) {
@@ -306,24 +347,13 @@ private fun McpServerEditor(
                 }
             }
 
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                Text(
-                    text = enabledLabel,
-                    style = MaterialTheme.typography.bodyLarge,
-                    modifier = Modifier.oassistRole(Role.Switch),
-                )
-                Switch(
-                    checked = enabled,
-                    onCheckedChange = { enabled = it },
-                    modifier = Modifier.semantics {
-                        stateDescription = if (enabled) enabledState else disabledState
-                    },
-                )
-            }
+            OAssistSwitchRow(
+                checked = enabled,
+                onCheckedChange = { enabled = it },
+                label = enabledLabel,
+                stateLabelOn = enabledState,
+                stateLabelOff = disabledState,
+            )
 
             if (!isNew) {
                 OutlinedButton(

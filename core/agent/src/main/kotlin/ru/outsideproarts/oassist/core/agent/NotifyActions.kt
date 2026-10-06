@@ -1,6 +1,9 @@
 package ru.outsideproarts.oassist.core.agent
 
 import android.app.Notification
+import android.app.RemoteInput
+import android.content.Intent
+import android.os.Bundle
 import android.service.notification.NotificationListenerService
 import android.service.notification.StatusBarNotification
 import java.text.SimpleDateFormat
@@ -74,6 +77,26 @@ class NotifyActions(
         }.getOrElse { ToolResult(false, "Не удалось скрыть уведомление: ${it.message}") }
     }
 
+    /** Ответить на уведомление текстом (через первое действие с RemoteInput). */
+    fun reply(key: String, text: String): ToolResult {
+        val service = serviceOrError().getOrElse { return ToolResult(false, it.message ?: "Сервис недоступен") }
+        val trimmed = text.trim().take(MAX_REPLY_CHARS)
+        if (trimmed.isEmpty()) return ToolResult(false, "Пустой текст ответа")
+        val sbn = service.activeNotifications?.find { it.key == key }
+            ?: return ToolResult(false, "Уведомление не найдено — обновите список")
+        val action = sbn.notification.actions?.firstOrNull { !(it.remoteInputs.isNullOrEmpty()) }
+            ?: return ToolResult(false, "У уведомления нет действия ответа")
+        return runCatching {
+            val results = Bundle().apply {
+                action.remoteInputs!!.forEach { putCharSequence(it.resultKey, trimmed) }
+            }
+            val intent = Intent()
+            RemoteInput.addResultsToIntent(action.remoteInputs, intent, results)
+            action.actionIntent.send(service, 0, intent)
+            ToolResult(true, "Ответ отправлен")
+        }.getOrElse { ToolResult(false, "Не удалось отправить ответ: ${it.message}") }
+    }
+
     private fun StatusBarNotification.toItem(): NotifyItem {
         val extras = notification.extras
         return NotifyItem(
@@ -89,5 +112,6 @@ class NotifyActions(
         const val SERVICE_DISABLED_MESSAGE =
             "Доступ к уведомлениям не выдан — включите его в системных настройках"
         private const val MAX_ITEMS = 20
+        const val MAX_REPLY_CHARS = 500
     }
 }

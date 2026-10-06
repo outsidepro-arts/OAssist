@@ -26,6 +26,9 @@
     <string name="chat_timeline_empty">Пока тихо — агент ещё ничего не делал.</string>
     <string name="chat_timeline_expanded">Развёрнут</string>
     <string name="chat_timeline_collapsed">Свёрнут</string>
+    <string name="chat_action_expand">Развернуть</string>
+    <string name="chat_action_collapse">Свернуть</string>
     <string name="chat_timeline_tool_call">Выполняю: %1$s</string>
     <string name="chat_timeline_tool_result">Готово: %1$s</string>
+    <string name="chat_work_title">Ход работы</string>
 </resources>

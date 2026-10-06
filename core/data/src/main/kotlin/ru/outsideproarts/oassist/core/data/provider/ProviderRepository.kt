@@ -37,11 +37,10 @@ class ProviderRepository(
         val profile = getProvider(id)
         profile?.let { p ->
             p.apiKeyRef?.let { secrets.delete(it) }
-            p.basicAuthUserRef?.let { secrets.delete(it) }
-            p.basicAuthPasswordRef?.let { secrets.delete(it) }
             p.extraHeaders.values.forEach { secrets.delete(it) }
         }
         secrets.delete(aliasForApiKey(id))
+        // Legacy purge: Basic-алиасы версий до удаления Basic Auth (M3.4b).
         secrets.delete(aliasForBasicUser(id))
         secrets.delete(aliasForBasicPassword(id))
         store.deleteProviderProfile(id)
@@ -58,28 +57,6 @@ class ProviderRepository(
     suspend fun clearApiKey(providerId: String) {
         secrets.delete(aliasForApiKey(providerId))
         updateProvider(providerId) { it.copy(apiKeyRef = null) }
-    }
-
-    suspend fun hasBasicAuth(providerId: String): Boolean =
-        secrets.contains(aliasForBasicPassword(providerId))
-
-    suspend fun setBasicAuth(providerId: String, username: CharArray, password: CharArray) {
-        secrets.put(aliasForBasicUser(providerId), username)
-        secrets.put(aliasForBasicPassword(providerId), password)
-        updateProvider(providerId) {
-            it.copy(
-                basicAuthUserRef = aliasForBasicUser(providerId),
-                basicAuthPasswordRef = aliasForBasicPassword(providerId),
-            )
-        }
-    }
-
-    suspend fun clearBasicAuth(providerId: String) {
-        secrets.delete(aliasForBasicUser(providerId))
-        secrets.delete(aliasForBasicPassword(providerId))
-        updateProvider(providerId) {
-            it.copy(basicAuthUserRef = null, basicAuthPasswordRef = null)
-        }
     }
 
     /**

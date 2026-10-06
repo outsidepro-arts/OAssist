@@ -42,7 +42,7 @@ class OAssistVoiceInteractionSession(service: VoiceInteractionSessionService) : 
         val textView = TextView(context).apply {
             textSize = 16f
             setPadding(24, 24, 24, 24)
-            text = "OAssist: думаю..."
+            text = context.getString(ru.outsideproarts.oassist.R.string.vis_thinking)
         }
         resultTextView = textView
         container.addView(textView, ViewGroup.LayoutParams(
@@ -87,11 +87,15 @@ class OAssistVoiceInteractionSession(service: VoiceInteractionSessionService) : 
                     // стрим-анонсы сюда не дойдут — их не будет вовсе, не дубль.
                     val screenReader = tts.channel ==
                         ru.outsideproarts.oassist.core.model.SpeechOutputChannel.SCREEN_READER
-                    val speaker = ru.outsideproarts.oassist.core.speech.StreamSpeaker(
+                    val thoughtSpeaker = ru.outsideproarts.oassist.core.speech.StreamSpeaker(
                         speak = { if (autoSpeak && !screenReader) speech().speak(it) },
                         speakToolCalls = tts.speakToolCalls,
                     )
+                    val answerSpeaker = ru.outsideproarts.oassist.core.speech.StreamSpeaker(
+                        speak = { if (autoSpeak && !screenReader) speech().speak(it) },
+                    )
 
+                    val thoughtSb = StringBuilder()
                     val sb = StringBuilder()
                     agent.stream(
                         modelId = config.modelId ?: "",
@@ -100,13 +104,20 @@ class OAssistVoiceInteractionSession(service: VoiceInteractionSessionService) : 
                             screenContext = screenContext,
                         ),
                         history = emptyList(),
-                        userMessage = "Что на экране? Помоги пользователю.",
+                        userMessage = context.getString(ru.outsideproarts.oassist.R.string.vis_default_question),
                     ).collect { chunk ->
                         when (chunk) {
                             is ru.outsideproarts.oassist.core.provider.ChatChunk.Content -> {
-                                sb.append(chunk.delta)
-                                resultTextView?.text = sb.toString()
-                                speaker.onText(sb.toString(), chunk.isToolComment)
+                                if (chunk.isToolComment) {
+                                    // Мысль — только в синтез (при флаге), на экран сессии
+                                    // не выводим: здесь важен только результат.
+                                    thoughtSb.append(chunk.delta)
+                                    thoughtSpeaker.onText(thoughtSb.toString(), true)
+                                } else {
+                                    sb.append(chunk.delta)
+                                    resultTextView?.text = sb.toString()
+                                    answerSpeaker.onText(sb.toString(), false)
+                                }
                             }
                             // В голосовой сессии нет диалога: опасные действия отклоняем сразу.
                             is ru.outsideproarts.oassist.core.provider.ChatChunk.ApprovalNeeded -> {
@@ -116,19 +127,23 @@ class OAssistVoiceInteractionSession(service: VoiceInteractionSessionService) : 
                                 )
                             }
                             is ru.outsideproarts.oassist.core.provider.ChatChunk.Finish -> {
-                                speaker.onFinish(sb.toString())
+                                thoughtSpeaker.onFinish(thoughtSb.toString())
+                                answerSpeaker.onFinish(sb.toString())
                                 if (autoSpeak && screenReader && sb.isNotEmpty()) {
                                     resultTextView?.announceForAccessibility(sb.toString())
                                 }
                             }
+                            // Вызовы/результаты тулов — в полотно, не на экран сессии.
                             else -> {}
                         }
                     }
                 } else {
-                    resultTextView?.text = "Провайдер не настроен для режима Ассистент."
+                    resultTextView?.text =
+                        context.getString(ru.outsideproarts.oassist.R.string.vis_no_provider)
                 }
             } catch (e: Exception) {
-                resultTextView?.text = "Ошибка: ${e.message}"
+                resultTextView?.text =
+                    context.getString(ru.outsideproarts.oassist.R.string.vis_error, e.message ?: "?")
             }
         }
     }

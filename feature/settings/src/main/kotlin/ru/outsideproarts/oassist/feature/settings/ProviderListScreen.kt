@@ -65,7 +65,6 @@ fun ProviderListScreen(
                 title = stringResource(R.string.providers_add),
                 icon = Icons.Default.Add,
                 onClick = onAddProvider,
-                modifier = Modifier.oassistRole(Role.Button),
             )
 
             if (providers.isEmpty()) {
@@ -83,7 +82,7 @@ fun ProviderListScreen(
                         icon = Icons.Default.ChevronRight,
                         onClick = { onEditProvider(profile.id) },
                         modifier = Modifier
-                            .oassistRole(Role.Button)
+                            
                             .semantics {
                                 stateDescription = if (profile.enabled) enabledState else disabledState
                             },

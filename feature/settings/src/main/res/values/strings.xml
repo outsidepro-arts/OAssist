@@ -1,6 +1,19 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <string name="settings_title">Настройки</string>
+    <string name="settings_assistant_title">Ассистент</string>
+    <string name="settings_assistant_subtitle">Доступ к экрану, уведомлениям и привилегии</string>
+    <string name="assistant_access_title">Доступ</string>
+    <string name="assistant_access_a11y">Доступ к экрану</string>
+    <string name="assistant_access_a11y_subtitle">Сервис доступности OAssist: чтение экрана и жесты для ui-инструментов</string>
+    <string name="assistant_access_notif">Доступ к уведомлениям</string>
+    <string name="assistant_access_notif_subtitle">Чтение уведомлений для notify-инструментов</string>
+    <string name="assistant_access_shizuku">Shizuku</string>
+    <string name="assistant_access_shizuku_subtitle">Привилегии shell для shell-инструментов и фолбэка жестов</string>
+    <string name="assistant_access_root">Root</string>
+    <string name="assistant_access_root_subtitle">Привилегии su, если нет Shizuku</string>
+    <string name="assistant_access_on">Включён</string>
+    <string name="assistant_access_off">Выключен</string>
     <string name="settings_language_title">Язык</string>
     <string name="settings_language_subtitle">Язык интерфейса и речи</string>
     <string name="settings_language_system">Системный</string>
@@ -36,11 +49,24 @@
     <string name="provider_base_url">Base URL</string>
     <string name="provider_api_key">API-ключ</string>
     <string name="provider_api_key_masked">•••• (сохранён)</string>
-    <string name="provider_basic_user">Имя пользователя (Basic)</string>
-    <string name="provider_basic_password">Пароль (Basic)</string>
+    <string name="password_show">Показать пароль</string>
+    <string name="password_hide">Скрыть пароль</string>
     <string name="provider_enabled">Активен</string>
+    <string name="field_provider_name">Имя провайдера</string>
+    <string name="field_provider_url">Базовый URL</string>
+    <string name="field_provider_key">API-ключ</string>
+    <string name="field_mcp_name">Имя MCP-сервера</string>
+    <string name="field_mcp_url">URL MCP-сервера</string>
+    <string name="field_mcp_bearer">Токен MCP-сервера</string>
+    <string name="field_mode_model_id">ID модели</string>
+    <string name="field_mode_stt_lang">Язык распознавания</string>
+    <string name="field_skill_name">Имя навыка</string>
+    <string name="field_skill_title">Заголовок навыка</string>
+    <string name="mcp_enabled_label">Включить %1$s</string>
+    <string name="skills_enabled_label">Включить навык «%1$s»</string>
     <string name="state_enabled">включён</string>
     <string name="state_disabled">выключен</string>
+    <string name="state_missing">Разрешение не выдано</string>
     <string name="action_save">Сохранить</string>
     <string name="action_delete">Удалить</string>
     <string name="action_back">Назад</string>
@@ -63,6 +89,9 @@
     <string name="mode_config_title">Настройки режима</string>
     <string name="mode_provider">Провайдер</string>
     <string name="mode_model">Модель</string>
+    <string name="mode_model_pick">Выбрать модель</string>
+    <string name="mode_model_picker_title">Выбор модели</string>
+    <string name="mode_model_pick_item">Модель %1$s</string>
     <string name="mode_model_refresh">Обновить список моделей</string>
     <string name="mode_model_empty">Список пуст — нажмите «Обновить список моделей»</string>
     <string name="mode_model_manual">Или введите ID вручную</string>
@@ -179,6 +208,20 @@
     <string name="tool_voice_listen_start_desc">Включить микрофон и ждать голосовой ответ</string>
     <string name="tool_voice_listen_stop_title">Остановить и распознать</string>
     <string name="tool_voice_listen_stop_desc">Остановить запись и вернуть распознанный текст</string>
+    <string name="tool_shell_exec_title">Системная команда</string>
+    <string name="tool_shell_exec_desc">Read-only команды через Shizuku/root (нужен Shizuku или root)</string>
+    <string name="tool_shell_get_setting_title">Чтение настройки</string>
+    <string name="tool_shell_get_setting_desc">Системные настройки system/secure/global</string>
+    <string name="tool_shell_put_setting_title">Запись настройки</string>
+    <string name="tool_shell_put_setting_desc">Запись системных настроек (нужен Shizuku или root)</string>
+    <string name="tool_notify_reply_title">Ответ на уведомление</string>
+    <string name="tool_notify_reply_desc">Ответ текстом, если есть действие ответа</string>
+    <string name="tool_volume_set_title">Громкость</string>
+    <string name="tool_volume_set_desc">Громкость потоков: музыка, звонок, будильник</string>
+    <string name="tool_dnd_set_title">Не беспокоить</string>
+    <string name="tool_dnd_set_desc">Режим «Не беспокоить» (нужен спецдоступ)</string>
+    <string name="tool_brightness_set_title">Яркость экрана</string>
+    <string name="tool_brightness_set_desc">Яркость в ручном режиме (нужен спецдоступ)</string>
     <string name="perm_microphone">Микрофон</string>
     <string name="perm_camera">Камера (фонарик)</string>
     <string name="perm_location">Местоположение</string>
@@ -221,6 +264,20 @@
     <string name="memory_clear">Очистить всё</string>
     <string name="memory_clear_title">Очистить всю память?</string>
     <string name="memory_saved">Память сохранена</string>
+
+    <!-- Данные: экспорт/импорт/wipe -->
+    <string name="data_title">Данные</string>
+    <string name="data_subtitle">Экспорт и импорт настроек (без секретов — ключи вводятся заново).</string>
+    <string name="data_export">Экспортировать настройки</string>
+    <string name="data_import">Импортировать настройки</string>
+    <string name="data_wipe">Стереть все данные</string>
+    <string name="data_wipe_title">Стереть всё?</string>
+    <string name="data_wipe_body">Удалятся провайдеры, режимы, навыки, память, история и секреты. Отменить нельзя.</string>
+    <string name="data_export_done">Экспорт сохранён</string>
+    <string name="data_import_done">Импорт завершён, секреты введите заново</string>
+    <string name="data_import_error">Не удалось прочитать бэкап: %1$s</string>
+    <string name="data_wipe_done">Все данные стёрты</string>
+    <string name="data_wipe_confirm">Стереть</string>
 
     <!-- Инструменты: память и навыки -->
     <string name="tool_memory_get_title">Чтение памяти</string>

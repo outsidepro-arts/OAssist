@@ -149,15 +149,10 @@ class OpenAiCompatibleClient private constructor(
     }
 
     private fun HttpRequestBuilder.applyAuth(zenSessionId: String? = null) {
-        // Basic — для своего `opencode serve` за логином/паролем; при его наличии
-        // Bearer не шлётся (серверу нужен ровно один `Authorization`).
-        val basic = basicHeader()
-        if (basic != null) {
-            headers.append(HttpHeaders.Authorization, basic)
-        } else {
-            auth.bearerToken?.let {
-                headers.append(HttpHeaders.Authorization, "Bearer " + String(it))
-            }
+        // Zen/совместимые API — только Bearer (API-ключ); Basic Auth удалён:
+        // стандартный сервер opencode.ai его не поддерживает.
+        auth.bearerToken?.let {
+            headers.append(HttpHeaders.Authorization, "Bearer " + String(it))
         }
         if (zenSessionId != null) {
             headers.append(OpenCodeZen.SESSION_HEADER, zenSessionId)
@@ -166,14 +161,6 @@ class OpenAiCompatibleClient private constructor(
         auth.extraHeaders.forEach { (name, value) ->
             headers.append(name, value)
         }
-    }
-
-    /** `Basic base64(user:password)` или null, если пара неполная. */
-    private fun basicHeader(): String? {
-        val user = auth.basicUser ?: return null
-        val password = auth.basicPassword ?: return null
-        val raw = String(user) + ":" + String(password)
-        return "Basic " + kotlin.io.encoding.Base64.encode(raw.toByteArray())
     }
 
     companion object {
@@ -206,8 +193,6 @@ class OpenAiCompatibleClient private constructor(
             overrides: ProviderAuth? = null,
         ): OpenAiCompatibleClient {
             val apiKey = overrides?.bearerToken ?: profile.apiKeyRef?.let { secretStore.get(it) }
-            val basicUser = overrides?.basicUser ?: profile.basicAuthUserRef?.let { secretStore.get(it) }
-            val basicPassword = overrides?.basicPassword ?: profile.basicAuthPasswordRef?.let { secretStore.get(it) }
             val extras = if (overrides != null && overrides.extraHeaders.isNotEmpty()) {
                 overrides.extraHeaders
             } else {
@@ -223,8 +208,6 @@ class OpenAiCompatibleClient private constructor(
 
             val auth = ProviderAuth(
                 bearerToken = apiKey,
-                basicUser = basicUser,
-                basicPassword = basicPassword,
                 extraHeaders = extras,
             )
             return OpenAiCompatibleClient(profile, auth, httpClient)

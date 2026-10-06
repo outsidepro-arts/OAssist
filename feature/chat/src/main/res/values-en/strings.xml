@@ -26,6 +26,9 @@
     <string name="chat_timeline_empty">Nothing yet — the agent has done nothing so far.</string>
     <string name="chat_timeline_expanded">Expanded</string>
     <string name="chat_timeline_collapsed">Collapsed</string>
+    <string name="chat_action_expand">Expand</string>
+    <string name="chat_action_collapse">Collapse</string>
     <string name="chat_timeline_tool_call">Running: %1$s</string>
     <string name="chat_timeline_tool_result">Done: %1$s</string>
+    <string name="chat_work_title">Progress</string>
 </resources>

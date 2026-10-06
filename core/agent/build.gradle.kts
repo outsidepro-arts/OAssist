@@ -20,6 +20,7 @@ android {
 
 dependencies {
     implementation(project(":core:model"))
+    implementation(project(":core:device"))
     implementation(project(":core:provider"))
     implementation(project(":core:speech"))
     implementation(project(":core:data"))

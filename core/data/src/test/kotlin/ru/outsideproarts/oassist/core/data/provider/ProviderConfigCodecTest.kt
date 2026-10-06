@@ -35,14 +35,33 @@ class ProviderConfigCodecTest {
             baseUrl = "https://api.example.com/v1",
             apiKeyRef = "provider.p1.apiKey",
             extraHeaders = mapOf("X-Org" to "provider.p1.header.x-org"),
-            basicAuthUserRef = "provider.p1.basicUser",
-            basicAuthPasswordRef = "provider.p1.basicPassword",
             enabled = true,
         )
 
         val decoded = json.decodeFromString<ProviderProfile>(json.encodeToString(profile))
 
         assertEquals(profile, decoded)
+    }
+
+    @Test
+    fun providerProfile_legacyBasicRefs_ignored() {
+        // Профили версий с Basic Auth (до удаления): неизвестные ключи
+        // игнорируются, остальное читается как обычно.
+        val legacyJson = """
+            {
+              "id": "p1",
+              "name": "Zen",
+              "kind": "OPENCODE_ZEN",
+              "baseUrl": "https://opencode.ai/zen/v1",
+              "basicAuthUserRef": "provider.p1.basicUser",
+              "basicAuthPasswordRef": "provider.p1.basicPassword"
+            }
+        """.trimIndent()
+
+        val decoded = json.decodeFromString<ProviderProfile>(legacyJson)
+
+        assertEquals("p1", decoded.id)
+        assertEquals(ProviderKind.OPENCODE_ZEN, decoded.kind)
     }
 
     @Test

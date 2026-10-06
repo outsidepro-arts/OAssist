@@ -162,6 +162,59 @@ API-ключи, токены, пароли, значения `extraHeaders`, Bas
 - Никаких `TODO`/заглушек в коде без задачи в `MEMORY.md` → «Открытые вопросы».
 - Ресурсы: строки в `strings.xml`, размеры в `dimens.xml`, никаких хардкодов в `dp`/`sp` кроме семантики.
 
+## Пишем доступный Compose UI
+
+Доступность — сквозное требование, не опция. Стандарты: WCAG 2.2 + CVS Health `android-compose-accessibility-techniques`. Визуал не меняется — доступность его сопровождает.
+
+### Канонические компоненты
+
+Использовать из `core/ui/components/Components.kt`. Новые экраны **не пишут** свои Switch/Slider/Dropdown — переиспользуют:
+
+| Компонент | Назначение | А11y-семантика |
+|---|---|---|
+| `OAssistSwitchRow` | Switch-ряд | `toggleable(role=Role.Switch)` на Row, `Switch(onCheckedChange=null)`, `stateDescription` |
+| `OAssistSettingRow` | Кнопка-строка настроек | `clickable(role=Role.Button)`, `oassistMergedContent()`, иконки `contentDescription=null` |
+| `OAssistPanel` | Карточка с именем | `paneTitle` (или `showTitle=true` для визуального заголовка + `heading()`) |
+| `OAssistSectionHeading` | Заголовок секции | `heading()` |
+| `OAssistLiveStatus` | Transient-статус | `liveRegion=Polite/Assertive` |
+
+Helpers из `core/a11y/Semantics.kt`: `oassistTouchTarget()`, `oassistHeading()`, `oassistPaneTitle()`, `oassistStateDescription()`, `oassistRole()`, `oassistCustomAction()`, `oassistSwitchRow()`, `oassistMergedContent()`, `oassistSlider()`, `oassistDropdownClassName()`, `oassistLiveRegion()`.
+
+### Правила
+
+1. **Touch target ≥ 48dp** — `oassistTouchTarget()` на всё интерактивное.
+2. **Имя + роль + состояние** — каждый контрол имеет `contentDescription`/`label`, правильную `Role`, `stateDescription` если есть состояние.
+3. **Жест ≠ единственный путь** — свайп/long-press имеют кнопочный аналог + `CustomAccessibilityAction` (`oassistCustomAction`).
+4. **Live region — не на стриме** — видимый накапливающийся текст (ответ агента) НЕ live region. Только скрытый announcer-узел (`AnnouncerHost`/`FlowAnnouncer`) или transient-статусы.
+5. **Дропдауны** — `ExposedDropdownMenuBox` + `menuAnchor(PrimaryNotEditable)` + `oassistDropdownClassName()` (TalkBack: «Выпадающий список», не «Окно редактирования»).
+6. **Слайдеры** — `oassistSlider()` (contentDescription + stateDescription + liveRegion + onKeyEvent D-PAD).
+7. **Секреты** — только через `SecretStore`, значение не переотображается (маска `•••• (сохранён)` + Заменить/Удалить).
+8. **Строки** — все в `values/strings.xml` (ru) и `values-en/strings.xml` (en), хардкод запрещён. Каждый `contentDescription`/`stateDescription` — через `stringResource`.
+9. **Токены цвета** — только `MaterialTheme.colorScheme.*`, хардкод `Color(0x…)` запрещён.
+10. **`Role.Button` не дублировать** — `Modifier.clickable(role=Role.Button)` и Material3-компоненты уже дают роль. Не вешать `oassistRole(Role.Button)` на `OAssistSettingRow`/`IconButton`/`TextButton`/`Button`.
+
+### Анти-паттерны (не делать)
+
+- `Modifier.oassistRole(Role.Switch)` на статическом `Text` → TalkBack читает «переключатель», фокус ловушит. Использовать `OAssistSwitchRow`.
+- `Text(text = m.id)` с сырым API-идентификатором → TalkBack читает кракозябры. Обернуть в `TextButton` + `contentDescription = stringResource(...)`.
+- `OAssistPanel(title = X) { Text(X) }` → дубль paneTitle+Text. Либо `showTitle=true` без paneTitle, либо только paneTitle.
+- `Icon(contentDescription = "Иконка")` без действия → декоративная иконка = `contentDescription = null` + визуальный `Text(label)`.
+- `Switch(onCheckedChange = ...)` без `OAssistSwitchRow` → Row+label читаются отдельно от Switch.
+- `Slider` без `contentDescription` → TalkBack читает только значение, нет имени.
+
+### Чеклист code review нового UI
+
+1. Touch targets ≥ 48dp.
+2. `contentDescription`/`label` на каждом контроле.
+3. `Role` (Button/Switch/DropdownList).
+4. `stateDescription` для состоящих.
+5. `paneTitle`/`heading()` для секций/панелей.
+6. `liveRegion` — не на стриме, Polite для статусов, Assertive для ошибок.
+7. Строки ru+en.
+8. Канон-компоненты (`OAssistSwitchRow`, `OAssistSettingRow`, `oassistSlider`, `oassistDropdownClassName`).
+9. `CustomAccessibilityAction` для жестов.
+10. TalkBack-проход (DoD).
+
 ## Тесты
 
 - Юнит: парсеры SSE/провайдеров, `AgentLoop` (фикстурный `ModelClient`), `ContextCompactor`, JSON-схемы тулов, `ActionRisk`, `SecretStore` (round-trip + redacting).

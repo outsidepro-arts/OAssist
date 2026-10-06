@@ -16,10 +16,6 @@ data class ProviderProfile(
     val apiKeyRef: String? = null,
     /** Имя заголовка → alias его значения в SecretStore. */
     val extraHeaders: Map<String, String> = emptyMap(),
-    /** Alias имени пользователя Basic Auth (OpenCode) в SecretStore. */
-    val basicAuthUserRef: String? = null,
-    /** Alias пароля Basic Auth (OpenCode) в SecretStore. */
-    val basicAuthPasswordRef: String? = null,
     val enabled: Boolean = true,
 )
 

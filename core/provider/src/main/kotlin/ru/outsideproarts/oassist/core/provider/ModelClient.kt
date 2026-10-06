@@ -17,14 +17,10 @@ import ru.outsideproarts.oassist.core.provider.openai.ToolSchemaDto
  */
 class ProviderAuth(
     val bearerToken: CharArray? = null,
-    val basicUser: CharArray? = null,
-    val basicPassword: CharArray? = null,
     val extraHeaders: Map<String, String> = emptyMap(),
 ) {
     fun zeroOut() {
         bearerToken?.fill('\u0000')
-        basicUser?.fill('\u0000')
-        basicPassword?.fill('\u0000')
     }
 }
 
@@ -79,6 +75,17 @@ sealed interface ChatChunk {
         val name: String,
         val argumentsJson: String,
         val index: Int = 0,
+    ) : ChatChunk
+    /**
+     * Результат выполнения инструмента — отдельная сущность, а не текст ответа.
+     * UI показывает его в свёрнутом полотне «Ход работы», в синтез не идёт.
+     * [output] уже обрезан исполнителем; [isError] — неуспех (отклонено/упало).
+     */
+    data class ToolResult(
+        val id: String,
+        val name: String,
+        val output: String,
+        val isError: Boolean = false,
     ) : ChatChunk
     /** Агент просит подтвердить выполнение инструмента; стрим приостановлен до решения. */
     data class ApprovalNeeded(val request: ApprovalRequest) : ChatChunk

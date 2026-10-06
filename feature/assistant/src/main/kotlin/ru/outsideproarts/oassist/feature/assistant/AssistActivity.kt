@@ -19,6 +19,8 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.Send
 import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.ExpandLess
+import androidx.compose.material.icons.filled.ExpandMore
 import androidx.compose.material.icons.filled.Mic
 import androidx.compose.material.icons.filled.Stop
 import androidx.compose.material3.Icon
@@ -28,6 +30,7 @@ import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -36,14 +39,19 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.CustomAccessibilityAction
+import androidx.compose.ui.semantics.LiveRegionMode
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.customActions
+import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.heading
+import androidx.compose.ui.semantics.liveRegion
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.stateDescription
 import kotlinx.coroutines.launch
 import ru.outsideproarts.oassist.core.a11y.oassistHeading
 import ru.outsideproarts.oassist.core.a11y.oassistRole
 import ru.outsideproarts.oassist.core.a11y.oassistTouchTarget
+import ru.outsideproarts.oassist.core.agent.AgentToolEvent
 import ru.outsideproarts.oassist.core.provider.ChatChunk
 import ru.outsideproarts.oassist.core.provider.ChatMessage
 import ru.outsideproarts.oassist.core.provider.ChatRole
@@ -157,14 +165,16 @@ private fun AssistOverlay(
     val listeningText = stringResource(R.string.assistant_listening)
 
     var question by remember { mutableStateOf("") }
-    var response by remember { mutableStateOf("") }
+    // Ответ — три раздельные проекции: мысль, вызовы, основной текст.
+    var thought by remember { mutableStateOf("") }
+    var answer by remember { mutableStateOf("") }
+    val toolEvents = remember { mutableStateListOf<AgentToolEvent>() }
+    var sttPreview by remember { mutableStateOf("") }
     var isStreaming by remember { mutableStateOf(false) }
     val scope = rememberCoroutineScope()
 
-    // Голосовой ввод — тот же in-app захват, что в чате. Тап микрофона:
-    // слушать до тишины/повторного тапа, распознанное — сразу в ask(),
-    // ответ при autoSpeak звучит сам (hands-free).
-    // Порядок: ask → слушатель → старт/стоп → onMicClick (текстовый порядок).
+    // Голосовой ввод — тот же in-app захват, что в чате. Распознанное НЕ пишем
+    // в поле: финал уходит сразу в ask(). Порядок: ask → слушатель → onMicClick.
     val voice = remember { VoiceHandle.get() }
     var capturing by remember { mutableStateOf(false) }
     androidx.compose.runtime.LaunchedEffect(voice) {
@@ -178,8 +188,12 @@ private fun AssistOverlay(
         isStreaming = true
         // Barge-in: новый вопрос прерывает озвучку предыдущего ответа.
         SpeechHandle.get()?.stop()
-        val sb = StringBuilder()
-        response = ""
+        val thoughtSb = StringBuilder()
+        val answerSb = StringBuilder()
+        thought = ""
+        answer = ""
+        toolEvents.clear()
+        sttPreview = ""
         scope.launch {
             val modeTts = runCatching {
                 ru.outsideproarts.oassist.core.agent.AgentFactory.get()
@@ -193,21 +207,42 @@ private fun AssistOverlay(
             // Озвучка режима ASSISTANT применяется перед каждым стримом.
             speech?.applyTts(tts)
             speech?.setNarrativeEnabled(tts.narrative)
-            val speaker = StreamSpeaker(
+            val thoughtSpeaker = StreamSpeaker(
                 speak = { if (autoSpeak) speech?.speak(it) },
                 speakToolCalls = tts.speakToolCalls,
+            )
+            val answerSpeaker = StreamSpeaker(
+                speak = { if (autoSpeak) speech?.speak(it) },
+                speakToolCalls = true,
             )
             val session = onAskAgent(trimmed)
             val error = session.chunks.collectSafe { chunk ->
                 when (chunk) {
                     is ChatChunk.Content -> {
-                        sb.append(chunk.delta)
-                        response = sb.toString()
-                        speaker.onText(sb.toString(), chunk.isToolComment)
+                        if (chunk.isToolComment) {
+                            thoughtSb.append(chunk.delta)
+                            thought = thoughtSb.toString()
+                            thoughtSpeaker.onText(thoughtSb.toString(), true)
+                        } else {
+                            answerSb.append(chunk.delta)
+                            answer = answerSb.toString()
+                            answerSpeaker.onText(answerSb.toString(), false)
+                        }
                     }
                     is ChatChunk.ToolCall -> {
-                        sb.append("\n[${chunk.name}]\n")
-                        response = sb.toString()
+                        toolEvents.add(AgentToolEvent(name = chunk.name))
+                    }
+                    is ChatChunk.ToolResult -> {
+                        val pending = toolEvents.indexOfLast {
+                            it.name == chunk.name && it.output == null
+                        }
+                        val event = AgentToolEvent(
+                            name = chunk.name,
+                            output = chunk.output,
+                            isError = chunk.isError,
+                        )
+                        if (pending >= 0) toolEvents[pending] = event
+                        else toolEvents.add(event)
                     }
                     // В оверлее нет диалога: опасные действия отклоняем сразу.
                     is ChatChunk.ApprovalNeeded -> {
@@ -217,7 +252,8 @@ private fun AssistOverlay(
                         )
                     }
                     is ChatChunk.Finish -> {
-                        speaker.onFinish(sb.toString())
+                        thoughtSpeaker.onFinish(thoughtSb.toString())
+                        answerSpeaker.onFinish(answerSb.toString())
                         isStreaming = false
                     }
                 }
@@ -234,10 +270,11 @@ private fun AssistOverlay(
     }
     fun sttListener(): SttListener = object : SttListener {
         override fun onPartial(text: String) {
-            question = text
+            sttPreview = text
         }
 
         override fun onFinal(text: String) {
+            sttPreview = ""
             if (text.isNotBlank()) {
                 question = ""
                 ask(text)
@@ -245,6 +282,7 @@ private fun AssistOverlay(
         }
 
         override fun onSttError(error: SttError) {
+            sttPreview = ""
             android.widget.Toast.makeText(
                 context,
                 when (error) {
@@ -257,6 +295,7 @@ private fun AssistOverlay(
         }
     }
     fun sttErrorToast(error: CaptureError) {
+        sttPreview = ""
         android.widget.Toast.makeText(
             context,
             when (error) {
@@ -327,19 +366,12 @@ private fun AssistOverlay(
                 Icon(
                     imageVector = Icons.Default.Close,
                     contentDescription = closeLabel,
-                    modifier = Modifier.oassistRole(Role.Button),
                 )
             }
         }
 
         if (screenContext != null) {
-            OAssistPanel(title = contextLabel) {
-                Text(
-                    text = contextLabel,
-                    style = MaterialTheme.typography.titleSmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.oassistHeading(),
-                )
+            OAssistPanel(title = contextLabel, showTitle = true) {
                 Text(
                     text = screenContext.take(500),
                     style = MaterialTheme.typography.bodySmall,
@@ -367,7 +399,6 @@ private fun AssistOverlay(
                 Icon(
                     imageVector = if (capturing) Icons.Default.Stop else Icons.Default.Mic,
                     contentDescription = micLabel,
-                    modifier = Modifier.oassistRole(Role.Button),
                 )
             }
             IconButton(
@@ -375,6 +406,7 @@ private fun AssistOverlay(
                     if (question.isNotBlank() && !isStreaming) {
                         val text = question.trim()
                         question = ""
+                        sttPreview = ""
                         ask(text)
                     }
                 },
@@ -384,44 +416,100 @@ private fun AssistOverlay(
                 Icon(
                     imageVector = Icons.AutoMirrored.Filled.Send,
                     contentDescription = askLabel,
-                    modifier = Modifier.oassistRole(Role.Button),
                 )
             }
         }
 
         if (capturing) {
+            val status = if (sttPreview.isBlank()) listeningText else "$listeningText $sttPreview"
             Text(
-                text = listeningText,
+                text = status,
                 style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.primary,
+                modifier = Modifier.semantics { liveRegion = LiveRegionMode.Polite },
             )
         }
 
-        if (response.isNotEmpty()) {
-            OAssistPanel(title = responseLabel) {
-                Text(
-                    text = responseLabel,
-                    style = MaterialTheme.typography.titleMedium,
-                    color = MaterialTheme.colorScheme.onSurface,
-                    modifier = Modifier.oassistHeading(),
-                )
+        if (answer.isNotEmpty() || thought.isNotBlank() || toolEvents.isNotEmpty()) {
+            OAssistPanel(title = responseLabel, showTitle = true) {
+                if (thought.isNotBlank() || toolEvents.isNotEmpty()) {
+                    AssistWorkBlock(thought = thought, tools = toolEvents.toList())
+                }
                 // Видимый текст — НЕ live region (читалась бы каждая дельта целиком).
                 // Озвучка — через канал речи; повтор — действием «Озвучить ответ».
                 Text(
-                    text = response,
+                    text = answer.ifEmpty { "…" },
                     style = MaterialTheme.typography.bodyLarge,
                     color = MaterialTheme.colorScheme.onSurface,
                     modifier = Modifier.semantics {
                         customActions = listOf(
                             CustomAccessibilityAction(speakLabel) {
                                 val speech = SpeechHandle.get() ?: return@CustomAccessibilityAction false
-                                SentenceSplitter.splitSentences(
-                                    SentenceSplitter.stripServiceLines(response),
-                                ).forEach { speech.speak(it) }
+                                SentenceSplitter.splitSentences(answer).forEach { speech.speak(it) }
                                 true
                             },
                         )
                     },
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun AssistWorkBlock(thought: String, tools: List<AgentToolEvent>) {
+    val title = stringResource(R.string.assistant_work_title)
+    var expanded by remember { mutableStateOf(false) }
+    val state = if (expanded) {
+        stringResource(R.string.assistant_work_expanded)
+    } else {
+        stringResource(R.string.assistant_work_collapsed)
+    }
+    val actionLabel = if (expanded) {
+        stringResource(R.string.assistant_action_collapse)
+    } else {
+        stringResource(R.string.assistant_action_expand)
+    }
+    OAssistPanel(title = title) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .oassistTouchTarget()
+                .semantics { stateDescription = state },
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.SpaceBetween,
+        ) {
+            Text(
+                text = title,
+                style = MaterialTheme.typography.titleMedium,
+                color = MaterialTheme.colorScheme.onSurface,
+                modifier = Modifier
+                    .weight(1f)
+                    .oassistHeading(),
+            )
+            IconButton(
+                onClick = { expanded = !expanded },
+                modifier = Modifier.semantics { contentDescription = actionLabel },
+            ) {
+                Icon(
+                    imageVector = if (expanded) Icons.Default.ExpandLess else Icons.Default.ExpandMore,
+                    contentDescription = null,
+                )
+            }
+        }
+        if (expanded) {
+            if (thought.isNotBlank()) {
+                Text(
+                    text = thought.take(2000),
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+            tools.takeLast(20).forEach { tool ->
+                Text(
+                    text = tool.name + (tool.output?.take(500)?.let { ": $it" } ?: "…"),
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
             }
         }

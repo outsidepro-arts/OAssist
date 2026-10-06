@@ -74,8 +74,9 @@ class AgentLoop(
                     is ChatChunk.Content -> contentSb.append(chunk.delta)
                     is ChatChunk.ToolCall -> toolCalls.add(chunk)
                     is ChatChunk.Finish -> {}
-                    // Модель подтверждений не присылает: ветка для exhaustiveness.
+                    // Модель подтверждений/результатов не присылает: ветки для exhaustiveness.
                     is ChatChunk.ApprovalNeeded -> {}
+                    is ChatChunk.ToolResult -> {}
                 }
             }
 
@@ -114,7 +115,18 @@ class AgentLoop(
                 }.getOrElse { JsonObject(emptyMap()) }
                 val result = executeOneTool(tc, args) { emit(it) }
                 events?.onToolResult(tc.name, result.output)
-                emit(ChatChunk.Content("\n[${tc.name}: ${result.output}]\n"))
+                // Результат — отдельной сущностью ToolResult (в полотно «Ход работы»,
+                // не в основной ответ; в синтез не идёт). Текстовый маркер
+                // `[name: output]` больше не эмитим — модель получает результат
+                // через tool-сообщение ниже, UI — через этот чанк.
+                emit(
+                    ChatChunk.ToolResult(
+                        id = tc.id,
+                        name = tc.name,
+                        output = result.output,
+                        isError = !result.success,
+                    ),
+                )
                 // Результат — отдельным tool-сообщением с tool_call_id,
                 // а не текстом от ассистента: иначе модель не узнаёт свой вызов и идёт по кругу.
                 messages.add(

@@ -25,6 +25,7 @@ import kotlinx.coroutines.CompletableDeferred
 class DeviceActions(
     private val context: Context,
     private val torchTracker: TorchTracker? = null,
+    private val foreground: ForegroundRunner = NoopForegroundRunner(),
 ) {
 
     fun launchApp(packageName: String): ToolResult {
@@ -319,6 +320,12 @@ class DeviceActions(
         ) {
             return noPermissionResult(Manifest.permission.ACCESS_FINE_LOCATION)
         }
+        // Гео-фикс до 20 с — долгие операции идут под foreground-сервисом (M5.3),
+        // чтобы систему не убила процесс посреди ожидания.
+        return foreground.run { freshLocationInner() }
+    }
+
+    private suspend fun freshLocationInner(): ToolResult {
         return runCatching {
             val locationManager = context.getSystemService(android.location.LocationManager::class.java)
                 ?: return ToolResult(false, "Сервис геопозиции недоступен")
@@ -400,11 +407,74 @@ class DeviceActions(
         private const val NO_FIX_MESSAGE =
             "Не удалось определить местоположение за 20 с: выйдите на открытое место, " +
                 "включите GPS и Wi-Fi в настройках"
+        const val DND_ACCESS_MESSAGE =
+            "Нет доступа «Не беспокоить»: выдайте его в системных настройках " +
+                "(Звук → Не беспокоить → Доступ), затем повторите"
+        const val WRITE_SETTINGS_MESSAGE =
+            "Нет права изменять системные настройки: выдайте его в системных настройках " +
+                "при первом запросе, затем повторите"
+    }
+
+    // --- M5.2: громкость, «Не беспокоить», яркость (спецдоступы, не runtime) ---
+
+    /** Громкость потока процентами 0–100. Потоки: music/ring/alarm/notification. */
+    fun setVolume(stream: String, percent: Int): ToolResult {
+        val audio = context.getSystemService(android.media.AudioManager::class.java)
+            ?: return ToolResult(false, "Аудиосервис недоступен")
+        val type = when (stream.lowercase()) {
+            "music", "музыка" -> android.media.AudioManager.STREAM_MUSIC
+            "ring", "звонок" -> android.media.AudioManager.STREAM_RING
+            "alarm", "будильник" -> android.media.AudioManager.STREAM_ALARM
+            "notification", "уведомления" -> android.media.AudioManager.STREAM_NOTIFICATION
+            else -> return ToolResult(false, "Поток: music/ring/alarm/notification")
+        }
+        if (percent !in 0..100) return ToolResult(false, "Громкость: 0–100")
+        return runCatching {
+            val max = audio.getStreamMaxVolume(type)
+            audio.setStreamVolume(type, percentToIndex(percent, max), 0)
+            ToolResult(true, "Громкость $stream: $percent%")
+        }.getOrElse { ToolResult(false, "Не удалось задать громкость: ${it.message}") }
+    }
+
+    /** Режим «Не беспокоить»: вкл/выкл. Требует спецдоступ (не runtime-разрешение). */
+    fun setDnd(enabled: Boolean): ToolResult {
+        val manager = context.getSystemService(android.app.NotificationManager::class.java)
+            ?: return ToolResult(false, "Сервис уведомлений недоступен")
+        if (!manager.isNotificationPolicyAccessGranted) {
+            return ToolResult(false, DND_ACCESS_MESSAGE)
+        }
+        return runCatching {
+            manager.setInterruptionFilter(
+                if (enabled) {
+                    android.app.NotificationManager.INTERRUPTION_FILTER_NONE
+                } else {
+                    android.app.NotificationManager.INTERRUPTION_FILTER_ALL
+                },
+            )
+            ToolResult(true, if (enabled) "«Не беспокоить» включён" else "«Не беспокоить» выключен")
+        }.getOrElse { ToolResult(false, "Не удалось переключить режим: ${it.message}") }
+    }
+
+    /** Яркость экрана процентами 0–100 (переводит в ручной режим). Требует спецдоступ. */
+    fun setBrightness(percent: Int): ToolResult {
+        if (percent !in 0..100) return ToolResult(false, "Яркость: 0–100")
+        if (!Settings.System.canWrite(context)) {
+            return ToolResult(false, WRITE_SETTINGS_MESSAGE)
+        }
+        return runCatching {
+            val resolver = context.contentResolver
+            Settings.System.putInt(
+                resolver,
+                Settings.System.SCREEN_BRIGHTNESS_MODE,
+                Settings.System.SCREEN_BRIGHTNESS_MODE_MANUAL,
+            )
+            Settings.System.putInt(resolver, Settings.System.SCREEN_BRIGHTNESS, percentToBrightness(percent))
+            ToolResult(true, "Яркость: $percent%")
+        }.getOrElse { ToolResult(false, "Не удалось задать яркость: ${it.message}") }
     }
 
     /** Живой снимок состояния: всё read-only, без runtime-разрешений. */
-    fun deviceState(): ToolResult {
-        return runCatching {
+    fun deviceState(): ToolResult {        return runCatching {
             val audio = context.getSystemService(android.media.AudioManager::class.java)
             val music = audio?.isMusicActive == true
             val ringer = when (audio?.ringerMode) {
@@ -453,6 +523,14 @@ class DeviceActions(
         }.getOrElse { ToolResult(false, "Не удалось прочитать состояние: ${it.message}") }
     }
 }
+
+/** Проценты 0–100 → индекс потока громкости. Чистая — покрыта тестом. */
+fun percentToIndex(percent: Int, max: Int): Int =
+    (percent.coerceIn(0, 100) * max / 100).coerceIn(0, max)
+
+/** Проценты 0–100 → яркость 1–255 (0 гасит экран — запрещён). Чистая — покрыта тестом. */
+fun percentToBrightness(percent: Int): Int =
+    (percent.coerceIn(0, 100) * 255 / 100).coerceIn(1, 255)
 
 /** Чистое форматирование свежего фикса (провайдер и mock видны модели явно). */
 fun formatFix(

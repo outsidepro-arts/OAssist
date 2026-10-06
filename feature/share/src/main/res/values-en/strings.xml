@@ -11,4 +11,8 @@
     <string name="share_send">Send</string>
     <string name="share_response">Agent response</string>
     <string name="share_speak_answer">Speak answer</string>
+    <string name="share_prompt_text">Text: %1$s\n</string>
+    <string name="share_prompt_image">Image: %1$s\n</string>
+    <string name="share_prompt_file">File: %1$s\n</string>
+    <string name="share_prompt_question">%1$s\nQuestion: %2$s</string>
 </resources>

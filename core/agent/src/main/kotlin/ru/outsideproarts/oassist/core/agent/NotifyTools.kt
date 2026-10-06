@@ -73,3 +73,45 @@ class NotifyClearTool(private val notify: NotifyActions) : Tool {
         return notify.clear(key)
     }
 }
+
+class NotifyReplyTool(private val notify: NotifyActions) : Tool {
+    override val risk = ActionRisk.ASK
+    override val schema = ToolSchema(
+        name = "notify_reply",
+        description = "Ответить текстом на уведомление по ключу из notify_list (только если у него есть действие ответа).",
+        parameters = buildJsonObject {
+            put("type", "object")
+            put("properties", buildJsonObject {
+                put("key", buildJsonObject {
+                    put("type", "string")
+                    put("description", "Ключ уведомления в квадратных скобках из списка")
+                })
+                put("text", buildJsonObject {
+                    put("type", "string")
+                    put("description", "Текст ответа")
+                })
+            })
+            put("required", kotlinx.serialization.json.buildJsonArray {
+                add(kotlinx.serialization.json.JsonPrimitive("key"))
+                add(kotlinx.serialization.json.JsonPrimitive("text"))
+            })
+        },
+    )
+
+    override fun describeForConfirmation(arguments: JsonObject): String {
+        val text = arguments["text"]?.jsonPrimitive?.content?.take(MAX_PREVIEW_CHARS) ?: "?"
+        return "Ответить на уведомление: «$text»"
+    }
+
+    override suspend fun execute(arguments: JsonObject): ToolResult {
+        val key = arguments["key"]?.jsonPrimitive?.content
+            ?: return ToolResult(false, "Не указан key")
+        val text = arguments["text"]?.jsonPrimitive?.content
+            ?: return ToolResult(false, "Не указан text")
+        return notify.reply(key, text)
+    }
+
+    companion object {
+        private const val MAX_PREVIEW_CHARS = 120
+    }
+}

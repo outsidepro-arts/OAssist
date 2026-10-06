@@ -29,14 +29,18 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.stateDescription
+import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.ui.text.input.KeyboardCapitalization
 import ru.outsideproarts.oassist.core.a11y.oassistHeading
 import ru.outsideproarts.oassist.core.a11y.oassistRole
 import ru.outsideproarts.oassist.core.a11y.oassistTouchTarget
 import ru.outsideproarts.oassist.core.model.SkillInfo
 import ru.outsideproarts.oassist.core.ui.OAssistDimens
 import ru.outsideproarts.oassist.core.ui.components.OAssistPanel
+import ru.outsideproarts.oassist.core.ui.components.OAssistSwitchRow
 import ru.outsideproarts.oassist.core.ui.components.OAssistSectionHeading
 
 /**
@@ -75,7 +79,7 @@ fun SkillsScreen(
         )
 
         if (skills.isEmpty()) {
-            OAssistPanel(title = title) {
+            OAssistPanel(title = title, showTitle = true) {
                 Text(
                     text = stringResource(R.string.skills_empty),
                     style = MaterialTheme.typography.bodyMedium,
@@ -164,12 +168,7 @@ private fun SkillRow(
     val onState = stringResource(R.string.state_enabled)
     val offState = stringResource(R.string.state_disabled)
 
-    OAssistPanel(title = skill.title) {
-        Text(
-            text = skill.title,
-            style = MaterialTheme.typography.titleMedium,
-            color = MaterialTheme.colorScheme.onSurface,
-        )
+    OAssistPanel(title = skill.title, showTitle = true) {
         Text(
             text = skill.name,
             style = MaterialTheme.typography.bodySmall,
@@ -188,7 +187,7 @@ private fun SkillRow(
         ) {
             TextButton(
                 onClick = onEdit,
-                modifier = Modifier.oassistTouchTarget().oassistRole(Role.Button),
+                modifier = Modifier.oassistTouchTarget(),
             ) {
                 Text(stringResource(R.string.skills_edit_title))
             }
@@ -199,17 +198,16 @@ private fun SkillRow(
                 Icon(
                     imageVector = Icons.Default.Delete,
                     contentDescription = stringResource(R.string.skills_delete_title, skill.name),
-                    modifier = Modifier.oassistRole(Role.Button),
                 )
             }
-            Switch(
-                checked = skill.enabled,
-                onCheckedChange = onSetEnabled,
-                modifier = Modifier
-                    .oassistTouchTarget()
-                    .semantics { stateDescription = if (skill.enabled) onState else offState },
-            )
         }
+        OAssistSwitchRow(
+            checked = skill.enabled,
+            onCheckedChange = onSetEnabled,
+            label = stringResource(R.string.skills_enabled_label, skill.name),
+            stateLabelOn = onState,
+            stateLabelOff = offState,
+        )
     }
 }
 
@@ -230,11 +228,19 @@ private fun SkillEditor(
         title = { Text(stringResource(if (initial == null) R.string.skills_add else R.string.skills_edit_title)) },
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(OAssistDimens.DenseSpacing)) {
+                val skillNameLabel = stringResource(R.string.field_skill_name)
+                val skillTitleLabel = stringResource(R.string.field_skill_title)
                 OutlinedTextField(
                     value = name,
+                    // Имя навыка — идентификатор: однострочный редактор
+                    // без автокоррекции и заглавных.
                     onValueChange = { name = it.trim() },
                     label = { Text(stringResource(R.string.skills_name)) },
                     singleLine = true,
+                    keyboardOptions = KeyboardOptions(
+                        autoCorrectEnabled = false,
+                        capitalization = KeyboardCapitalization.None,
+                    ),
                     readOnly = initial != null,
                     isError = nameBad,
                     supportingText = if (nameBad) {
@@ -242,12 +248,18 @@ private fun SkillEditor(
                     } else {
                         null
                     },
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .semantics { contentDescription = skillNameLabel },
                 )
                 OutlinedTextField(
                     value = title,
                     onValueChange = { title = it },
                     label = { Text(stringResource(R.string.skills_heading)) },
                     singleLine = true,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .semantics { contentDescription = skillTitleLabel },
                 )
                 OutlinedTextField(
                     value = body,

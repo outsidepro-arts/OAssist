@@ -10,15 +10,22 @@ import android.os.Looper
 import android.view.accessibility.AccessibilityNodeInfo
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.withTimeoutOrNull
+import ru.outsideproarts.oassist.core.device.NoopExecutor
+import ru.outsideproarts.oassist.core.device.PrivExecutor
 import java.util.ArrayDeque
 
 /**
  * Операции над экраном через пассивный AccessibilityService.
  * Сервис поставляется приложением ([serviceProvider]); если он выключен —
  * явная ошибка с подсказкой, а не молчаливый пропуск.
+ *
+ * Фолбэк жестов (M5.1): если сервис есть, но жест отклонён/не сработал —
+ * повтор через привилегии ([privProvider]: `input tap/swipe/keyevent`).
+ * Без привилегий фолбэк честно недоступен (Noop).
  */
 class UiActions(
     private val serviceProvider: () -> AccessibilityService?,
+    private val privProvider: suspend () -> PrivExecutor = { NoopExecutor() },
 ) {
 
     private fun serviceOrError(): Result<AccessibilityService> {
@@ -40,12 +47,25 @@ class UiActions(
         }
     }
 
-    fun click(index: Int): ToolResult = performOnNode(index, "нажать") { node ->
-        node.isClickable && node.performAction(AccessibilityNodeInfo.ACTION_CLICK)
+    suspend fun click(index: Int): ToolResult {
+        val direct = performOnNode(index, "нажать") { node ->
+            node.isClickable && node.performAction(AccessibilityNodeInfo.ACTION_CLICK)
+        }
+        if (direct.success) return direct
+        return tapNodeCenter(index, "нажать")
     }
 
-    fun longClick(index: Int): ToolResult = performOnNode(index, "долго нажать") { node ->
-        node.isClickable && node.performAction(AccessibilityNodeInfo.ACTION_LONG_CLICK)
+    suspend fun longClick(index: Int): ToolResult {
+        val direct = performOnNode(index, "долго нажать") { node ->
+            node.isClickable && node.performAction(AccessibilityNodeInfo.ACTION_LONG_CLICK)
+        }
+        if (direct.success) return direct
+        val center = nodeCenter(index) ?: return ToolResult(false, "Узел №$index не найден")
+        return privProvider().inputSwipe(center.first, center.second, center.first, center.second, 800)
+            .fold(
+                onSuccess = { ToolResult(true, "Удалось долго нажать (узел №$index, фолбэк input)") },
+                onFailure = { ToolResult(false, "Не удалось долго нажать (узел №$index): ${it.message}") },
+            )
     }
 
     fun setText(index: Int, text: String): ToolResult = performOnNode(index, "ввести текст") { node ->
@@ -80,7 +100,7 @@ class UiActions(
         return performOnFreshNode(target.index, "прокрутить") { it.performAction(action) }
     }
 
-    fun globalAction(action: String): ToolResult {
+    suspend fun globalAction(action: String): ToolResult {
         val service = serviceOrError().getOrElse { return ToolResult(false, it.message ?: "Сервис недоступен") }
         val global = when (action.lowercase()) {
             "back", "назад" -> AccessibilityService.GLOBAL_ACTION_BACK
@@ -88,11 +108,18 @@ class UiActions(
             "recents", "недавние" -> AccessibilityService.GLOBAL_ACTION_RECENTS
             else -> return ToolResult(false, "Действие: back/home/recents")
         }
-        return if (service.performGlobalAction(global)) {
-            ToolResult(true, "Выполнено: $action")
-        } else {
-            ToolResult(false, "Не удалось выполнить $action")
+        if (service.performGlobalAction(global)) {
+            return ToolResult(true, "Выполнено: $action")
         }
+        val keyCode = when (action.lowercase()) {
+            "back", "назад" -> 4
+            "home", "домой" -> 3
+            else -> 187 // APP_SWITCH
+        }
+        return privProvider().inputKeyevent(keyCode).fold(
+            onSuccess = { ToolResult(true, "Выполнено: $action (фолбэк input)") },
+            onFailure = { ToolResult(false, "Не удалось выполнить $action: ${it.message}") },
+        )
     }
 
     suspend fun swipe(fromX: Int, fromY: Int, toX: Int, toY: Int, durationMs: Long): ToolResult {
@@ -118,9 +145,40 @@ class UiActions(
             },
             Handler(Looper.getMainLooper()),
         )
-        if (!dispatched) return ToolResult(false, "Жест отклонён системой")
+        if (!dispatched) {
+            return swipeFallback(fromX, fromY, toX, toY, durationMs, "Жест отклонён системой")
+        }
         val ok = withTimeoutOrNull(GESTURE_TIMEOUT_MS) { done.await() } ?: false
-        return if (ok) ToolResult(true, "Свайп выполнен") else ToolResult(false, "Свайп не завершён")
+        if (ok) return ToolResult(true, "Свайп выполнен")
+        return swipeFallback(fromX, fromY, toX, toY, durationMs, "Свайп не завершён")
+    }
+
+    /** Фолбэк свайпа через привилегии (`input swipe`). */
+    private suspend fun swipeFallback(
+        fromX: Int,
+        fromY: Int,
+        toX: Int,
+        toY: Int,
+        durationMs: Long,
+        reason: String,
+    ): ToolResult = privProvider().inputSwipe(fromX, fromY, toX, toY, durationMs).fold(
+        onSuccess = { ToolResult(true, "Свайп выполнен (фолбэк input)") },
+        onFailure = { ToolResult(false, "$reason: ${it.message}") },
+    )
+
+    /** Центр узла из свежего снимка — для фолбэка тапов. */
+    private fun nodeCenter(index: Int): Pair<Int, Int>? {
+        val node = snapshot().getOrNull()?.find { it.index == index } ?: return null
+        val b = node.bounds
+        return ((b.left + b.right) / 2) to ((b.top + b.bottom) / 2)
+    }
+
+    private suspend fun tapNodeCenter(index: Int, verb: String): ToolResult {
+        val center = nodeCenter(index) ?: return ToolResult(false, "Узел №$index не найден")
+        return privProvider().inputTap(center.first, center.second).fold(
+            onSuccess = { ToolResult(true, "Удалось $verb (узел №$index, фолбэк input)") },
+            onFailure = { ToolResult(false, "Не удалось $verb (узел №$index): ${it.message}") },
+        )
     }
 
     /** Ждать появления текста на экране (опрос снимков, лимит [timeoutMs]). */

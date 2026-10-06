@@ -51,6 +51,7 @@ dependencies {
     implementation(project(":core:net"))
     implementation(project(":core:provider"))
     implementation(project(":core:agent"))
+    implementation(project(":core:device"))
     implementation(project(":core:speech"))
     implementation(project(":feature:chat"))
     implementation(project(":feature:assistant"))
@@ -74,6 +75,9 @@ dependencies {
 
     implementation(libs.kotlinx.coroutines.android)
     implementation(libs.kotlinx.serialization.json)
+
+    // M5.1: ShizukuProvider объявлен в манифесте app — класс нужен в classpath модуля.
+    implementation(libs.shizuku.provider) { exclude(group = "androidx.annotation") }
 
     testImplementation(libs.junit)
     androidTestImplementation(platform(libs.androidx.compose.bom))

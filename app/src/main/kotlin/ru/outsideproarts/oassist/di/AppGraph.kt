@@ -60,22 +60,31 @@ class AppGraph private constructor(context: Context) {
     /**
      * Общая на процесс политика подтверждений: записи «всегда разрешать»
      * переживают отдельный [ru.outsideproarts.oassist.core.agent.AgentLoop]
-     * (тот создаётся заново на каждое сообщение). Персист в DataStore — позже.
+     * (тот создаётся заново на каждое сообщение) и перезапуск приложения
+     * (персист в device-protected DataStore, M5.3).
      */
     val approvalPolicy: ru.outsideproarts.oassist.core.agent.ApprovalPolicy by lazy {
-        ru.outsideproarts.oassist.core.agent.InMemoryApprovalPolicy()
+        ru.outsideproarts.oassist.core.agent.PersistentApprovalPolicy(data.approvals, persistScope)
     }
+
+    /** Процесс-скоп для персистентных коллекторов (не привязан к экранам). */
+    private val persistScope = kotlinx.coroutines.CoroutineScope(
+        kotlinx.coroutines.SupervisorJob() + kotlinx.coroutines.Dispatchers.IO,
+    )
 
     /** Трекер фонарика (in-memory; после смерти процесса — честный unknown). */
     val torchTracker: ru.outsideproarts.oassist.core.agent.TorchTracker by lazy {
         ru.outsideproarts.oassist.core.agent.TorchTracker()
     }
 
-    /** Операции над экраном через пассивный AccessibilityService. */
+    /** Операции над экраном через пассивный AccessibilityService + фолбэк input. */
     val uiActions: ru.outsideproarts.oassist.core.agent.UiActions by lazy {
-        ru.outsideproarts.oassist.core.agent.UiActions {
-            ru.outsideproarts.oassist.a11y.OAssistAccessibilityService.instance
-        }
+        ru.outsideproarts.oassist.core.agent.UiActions(
+            serviceProvider = {
+                ru.outsideproarts.oassist.a11y.OAssistAccessibilityService.instance
+            },
+            privProvider = { privilegeExecutor() },
+        )
     }
 
     /** Операции над уведомлениями через пассивный NotificationListenerService. */
@@ -85,12 +94,44 @@ class AppGraph private constructor(context: Context) {
         }
     }
 
+    /** Привилегии M5.1: Shizuku (UserService) > Root (su) > Noop (явный отказ). */
+    val shizukuExecutor: ru.outsideproarts.oassist.core.device.ShizukuExecutor by lazy {
+        ru.outsideproarts.oassist.core.device.ShizukuExecutor(appContext)
+    }
+    val rootExecutor: ru.outsideproarts.oassist.core.device.RootExecutor by lazy {
+        ru.outsideproarts.oassist.core.device.RootExecutor()
+    }
+    val noopExecutor: ru.outsideproarts.oassist.core.device.NoopExecutor by lazy {
+        ru.outsideproarts.oassist.core.device.NoopExecutor()
+    }
+
+    @Volatile
+    private var cachedRootAvailable: Boolean? = null
+
+    /**
+     * Текущий исполнитель привилегий. Результат пробы root кэшируется на процесс
+     * (запрос `su -c id` может показывать диалог Superuser — не дёргаем каждый раз).
+     */
+    suspend fun privilegeExecutor(): ru.outsideproarts.oassist.core.device.PrivExecutor {
+        if (shizukuExecutor.isBinderAlive() && shizukuExecutor.isPermissionGranted()) {
+            return shizukuExecutor
+        }
+        val root = cachedRootAvailable ?: rootExecutor.isAvailable().also { cachedRootAvailable = it }
+        if (root) return rootExecutor
+        return noopExecutor
+    }
+
     /** Чтение веба: статика (Ktor) + дорендер (WebView). */
     val webContentActions: ru.outsideproarts.oassist.core.agent.WebContentActions by lazy {
         ru.outsideproarts.oassist.core.agent.WebContentActions(httpClient)
     }
+
+    /** Долгие операции (гео-фикс, WebView-рендер) под foreground-сервисом specialUse. */
+    val foregroundRunner: ru.outsideproarts.oassist.core.agent.ForegroundRunner by lazy {
+        ru.outsideproarts.oassist.tasks.AppForegroundRunner(appContext)
+    }
     val webRenderActions: ru.outsideproarts.oassist.core.agent.WebRenderActions by lazy {
-        ru.outsideproarts.oassist.core.agent.WebRenderActions(appContext)
+        ru.outsideproarts.oassist.core.agent.WebRenderActions(appContext, foregroundRunner)
     }
 
     /** Захват микрофона: PTT/тап UI и голосовые тулы агента поверх одного слушателя. */
@@ -119,7 +160,7 @@ class AppGraph private constructor(context: Context) {
             val client = modelClientFor(profile)
             val prefs = data.toolConfigs.snapshot()
             val tools = ru.outsideproarts.oassist.core.agent.ToolCatalog.createRegistry(
-                ru.outsideproarts.oassist.core.agent.DeviceActions(appContext, torchTracker),
+                ru.outsideproarts.oassist.core.agent.DeviceActions(appContext, torchTracker, foregroundRunner),
                 uiActions,
                 notifyActions,
                 webContentActions,
@@ -128,6 +169,7 @@ class AppGraph private constructor(context: Context) {
                 data.memory,
                 data.skills,
                 prefs,
+                privilegeExecutor(),
                 resolveMcpTools(),
             )
             return ru.outsideproarts.oassist.core.agent.AgentLoop(client, tools, approvalPolicy = approvalPolicy, events = narratorEvents)

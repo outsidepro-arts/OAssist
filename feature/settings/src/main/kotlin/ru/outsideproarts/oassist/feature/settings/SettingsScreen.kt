@@ -7,32 +7,39 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.selection.selectable
-import androidx.compose.foundation.selection.selectableGroup
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ChevronRight
-import androidx.compose.material3.Icon
+import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.ExposedDropdownMenuAnchorType
+import androidx.compose.material3.ExposedDropdownMenuBox
+import androidx.compose.material3.ExposedDropdownMenuDefaults
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.RadioButton
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.Role
-import androidx.compose.ui.semantics.paneTitle
-import androidx.compose.ui.semantics.semantics
-import androidx.compose.ui.semantics.stateDescription
+import ru.outsideproarts.oassist.core.a11y.oassistDropdownClassName
 import ru.outsideproarts.oassist.core.a11y.oassistHeading
 import ru.outsideproarts.oassist.core.a11y.oassistRole
-import ru.outsideproarts.oassist.core.a11y.oassistTouchTarget
 import ru.outsideproarts.oassist.core.model.AppLanguage
 import ru.outsideproarts.oassist.core.ui.OAssistDimens
 import ru.outsideproarts.oassist.core.ui.components.OAssistPanel
-import ru.outsideproarts.oassist.core.ui.components.OAssistSectionHeading
 import ru.outsideproarts.oassist.core.ui.components.OAssistSettingRow
 
+/**
+ * Настройки — плоский список разделов (без лишних заголовков):
+ * язык-dropdown + кнопки разделов. Каждый раздел — один touch target.
+ */
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun SettingsScreen(
     language: AppLanguage,
@@ -43,11 +50,19 @@ fun SettingsScreen(
     onNavigateToMcp: () -> Unit = {},
     onNavigateToSkills: () -> Unit = {},
     onNavigateToMemory: () -> Unit = {},
+    onNavigateToAssistant: () -> Unit = {},
+    onExport: () -> Unit = {},
+    onImport: () -> Unit = {},
+    onWipe: () -> Unit = {},
     modifier: Modifier = Modifier,
 ) {
     val title = stringResource(R.string.settings_title)
-    val selectedState = stringResource(R.string.state_selected)
-    val unselectedState = stringResource(R.string.state_unselected)
+    var languageExpanded by remember { mutableStateOf(false) }
+    val languageOptions = listOf(
+        AppLanguage.SYSTEM to stringResource(R.string.settings_language_system),
+        AppLanguage.RUSSIAN to stringResource(R.string.settings_language_russian),
+        AppLanguage.ENGLISH to stringResource(R.string.settings_language_english),
+    )
 
     Column(
         modifier = modifier
@@ -65,239 +80,132 @@ fun SettingsScreen(
                 .oassistHeading(),
         )
 
-        LanguageSection(
-            language = language,
-            onLanguageChange = onLanguageChange,
-            selectedState = selectedState,
-            unselectedState = unselectedState,
-        )
-
-        ProvidersSection(onNavigateToProviders = onNavigateToProviders)
-
-        ModesSection(onNavigateToModeConfig = onNavigateToModeConfig)
-
-        ToolsSection(onNavigateToTools = onNavigateToTools)
-
-        McpSection(onNavigateToMcp = onNavigateToMcp)
-
-        SkillsSection(onNavigateToSkills = onNavigateToSkills)
-
-        MemorySection(onNavigateToMemory = onNavigateToMemory)
-
-        AboutSection()
-    }
-}
-
-@Composable
-private fun LanguageSection(
-    language: AppLanguage,
-    onLanguageChange: (AppLanguage) -> Unit,
-    selectedState: String,
-    unselectedState: String,
-) {
-    val sectionTitle = stringResource(R.string.settings_language_title)
-    val sectionSubtitle = stringResource(R.string.settings_language_subtitle)
-    val groupLabel = stringResource(R.string.settings_language_picker)
-
-    val options = listOf(
-        AppLanguage.SYSTEM to stringResource(R.string.settings_language_system),
-        AppLanguage.RUSSIAN to stringResource(R.string.settings_language_russian),
-        AppLanguage.ENGLISH to stringResource(R.string.settings_language_english),
-    )
-
-    Column(
-        verticalArrangement = Arrangement.spacedBy(OAssistDimens.ItemSpacing),
-    ) {
-        OAssistSectionHeading(text = sectionTitle)
-
-        OAssistPanel(title = sectionTitle, stateDescription = sectionSubtitle) {
-            Text(
-                text = sectionSubtitle,
-                style = MaterialTheme.typography.bodyMedium,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-
-            Column(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .selectableGroup()
-                    .semantics { paneTitle = groupLabel },
-                verticalArrangement = Arrangement.spacedBy(OAssistDimens.DenseSpacing),
+        OAssistPanel(title = title, showTitle = true) {
+            ExposedDropdownMenuBox(
+                expanded = languageExpanded,
+                onExpandedChange = { languageExpanded = it },
             ) {
-                options.forEach { (value, label) ->
-                    val selected = language == value
-                    val state = if (selected) selectedState else unselectedState
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .oassistTouchTarget()
-                            .selectable(
-                                selected = selected,
-                                role = Role.RadioButton,
-                                onClick = { onLanguageChange(value) },
-                            )
-                            .semantics { stateDescription = state }
-                            .padding(horizontal = OAssistDimens.DenseSpacing, vertical = OAssistDimens.ItemSpacing),
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(OAssistDimens.OptionRowSpacing),
-                    ) {
-                        RadioButton(selected = selected, onClick = null)
-                        Text(
-                            text = label,
-                            style = MaterialTheme.typography.bodyLarge,
-                            color = MaterialTheme.colorScheme.onSurface,
-                            modifier = Modifier.oassistRole(Role.RadioButton),
+                OutlinedTextField(
+                    value = languageOptions.firstOrNull { it.first == language }?.second
+                        ?: languageOptions.first().second,
+                    onValueChange = {},
+                    label = { Text(stringResource(R.string.settings_language_title)) },
+                    readOnly = true,
+                    trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = languageExpanded) },
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .menuAnchor(ExposedDropdownMenuAnchorType.PrimaryNotEditable)
+                        .oassistDropdownClassName(),
+                )
+                ExposedDropdownMenu(
+                    expanded = languageExpanded,
+                    onDismissRequest = { languageExpanded = false },
+                ) {
+                    languageOptions.forEach { (value, label) ->
+                        DropdownMenuItem(
+                            text = { Text(label) },
+                            onClick = {
+                                onLanguageChange(value)
+                                languageExpanded = false
+                            },
                         )
                     }
                 }
             }
-        }
-    }
-}
 
-@Composable
-private fun ProvidersSection(onNavigateToProviders: () -> Unit) {
-    val sectionTitle = stringResource(R.string.providers_title)
-
-    Column(verticalArrangement = Arrangement.spacedBy(OAssistDimens.ItemSpacing)) {
-        OAssistSectionHeading(text = sectionTitle)
-        OAssistPanel(title = sectionTitle) {
             OAssistSettingRow(
-                title = sectionTitle,
+                title = stringResource(R.string.providers_title),
                 icon = Icons.Default.ChevronRight,
                 onClick = onNavigateToProviders,
-                modifier = Modifier.oassistRole(Role.Button),
             )
-        }
-    }
-}
-
-@Composable
-private fun ModesSection(onNavigateToModeConfig: (String) -> Unit) {
-    val sectionTitle = stringResource(R.string.mode_config_title)
-    val modeChat = stringResource(R.string.mode_chat)
-    val modeAssistant = stringResource(R.string.mode_assistant)
-    val modeShare = stringResource(R.string.mode_share)
-
-    Column(verticalArrangement = Arrangement.spacedBy(OAssistDimens.ItemSpacing)) {
-        OAssistSectionHeading(text = sectionTitle)
-        OAssistPanel(title = sectionTitle) {
             OAssistSettingRow(
-                title = modeChat,
+                title = stringResource(R.string.mode_chat),
+                subtitle = stringResource(R.string.mode_config_title),
                 icon = Icons.Default.ChevronRight,
                 onClick = { onNavigateToModeConfig("CHAT") },
-                modifier = Modifier.oassistRole(Role.Button),
+                
             )
             OAssistSettingRow(
-                title = modeAssistant,
+                title = stringResource(R.string.mode_assistant),
+                subtitle = stringResource(R.string.mode_config_title),
                 icon = Icons.Default.ChevronRight,
                 onClick = { onNavigateToModeConfig("ASSISTANT") },
-                modifier = Modifier.oassistRole(Role.Button),
+                
             )
             OAssistSettingRow(
-                title = modeShare,
+                title = stringResource(R.string.mode_share),
+                subtitle = stringResource(R.string.mode_config_title),
                 icon = Icons.Default.ChevronRight,
                 onClick = { onNavigateToModeConfig("SHARE") },
-                modifier = Modifier.oassistRole(Role.Button),
+                
             )
-        }
-    }
-}
-
-@Composable
-private fun ToolsSection(onNavigateToTools: () -> Unit) {
-    val sectionTitle = stringResource(R.string.tools_settings_title)
-    val sectionSubtitle = stringResource(R.string.tools_settings_subtitle)
-
-    Column(verticalArrangement = Arrangement.spacedBy(OAssistDimens.ItemSpacing)) {
-        OAssistSectionHeading(text = sectionTitle)
-        OAssistPanel(title = sectionTitle) {
             OAssistSettingRow(
-                title = sectionTitle,
-                subtitle = sectionSubtitle,
+                title = stringResource(R.string.settings_assistant_title),
+                subtitle = stringResource(R.string.settings_assistant_subtitle),
+                icon = Icons.Default.ChevronRight,
+                onClick = onNavigateToAssistant,
+                
+            )
+            OAssistSettingRow(
+                title = stringResource(R.string.tools_settings_title),
+                subtitle = stringResource(R.string.tools_settings_subtitle),
                 icon = Icons.Default.ChevronRight,
                 onClick = onNavigateToTools,
-                modifier = Modifier.oassistRole(Role.Button),
+                
             )
-        }
-    }
-}
-
-@Composable
-private fun McpSection(onNavigateToMcp: () -> Unit) {
-    val sectionTitle = stringResource(R.string.mcp_settings_title)
-    val sectionSubtitle = stringResource(R.string.mcp_settings_subtitle)
-
-    Column(verticalArrangement = Arrangement.spacedBy(OAssistDimens.ItemSpacing)) {
-        OAssistSectionHeading(text = sectionTitle)
-        OAssistPanel(title = sectionTitle) {
             OAssistSettingRow(
-                title = sectionTitle,
-                subtitle = sectionSubtitle,
+                title = stringResource(R.string.mcp_settings_title),
+                subtitle = stringResource(R.string.mcp_settings_subtitle),
                 icon = Icons.Default.ChevronRight,
                 onClick = onNavigateToMcp,
-                modifier = Modifier.oassistRole(Role.Button),
+                
             )
-        }
-    }
-}
-
-@Composable
-private fun SkillsSection(onNavigateToSkills: () -> Unit) {
-    val sectionTitle = stringResource(R.string.skills_title)
-    val sectionSubtitle = stringResource(R.string.skills_subtitle)
-
-    Column(verticalArrangement = Arrangement.spacedBy(OAssistDimens.ItemSpacing)) {
-        OAssistSectionHeading(text = sectionTitle)
-        OAssistPanel(title = sectionTitle) {
             OAssistSettingRow(
-                title = sectionTitle,
-                subtitle = sectionSubtitle,
+                title = stringResource(R.string.skills_title),
+                subtitle = stringResource(R.string.skills_subtitle),
                 icon = Icons.Default.ChevronRight,
                 onClick = onNavigateToSkills,
-                modifier = Modifier.oassistRole(Role.Button),
+                
             )
-        }
-    }
-}
-
-@Composable
-private fun MemorySection(onNavigateToMemory: () -> Unit) {
-    val sectionTitle = stringResource(R.string.memory_title)
-    val sectionSubtitle = stringResource(R.string.memory_subtitle)
-
-    Column(verticalArrangement = Arrangement.spacedBy(OAssistDimens.ItemSpacing)) {
-        OAssistSectionHeading(text = sectionTitle)
-        OAssistPanel(title = sectionTitle) {
             OAssistSettingRow(
-                title = sectionTitle,
-                subtitle = sectionSubtitle,
+                title = stringResource(R.string.memory_title),
+                subtitle = stringResource(R.string.memory_subtitle),
                 icon = Icons.Default.ChevronRight,
                 onClick = onNavigateToMemory,
-                modifier = Modifier.oassistRole(Role.Button),
+                
+            )
+            OAssistSettingRow(
+                title = stringResource(R.string.data_export),
+                icon = Icons.Default.ChevronRight,
+                onClick = onExport,
+                
+            )
+            OAssistSettingRow(
+                title = stringResource(R.string.data_import),
+                icon = Icons.Default.ChevronRight,
+                onClick = onImport,
+                
+            )
+            OAssistSettingRow(
+                title = stringResource(R.string.data_wipe),
+                icon = Icons.Default.ChevronRight,
+                onClick = onWipe,
+                
             )
         }
-    }
-}
 
-@Composable
-private fun AboutSection() {
-    val sectionTitle = stringResource(R.string.settings_about_title)
-    val versionLabel = stringResource(R.string.settings_about_version)
-    val licenseLabel = stringResource(R.string.settings_about_license)
-    val licenseValue = stringResource(R.string.settings_about_license_value)
-    val versionValue = stringResource(R.string.app_version)
-
-    Column(verticalArrangement = Arrangement.spacedBy(OAssistDimens.ItemSpacing)) {
-        OAssistSectionHeading(text = sectionTitle)
-        OAssistPanel(title = sectionTitle) {
+        OAssistPanel(title = stringResource(R.string.settings_about_title), showTitle = true) {
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically,
             ) {
-                Text(text = versionLabel, style = MaterialTheme.typography.bodyLarge)
                 Text(
-                    text = versionValue,
+                    text = stringResource(R.string.settings_about_version),
+                    style = MaterialTheme.typography.bodyLarge,
+                )
+                Text(
+                    text = stringResource(R.string.app_version),
                     style = MaterialTheme.typography.bodyLarge,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
@@ -305,10 +213,14 @@ private fun AboutSection() {
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically,
             ) {
-                Text(text = licenseLabel, style = MaterialTheme.typography.bodyLarge)
                 Text(
-                    text = licenseValue,
+                    text = stringResource(R.string.settings_about_license),
+                    style = MaterialTheme.typography.bodyLarge,
+                )
+                Text(
+                    text = stringResource(R.string.settings_about_license_value),
                     style = MaterialTheme.typography.bodyLarge,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )

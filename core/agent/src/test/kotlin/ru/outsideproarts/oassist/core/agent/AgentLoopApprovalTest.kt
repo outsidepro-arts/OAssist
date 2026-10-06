@@ -87,7 +87,7 @@ class AgentLoopApprovalTest {
         assertEquals("danger_call", approval.request.toolName)
         assertEquals(ActionRisk.ASK, approval.request.risk)
         assertEquals("Тестовое действие danger_call", approval.request.summary)
-        assertTrue(chunks.any { it is ChatChunk.Content && it.delta.contains("выполнено:danger_call") })
+        assertTrue(chunks.any { it is ChatChunk.ToolResult && it.output.contains("выполнено:danger_call") })
         assertEquals(ChatChunk.Finish("stop"), chunks.last())
     }
 
@@ -112,7 +112,7 @@ class AgentLoopApprovalTest {
         val chunks = job.await()
 
         assertEquals(0, tool.executions)
-        assertTrue(chunks.any { it is ChatChunk.Content && it.delta.contains("Отклонено пользователем") })
+        assertTrue(chunks.any { it is ChatChunk.ToolResult && it.output.contains("Отклонено пользователем") })
     }
 
     @Test
@@ -179,6 +179,6 @@ class AgentLoopApprovalTest {
 
         val approval = chunks.filterIsInstance<ChatChunk.ApprovalNeeded>().single()
         assertEquals(ActionRisk.ASK, approval.request.risk)
-        assertTrue(chunks.any { it is ChatChunk.Content && it.delta.contains("Отклонено пользователем") })
+        assertTrue(chunks.any { it is ChatChunk.ToolResult && it.output.contains("Отклонено пользователем") })
     }
 }

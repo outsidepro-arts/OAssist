@@ -27,6 +27,7 @@ import ru.outsideproarts.oassist.core.agent.ToolDescriptor
 import ru.outsideproarts.oassist.core.model.ActionRisk
 import ru.outsideproarts.oassist.core.ui.OAssistDimens
 import ru.outsideproarts.oassist.core.ui.components.OAssistPanel
+import ru.outsideproarts.oassist.core.ui.components.OAssistSwitchRow
 import ru.outsideproarts.oassist.core.ui.components.OAssistSectionHeading
 import ru.outsideproarts.oassist.core.ui.components.OAssistSettingRow
 
@@ -100,13 +101,11 @@ fun ToolsSettingsScreen(
                     title = stringResource(R.string.approvals_reset),
                     subtitle = stringResource(R.string.approvals_reset_subtitle),
                     onClick = onResetApprovals,
-                    modifier = Modifier.oassistRole(Role.Button),
                 )
                 OAssistSettingRow(
                     title = stringResource(R.string.tools_reset),
                     subtitle = stringResource(R.string.tools_reset_subtitle),
                     onClick = onResetTools,
-                    modifier = Modifier.oassistRole(Role.Button),
                 )
             }
         }
@@ -140,7 +139,7 @@ private fun ToolRow(
     val onState = stringResource(R.string.state_enabled)
     val offState = stringResource(R.string.state_disabled)
 
-    OAssistPanel(title = title) {
+    OAssistPanel(title = title, showTitle = true) {
         Text(
             text = description,
             style = MaterialTheme.typography.bodyMedium,
@@ -149,18 +148,21 @@ private fun ToolRow(
         SwitchRow(
             label = enabledLabel,
             checked = enabled,
-            state = if (enabled) onState else offState,
+            onState = onState,
+            offState = offState,
             onCheckedChange = onToggleEnabled,
         )
         if (enabled) {
             SwitchRow(
                 label = askLabel,
                 checked = ask,
-                state = if (ask) onState else offState,
+                onState = onState,
+                offState = offState,
                 onCheckedChange = onToggleAsk,
             )
         }
         missingPermissions.forEach { permission ->
+            val stateMissingLabel = stringResource(R.string.state_missing)
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 verticalAlignment = Alignment.CenterVertically,
@@ -170,11 +172,13 @@ private fun ToolRow(
                     text = permissionLabel(permission),
                     style = MaterialTheme.typography.bodyMedium,
                     color = MaterialTheme.colorScheme.error,
-                    modifier = Modifier.weight(1f),
+                    modifier = Modifier
+                        .weight(1f)
+                        .semantics { stateDescription = stateMissingLabel },
                 )
                 TextButton(
                     onClick = { onGrantPermission(permission) },
-                    modifier = Modifier.oassistTouchTarget().oassistRole(Role.Button),
+                    modifier = Modifier.oassistTouchTarget(),
                 ) {
                     Text(grantLabel)
                 }
@@ -187,28 +191,17 @@ private fun ToolRow(
 private fun SwitchRow(
     label: String,
     checked: Boolean,
-    state: String,
+    onState: String,
+    offState: String,
     onCheckedChange: (Boolean) -> Unit,
 ) {
-    Row(
-        modifier = Modifier.fillMaxWidth(),
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(OAssistDimens.DenseSpacing),
-    ) {
-        Text(
-            text = label,
-            style = MaterialTheme.typography.bodyLarge,
-            color = MaterialTheme.colorScheme.onSurface,
-            modifier = Modifier.weight(1f),
-        )
-        Switch(
-            checked = checked,
-            onCheckedChange = onCheckedChange,
-            modifier = Modifier
-                .oassistTouchTarget()
-                .semantics { stateDescription = state },
-        )
-    }
+    OAssistSwitchRow(
+        checked = checked,
+        onCheckedChange = onCheckedChange,
+        label = label,
+        stateLabelOn = onState,
+        stateLabelOff = offState,
+    )
 }
 
 @Composable
@@ -250,6 +243,13 @@ private fun toolTitle(name: String): String = when (name) {
     "memory_forget" -> stringResource(R.string.tool_memory_forget_title)
     "skill_list" -> stringResource(R.string.tool_skill_list_title)
     "skill_get" -> stringResource(R.string.tool_skill_get_title)
+    "shell_exec" -> stringResource(R.string.tool_shell_exec_title)
+    "shell_get_setting" -> stringResource(R.string.tool_shell_get_setting_title)
+    "shell_put_setting" -> stringResource(R.string.tool_shell_put_setting_title)
+    "notify_reply" -> stringResource(R.string.tool_notify_reply_title)
+    "volume_set" -> stringResource(R.string.tool_volume_set_title)
+    "dnd_set" -> stringResource(R.string.tool_dnd_set_title)
+    "brightness_set" -> stringResource(R.string.tool_brightness_set_title)
     else -> name
 }
 
@@ -292,6 +292,13 @@ private fun toolDescription(name: String): String = when (name) {
     "memory_forget" -> stringResource(R.string.tool_memory_forget_desc)
     "skill_list" -> stringResource(R.string.tool_skill_list_desc)
     "skill_get" -> stringResource(R.string.tool_skill_get_desc)
+    "shell_exec" -> stringResource(R.string.tool_shell_exec_desc)
+    "shell_get_setting" -> stringResource(R.string.tool_shell_get_setting_desc)
+    "shell_put_setting" -> stringResource(R.string.tool_shell_put_setting_desc)
+    "notify_reply" -> stringResource(R.string.tool_notify_reply_desc)
+    "volume_set" -> stringResource(R.string.tool_volume_set_desc)
+    "dnd_set" -> stringResource(R.string.tool_dnd_set_desc)
+    "brightness_set" -> stringResource(R.string.tool_brightness_set_desc)
     else -> stringResource(R.string.tool_unknown_desc)
 }
 
