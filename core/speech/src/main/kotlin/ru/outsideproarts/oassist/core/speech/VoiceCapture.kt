@@ -35,13 +35,19 @@ enum class CaptureError {
 
 /** Чем кончилось системное распознавание (для тостов/результата тула). */
 enum class SttError {
-    /** Тишина или неразборчиво. */
+    /** Долгое молчание после подсказки. */
     NO_SPEECH,
 
-    /** Сеть/сервер распознавания. */
+    /** Сеть/сервер распознавания недоступны. */
     NETWORK,
 
-    /** Остальное (client/busy самого распознавателя). */
+    /**
+     * Аудиовход/движок занят (`ERROR_AUDIO`/`ERROR_CLIENT`/`ERROR_RECOGNIZER_BUSY`) —
+     * типично при старте поверх ещё звучащего TTS; лечится повтором (см. [SttStartPolicy]).
+     */
+    BUSY,
+
+    /** Прочие ошибки (client/busy и непокрытые коды). */
     UNKNOWN,
 }
 
@@ -79,4 +85,27 @@ class VoiceCaptureSession(private val clock: () -> Long = System::currentTimeMil
     fun reset() {
         _state = CaptureState.Idle
     }
+}
+
+/**
+ * Поколения колбэков распознавания: `SpeechRecognizer.cancel()/destroy()` доставляет
+ * запоздалые `onError` уже мёртвому слушателю. Токен, выданный при старте сессии,
+ * гасится при пересоздании/отмене — запоздалые колбэки не трогают ни текущую сессию,
+ * ни state, ни слушателя.
+ */
+class SttCallbackGate {
+    private var current = 0
+
+    /** Начать новое поколение; выданный токен активен до следующего вызова. */
+    fun newSession(): Int {
+        current += 1
+        return current
+    }
+
+    /** Погасить текущее поколение (отмена/пересоздание) — все выданные токены становятся неактивными. */
+    fun invalidate() {
+        current += 1
+    }
+
+    fun isActive(token: Int): Boolean = token == current
 }

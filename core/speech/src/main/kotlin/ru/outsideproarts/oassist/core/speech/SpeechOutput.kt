@@ -1,8 +1,12 @@
 package ru.outsideproarts.oassist.core.speech
 
 import android.content.Context
+import android.media.AudioAttributes
+import android.media.AudioFocusRequest
+import android.media.AudioManager
 import android.os.Bundle
 import android.speech.tts.TextToSpeech
+import android.speech.tts.UtteranceProgressListener
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.first
@@ -87,6 +91,86 @@ class SpeechOutput(
     private var boundEngine: String? = null
     private val ready = MutableStateFlow(false)
 
+    private val pendingLock = Any()
+    private val pendingUtterances = mutableSetOf<String>()
+    private val _speaking = MutableStateFlow(false)
+
+    /** true, пока очередь TTS непуста; false = всё договорено (или канал не SYSTEM_TTS). */
+    val speaking: kotlinx.coroutines.flow.StateFlow<Boolean> = _speaking
+
+    private val speechAudioAttributes = AudioAttributes.Builder()
+        .setUsage(AudioAttributes.USAGE_ASSISTANT)
+        .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH)
+        .build()
+
+    /**
+     * Ducking чужого звука на время озвучки: MAY_DUCK + forceDucking (даже у приложений
+     * без поддержки duck) и БЕЗ willPauseWhenDucked — плееры только убавляются, не встают.
+     */
+    private val focusRequest: AudioFocusRequest by lazy {
+        AudioFocusRequest.Builder(AudioManager.AUDIOFOCUS_GAIN_TRANSIENT_MAY_DUCK)
+            .setAudioAttributes(speechAudioAttributes)
+            .setWillPauseWhenDucked(false)
+            .setForceDucking(true)
+            .setOnAudioFocusChangeListener { }
+            .build()
+    }
+
+    private val focusWindow = TtsFocusWindow(
+        requestFocus = {
+            runCatching {
+                context.getSystemService(AudioManager::class.java)?.requestAudioFocus(focusRequest)
+            }
+        },
+        abandonFocus = {
+            runCatching {
+                context.getSystemService(AudioManager::class.java)?.abandonAudioFocusRequest(focusRequest)
+            }
+        },
+    )
+
+    private val utteranceListener = object : UtteranceProgressListener() {
+        override fun onStart(utteranceId: String?) = Unit
+        override fun onDone(utteranceId: String?) {
+            utteranceFinished(utteranceId)
+        }
+
+        @Deprecated("Deprecated in Java")
+        override fun onError(utteranceId: String?) {
+            utteranceFinished(utteranceId)
+        }
+
+        override fun onError(utteranceId: String?, errorCode: Int) {
+            utteranceFinished(utteranceId)
+        }
+    }
+
+    private fun utteranceFinished(utteranceId: String?) {
+        if (utteranceId == null) return
+        synchronized(pendingLock) {
+            if (pendingUtterances.remove(utteranceId)) {
+                focusWindow.onUtteranceFinished()
+                if (pendingUtterances.isEmpty()) _speaking.value = false
+            }
+        }
+    }
+
+    private fun utteranceStarted(utteranceId: String) {
+        synchronized(pendingLock) {
+            pendingUtterances.add(utteranceId)
+            _speaking.value = true
+            focusWindow.onUtteranceStarted()
+        }
+    }
+
+    private fun resetUtterances() {
+        synchronized(pendingLock) {
+            pendingUtterances.clear()
+            _speaking.value = false
+            focusWindow.reset()
+        }
+    }
+
     fun init() {
         ensureTts()
     }
@@ -152,6 +236,7 @@ class SpeechOutput(
         }
         tts = null
         ready.tryEmit(false)
+        resetUtterances()
         ensureTts()
     }
 
@@ -174,11 +259,13 @@ class SpeechOutput(
         } else {
             TextToSpeech(context, initListener, pkg)
         }
+        tts?.setOnUtteranceProgressListener(utteranceListener)
     }
 
     /** Скорость/тон/голос движка; безопасно вызывать до готовности (движка может не быть). */
     private fun applyEngineParams() {
         val engine = tts ?: return
+        engine.setAudioAttributes(speechAudioAttributes)
         engine.setSpeechRate(rate)
         engine.setPitch(pitch)
         val wanted = voiceName
@@ -260,7 +347,9 @@ class SpeechOutput(
                     val params = Bundle().apply {
                         putFloat(TextToSpeech.Engine.KEY_PARAM_VOLUME, volume)
                     }
-                    engine.speak(text, TextToSpeech.QUEUE_ADD, params, "oassist-${System.nanoTime()}")
+                    val utteranceId = "oassist-${System.nanoTime()}"
+                    utteranceStarted(utteranceId)
+                    engine.speak(text, TextToSpeech.QUEUE_ADD, params, utteranceId)
                 }
             }
             SpeechOutputChannel.SCREEN_READER -> {
@@ -284,6 +373,7 @@ class SpeechOutput(
      */
     fun stop() {
         tts?.stop()
+        resetUtterances()
     }
 
     fun shutdown() {
@@ -291,6 +381,7 @@ class SpeechOutput(
         tts?.shutdown()
         tts = null
         ready.tryEmit(false)
+        resetUtterances()
     }
 
     companion object {

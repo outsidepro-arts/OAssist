@@ -25,8 +25,4 @@
     <string name="memory_saved">Память сохранена</string>
     <string name="fgs_channel_name">Фоновые операции</string>
     <string name="fgs_notification_text">Агент выполняет долгую операцию</string>
-    <string name="vis_thinking">OAssist: думаю…</string>
-    <string name="vis_default_question">Что на экране? Помоги пользователю.</string>
-    <string name="vis_no_provider">Провайдер не настроен для режима Ассистент.</string>
-    <string name="vis_error">Ошибка: %1$s</string>
 </resources>

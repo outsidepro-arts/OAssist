@@ -15,5 +15,14 @@
                 <category android:name="android.intent.category.DEFAULT" />
             </intent-filter>
         </activity>
+
+        <service
+            android:name="ru.outsideproarts.oassist.feature.assistant.AssistantOverlayService"
+            android:exported="false"
+            android:foregroundServiceType="microphone|specialUse">
+            <property
+                android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
+                android:value="assistant_overlay" />
+        </service>
     </application>
 </manifest>

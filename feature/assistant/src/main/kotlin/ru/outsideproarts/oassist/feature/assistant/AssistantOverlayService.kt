@@ -1,0 +1,459 @@
+package ru.outsideproarts.oassist.feature.assistant
+
+import android.Manifest
+import android.annotation.SuppressLint
+import android.app.Notification
+import android.app.NotificationChannel
+import android.app.NotificationManager
+import android.content.Intent
+import android.content.pm.PackageManager
+import android.content.pm.ServiceInfo
+import android.graphics.PixelFormat
+import android.os.IBinder
+import android.provider.Settings
+import android.view.Gravity
+import android.view.WindowManager
+import android.widget.FrameLayout
+import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateListOf
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.platform.ComposeView
+import androidx.lifecycle.LifecycleService
+import androidx.lifecycle.setViewTreeLifecycleOwner
+import androidx.savedstate.SavedStateRegistry
+import androidx.savedstate.SavedStateRegistryController
+import androidx.savedstate.SavedStateRegistryOwner
+import androidx.savedstate.setViewTreeSavedStateRegistryOwner
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.launch
+import ru.outsideproarts.oassist.core.agent.AgentFactory
+import ru.outsideproarts.oassist.core.agent.AgentSession
+import ru.outsideproarts.oassist.core.agent.AgentToolEvent
+import ru.outsideproarts.oassist.core.agent.AssistSessionStore
+import ru.outsideproarts.oassist.core.agent.AssistVoiceEffect
+import ru.outsideproarts.oassist.core.agent.AssistVoiceFlow
+import ru.outsideproarts.oassist.core.agent.AssistVoiceState
+import ru.outsideproarts.oassist.core.model.ApprovalDecision
+import ru.outsideproarts.oassist.core.model.ApprovalRequest
+import ru.outsideproarts.oassist.core.model.AssistMode
+import ru.outsideproarts.oassist.core.provider.ChatChunk
+import ru.outsideproarts.oassist.core.provider.ChatMessage
+import ru.outsideproarts.oassist.core.provider.ChatRole
+import ru.outsideproarts.oassist.core.provider.ProviderError
+import ru.outsideproarts.oassist.core.provider.collectSafe
+import ru.outsideproarts.oassist.core.speech.CaptureError
+import ru.outsideproarts.oassist.core.speech.SentenceSplitter
+import ru.outsideproarts.oassist.core.speech.SpeechHandle
+import ru.outsideproarts.oassist.core.speech.SttError
+import ru.outsideproarts.oassist.core.speech.SttListener
+import ru.outsideproarts.oassist.core.speech.StreamSpeaker
+import ru.outsideproarts.oassist.core.speech.VoiceHandle
+import ru.outsideproarts.oassist.core.ui.theme.OAssistTheme
+
+/**
+ * Оверлей ассистента: нижняя панель поверх текущего приложения (ClawDroid-паттерн).
+ * Владеет голосовым циклом [AssistVoiceFlow] и жизнью сессии [AssistSessionStore]:
+ * закрытие окна уничтожает контекст и продолжает поставленные нами на паузу плееры.
+ */
+class AssistantOverlayService : LifecycleService(), SavedStateRegistryOwner {
+
+    private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
+    private val savedStateRegistryController = SavedStateRegistryController.create(this)
+    override val savedStateRegistry: SavedStateRegistry
+        get() = savedStateRegistryController.savedStateRegistry
+
+    private val windowManager by lazy { getSystemService(WindowManager::class.java) }
+    private var overlayView: android.view.View? = null
+    private val voiceFlow = AssistVoiceFlow()
+    private var turnJob: Job? = null
+    private var mediaRouter: MediaButtonRouter? = null
+
+    private var answer by mutableStateOf("")
+    private var thought by mutableStateOf("")
+    private val toolEvents = mutableStateListOf<AgentToolEvent>()
+    private var sttPreview by mutableStateOf("")
+    private var isStreaming by mutableStateOf(false)
+    private var expanded by mutableStateOf(false)
+    private var hintText by mutableStateOf<String?>(null)
+    private var listening = false
+
+    private var sttLanguage: String = "ru-RU"
+    private var continueDialog: Boolean = false
+
+    private val voice get() = VoiceHandle.get()
+    private val speech get() = SpeechHandle.get()
+
+    override fun onBind(intent: Intent): IBinder? {
+        super.onBind(intent)
+        return null
+    }
+
+    override fun onCreate() {
+        savedStateRegistryController.performAttach()
+        savedStateRegistryController.performRestore(null)
+        super.onCreate()
+        ensureChannel()
+    }
+
+    override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        super.onStartCommand(intent, flags, startId)
+        startForegroundCompat()
+        val session = AssistSessionStore.getOrCreate()
+        intent?.getStringExtra(EXTRA_SCREEN_CONTEXT)?.let { session.screenContext = it }
+        serviceScope.launch { loadModeConfig() }
+        val effects = if (overlayView == null) {
+            if (!Settings.canDrawOverlays(this)) {
+                hintText = getString(R.string.assistant_no_overlay)
+                return START_NOT_STICKY
+            }
+            mediaRouter = MediaButtonRouter(this) { execute(voiceFlow.onPlayPause()) }.also { it.start() }
+            addOverlay()
+            voiceFlow.onActivate()
+        } else {
+            voiceFlow.onReactivate()
+        }
+        execute(effects)
+        return START_NOT_STICKY
+    }
+
+    override fun onDestroy() {
+        execute(voiceFlow.onClose())
+        mediaRouter?.release()
+        mediaRouter = null
+        AssistSessionStore.clear()
+        turnJob?.cancel()
+        speech?.stop()
+        removeOverlay()
+        serviceScope.cancel()
+        super.onDestroy()
+    }
+
+    private suspend fun loadModeConfig() {
+        val config = runCatching {
+            AgentFactory.get().modeConfig(AssistMode.ASSISTANT)
+        }.getOrNull() ?: return
+        sttLanguage = config.effectiveStt().language
+        continueDialog = config.assistant?.continueDialog ?: false
+    }
+
+    @SuppressLint("InlinedApi")
+    private fun startForegroundCompat() {
+        if (android.os.Build.VERSION.SDK_INT >= 34) {
+            // Android 14+ валидирует типы и требует RECORD_AUDIO для типа microphone — без него specialUse.
+            val micGranted = checkSelfPermission(Manifest.permission.RECORD_AUDIO) ==
+                PackageManager.PERMISSION_GRANTED
+            val type = if (micGranted) {
+                ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE or
+                    ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE
+            } else {
+                ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE
+            }
+            startForeground(NOTIFICATION_ID, buildNotification(), type)
+        } else {
+            startForeground(NOTIFICATION_ID, buildNotification())
+        }
+    }
+
+    private fun ensureChannel() {
+        val manager = getSystemService(NotificationManager::class.java) ?: return
+        if (manager.getNotificationChannel(CHANNEL_ID) == null) {
+            manager.createNotificationChannel(
+                NotificationChannel(
+                    CHANNEL_ID,
+                    getString(R.string.assistant_fgs_channel),
+                    NotificationManager.IMPORTANCE_MIN,
+                ),
+            )
+        }
+    }
+
+    private fun buildNotification(): Notification =
+        Notification.Builder(this, CHANNEL_ID)
+            .setContentTitle(getString(R.string.assistant_title))
+            .setContentText(getString(R.string.assistant_fgs_text))
+            .setSmallIcon(android.R.drawable.stat_sys_download)
+            .setOngoing(true)
+            .build()
+
+    private fun execute(effects: List<AssistVoiceEffect>) {
+        for (effect in effects) {
+            when (effect) {
+                AssistVoiceEffect.StartStt -> startStt()
+                AssistVoiceEffect.CancelStt -> {
+                    listening = false
+                    sttPreview = ""
+                    voice?.cancelStt()
+                }
+                is AssistVoiceEffect.SendText -> startTurn(effect.text)
+                AssistVoiceEffect.CancelTurn -> {
+                    speech?.stop()
+                    turnJob?.cancel()
+                    turnJob = null
+                    isStreaming = false
+                }
+            }
+        }
+    }
+
+    private fun startStt() {
+        serviceScope.launch {
+            // Запоздавший StartStt (быстрый toggle) не должен поднимать микрофон поверх нового состояния.
+            if (voiceFlow.state.value !is AssistVoiceState.Listening) return@launch
+            val handle = voice
+            if (handle == null || !handle.isSttAvailable()) {
+                hintText = getString(R.string.assistant_no_recognizer)
+                voiceFlow.onSttStartFailed()
+                return@launch
+            }
+            if (checkSelfPermission(Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) {
+                hintText = getString(R.string.assistant_mic_denied)
+                voiceFlow.onSttStartFailed()
+                return@launch
+            }
+            hintText = null
+            // Тишина нашего TTS перед стартом: движок распознавания падает поверх звука.
+            speech?.stop()
+            val error = handle.startStt(sttLanguage, sttListener())
+            if (error != null) {
+                hintText = sttErrorText(error)
+                voiceFlow.onSttStartFailed()
+            } else {
+                listening = true
+            }
+        }
+    }
+
+    private fun sttListener(): SttListener = object : SttListener {
+        override fun onPartial(text: String) {
+            sttPreview = text
+            voiceFlow.onSttPartial(text)
+        }
+
+        override fun onFinal(text: String) {
+            sttPreview = ""
+            listening = false
+            execute(voiceFlow.onSttFinal(text))
+        }
+
+        override fun onSttError(error: SttError) {
+            sttPreview = ""
+            listening = false
+            hintText = when (error) {
+                SttError.NO_SPEECH -> getString(R.string.assistant_mic_empty)
+                SttError.NETWORK,
+                SttError.BUSY,
+                SttError.UNKNOWN,
+                -> getString(R.string.assistant_mic_error)
+            }
+            voiceFlow.onSttStartFailed()
+        }
+    }
+
+    private fun sttErrorText(error: CaptureError): String = when (error) {
+        CaptureError.NO_RECOGNIZER -> getString(R.string.assistant_no_recognizer)
+        CaptureError.NO_PERMISSION -> getString(R.string.assistant_mic_denied)
+        CaptureError.BUSY,
+        CaptureError.INIT_FAILED,
+        -> getString(R.string.assistant_mic_error)
+    }
+
+    private fun startTurn(text: String) {
+        val session = AssistSessionStore.getOrCreate()
+        isStreaming = true
+        answer = ""
+        thought = ""
+        toolEvents.clear()
+        hintText = null
+        speech?.stop()
+        turnJob?.cancel()
+        turnJob = serviceScope.launch {
+            try {
+                val factory = AgentFactory.get()
+                val config = runCatching { factory.modeConfig(AssistMode.ASSISTANT) }.getOrNull()
+                val profile = factory.providerForMode(AssistMode.ASSISTANT)
+                if (profile == null) {
+                    hintText = getString(R.string.assistant_no_provider)
+                    return@launch
+                }
+                val modelId = config?.modelId?.takeIf { it.isNotBlank() }
+                if (modelId == null) {
+                    hintText = getString(R.string.assistant_no_provider)
+                    return@launch
+                }
+                continueDialog = config.assistant?.continueDialog ?: false
+                val autoSpeak = config.assistant?.autoSpeak ?: true
+                val tts = config.effectiveTts()
+                speech?.applyTts(tts)
+                speech?.setNarrativeEnabled(tts.narrative)
+
+                val thoughtSpeaker = StreamSpeaker(
+                    speak = { if (autoSpeak) speech?.speak(it) },
+                    speakToolCalls = tts.speakToolCalls,
+                )
+                val answerSpeaker = StreamSpeaker(
+                    speak = { if (autoSpeak) speech?.speak(it) },
+                    speakToolCalls = true,
+                )
+                val agent = factory.agentFor(profile, AssistMode.ASSISTANT)
+                val thoughtSb = StringBuilder()
+                val answerSb = StringBuilder()
+                val agentSession = AgentSession(
+                    chunks = agent.stream(
+                        modelId = modelId,
+                        systemPrompt = factory.systemPromptFor(
+                            AssistMode.ASSISTANT,
+                            screenContext = session.screenContext,
+                        ),
+                        history = session.history,
+                        userMessage = text,
+                        onTurnMessages = { turn ->
+                            session.appendTurn(ChatMessage(ChatRole.USER, text), turn)
+                        },
+                    ),
+                    agent = agent,
+                )
+                val error = agentSession.chunks.collectSafe { chunk ->
+                    when (chunk) {
+                        is ChatChunk.Content -> {
+                            if (chunk.isToolComment) {
+                                thoughtSb.append(chunk.delta)
+                                thought = thoughtSb.toString()
+                                thoughtSpeaker.onText(thoughtSb.toString(), true)
+                            } else {
+                                answerSb.append(chunk.delta)
+                                answer = answerSb.toString()
+                                answerSpeaker.onText(answerSb.toString(), false)
+                            }
+                        }
+                        is ChatChunk.ToolCall -> {
+                            toolEvents.add(AgentToolEvent(name = chunk.name))
+                        }
+                        is ChatChunk.ToolResult -> {
+                            val pending = toolEvents.indexOfLast {
+                                it.name == chunk.name && it.output == null
+                            }
+                            val event = AgentToolEvent(
+                                name = chunk.name,
+                                output = chunk.output,
+                                isError = chunk.isError,
+                            )
+                            if (pending >= 0) toolEvents[pending] = event
+                            else toolEvents.add(event)
+                        }
+                        is ChatChunk.ApprovalNeeded -> {
+                            agent.resolveApproval(chunk.request.callId, ApprovalDecision.DENY)
+                        }
+                        is ChatChunk.Finish -> {
+                            thoughtSpeaker.onFinish(thoughtSb.toString())
+                            answerSpeaker.onFinish(answerSb.toString())
+                        }
+                    }
+                }
+                if (error != null) {
+                    hintText = error.userMessage(this@AssistantOverlayService)
+                }
+                speech?.speaking?.first { !it }
+                execute(voiceFlow.onTurnFinished(continueDialog))
+            } finally {
+                isStreaming = false
+            }
+        }
+    }
+
+    private fun onSpeakAnswer() {
+        val text = answer
+        if (text.isBlank()) return
+        SentenceSplitter.splitSentences(text).forEach { speech?.speak(it) }
+    }
+
+    private fun addOverlay() {
+        if (overlayView != null) return
+        if (!Settings.canDrawOverlays(this)) return
+
+        val params = WindowManager.LayoutParams(
+            WindowManager.LayoutParams.WRAP_CONTENT,
+            WindowManager.LayoutParams.WRAP_CONTENT,
+            WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,
+            WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL or
+                WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE,
+            PixelFormat.TRANSLUCENT,
+        ).apply {
+            gravity = Gravity.BOTTOM
+        }
+
+        val wrapper = FrameLayout(this)
+        wrapper.setViewTreeLifecycleOwner(this)
+        wrapper.setViewTreeSavedStateRegistryOwner(this)
+
+        ComposeView(this).apply {
+            setContent {
+                OAssistTheme {
+                    val voiceState by voiceFlow.state.collectAsState()
+                    AssistPill(
+                        answer = answer,
+                        thought = thought,
+                        tools = toolEvents.toList(),
+                        statusHint = hintText,
+                        listening = voiceState is AssistVoiceState.Listening && listening,
+                        sttPreview = sttPreview,
+                        isStreaming = isStreaming,
+                        expanded = expanded,
+                        announcer = speech?.announcer,
+                        onExpandedChange = { expanded = it },
+                        onSend = { execute(voiceFlow.onUserSubmit(it)) },
+                        onMicToggle = { execute(voiceFlow.onPlayPause()) },
+                        onClose = { stopSelf() },
+                        onSpeakAnswer = ::onSpeakAnswer,
+                        onInputFocusChanged = { focused -> setInputFocusable(focused) },
+                    )
+                }
+            }
+            wrapper.addView(
+                this,
+                FrameLayout.LayoutParams(
+                    FrameLayout.LayoutParams.MATCH_PARENT,
+                    FrameLayout.LayoutParams.WRAP_CONTENT,
+                ),
+            )
+        }
+
+        windowManager.addView(wrapper, params)
+        overlayView = wrapper
+    }
+
+    private fun removeOverlay() {
+        overlayView?.let {
+            runCatching { windowManager.removeView(it) }
+            overlayView = null
+        }
+    }
+
+    /** Поле ввода требует фокуса окна — иначе IME не придёт; снаружи окно остаётся нефокусируемым. */
+    private fun setInputFocusable(focused: Boolean) {
+        val view = overlayView ?: return
+        val lp = view.layoutParams as? WindowManager.LayoutParams ?: return
+        val wantNotFocusable = !focused
+        val hasNotFocusable =
+            lp.flags and WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE != 0
+        if (wantNotFocusable == hasNotFocusable) return
+        lp.flags = if (wantNotFocusable) {
+            lp.flags or WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE
+        } else {
+            lp.flags and WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE.inv()
+        }
+        runCatching { windowManager.updateViewLayout(view, lp) }
+    }
+
+    companion object {
+        const val EXTRA_SCREEN_CONTEXT = "screen_context"
+        private const val CHANNEL_ID = "oassist_overlay"
+        private const val NOTIFICATION_ID = 0x0A52
+    }
+}

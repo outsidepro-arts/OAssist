@@ -8,6 +8,8 @@ import android.media.AudioFormat
 import android.media.AudioRecord
 import android.media.MediaRecorder
 import android.os.Bundle
+import android.os.Handler
+import android.os.Looper
 import android.speech.RecognitionListener
 import android.speech.RecognizerIntent
 import android.speech.SpeechRecognizer
@@ -38,6 +40,18 @@ class VoiceListener(private val context: Context) {
     // ---- STT ----
 
     private var recognizer: SpeechRecognizer? = null
+    private val sttGate = SttCallbackGate()
+    private val retryHandler = Handler(Looper.getMainLooper())
+    private var pendingRetry: Runnable? = null
+    private var sttSession: SttSession? = null
+
+    /** Одна пользовательская сессия распознавания со всеми её попытками старта. */
+    private class SttSession(
+        val language: String,
+        val listener: SttListener,
+        var attempt: Int = 1,
+        var hadPartial: Boolean = false,
+    )
 
     /**
      * Начать системное распознавание. Частичные результаты — в [listener],
@@ -53,46 +67,143 @@ class VoiceListener(private val context: Context) {
             session.reset()
             return CaptureError.NO_RECOGNIZER
         }
+        val startSession = SttSession(language, listener)
+        sttSession = startSession
+        val error = startSttAttempt(startSession, isFirst = true)
+        if (error != null) {
+            sttSession = null
+            session.reset()
+            return error
+        }
+        return null
+    }
+
+    /**
+     * Одна попытка старта движка. Повторяемые отказы (звук ещё занят TTS, см. [SttStartPolicy])
+     * уходят в отложенный повтор; финальные — наружу через [SttListener.onSttError].
+     */
+    private fun startSttAttempt(startSession: SttSession, isFirst: Boolean): CaptureError? {
+        startSession.hadPartial = false
+        // Гасим колбэки предыдущего движка до его отмены: cancel/destroy шлёт запоздалые onError.
+        val token = sttGate.newSession()
         return try {
             recognizer?.cancel()
             recognizer?.destroy()
             val intent = Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
                 putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
-                putExtra(RecognizerIntent.EXTRA_LANGUAGE, language)
+                putExtra(RecognizerIntent.EXTRA_LANGUAGE, startSession.language)
                 putExtra(RecognizerIntent.EXTRA_PARTIAL_RESULTS, true)
                 putExtra(RecognizerIntent.EXTRA_MAX_RESULTS, 1)
             }
             val engine = SpeechRecognizer.createSpeechRecognizer(context).also { recognizer = it }
-            engine.setRecognitionListener(SttProxy(listener,
-                onDone = {
-                    session.reset()
-                    _state.value = CaptureState.Idle
-                },
-            ))
+            engine.setRecognitionListener(
+                SttProxy(
+                    listener = startSession.listener,
+                    isActive = { sttGate.isActive(token) },
+                    onPartialSeen = { startSession.hadPartial = true },
+                    onErrorIntercept = { error -> handleAsyncError(startSession, error) },
+                    onDone = { finishSttSession() },
+                ),
+            )
             engine.startListening(intent)
             _state.value = CaptureState.Listening(CaptureMode.STT, System.currentTimeMillis())
             null
         } catch (e: Exception) {
-            recognizer = null
-            session.reset()
-            CaptureError.INIT_FAILED
+            handleSyncError(startSession, CaptureError.INIT_FAILED, isFirst)
         }
+    }
+
+    /** true — ошибка поглощена (запланирован повтор); false — пробросить наружу. */
+    private fun handleAsyncError(startSession: SttSession, error: SttError): Boolean {
+        val decision = SttStartPolicy.decide(
+            startSession.attempt,
+            SttFailure.AsyncError(error, startSession.hadPartial),
+        )
+        return when (decision) {
+            is SttStartDecision.Retry -> {
+                startSession.attempt += 1
+                scheduleRetry(startSession, decision.delayMs)
+                true
+            }
+            SttStartDecision.Fail -> {
+                sttSession = null
+                false
+            }
+        }
+    }
+
+    private fun handleSyncError(
+        startSession: SttSession,
+        error: CaptureError,
+        isFirst: Boolean,
+    ): CaptureError? {
+        val decision = SttStartPolicy.decide(
+            startSession.attempt,
+            SttFailure.SyncStartFailed(error),
+        )
+        return when (decision) {
+            is SttStartDecision.Retry -> {
+                startSession.attempt += 1
+                scheduleRetry(startSession, decision.delayMs)
+                null
+            }
+            SttStartDecision.Fail -> {
+                sttSession = null
+                if (isFirst) {
+                    error
+                } else {
+                    finishSttSession()
+                    startSession.listener.onSttError(SttError.UNKNOWN)
+                    null
+                }
+            }
+        }
+    }
+
+    private fun scheduleRetry(startSession: SttSession, delayMs: Long) {
+        cancelPendingRetry()
+        val runnable = Runnable {
+            pendingRetry = null
+            if (sttSession !== startSession) return@Runnable
+            startSttAttempt(startSession, isFirst = false)
+        }
+        pendingRetry = runnable
+        retryHandler.postDelayed(runnable, delayMs)
+    }
+
+    private fun cancelPendingRetry() {
+        pendingRetry?.let { retryHandler.removeCallbacks(it) }
+        pendingRetry = null
+    }
+
+    private fun finishSttSession() {
+        sttSession = null
+        session.reset()
+        _state.value = CaptureState.Idle
     }
 
     /** Попросить финал (придёт в onFinal). В покое — no-op. */
     fun stopStt() {
+        if (pendingRetry != null) {
+            val startSession = sttSession
+            cancelPendingRetry()
+            finishSttSession()
+            startSession?.listener?.onSttError(SttError.NO_SPEECH)
+            return
+        }
         runCatching { recognizer?.stopListening() }
     }
 
     /** Жёсткая отмена без финала. */
     fun cancelStt() {
+        cancelPendingRetry()
+        sttGate.invalidate()
         runCatching {
             recognizer?.cancel()
             recognizer?.destroy()
         }
         recognizer = null
-        session.reset()
-        _state.value = CaptureState.Idle
+        finishSttSession()
     }
 
     // ---- RAW ----
@@ -204,6 +315,9 @@ class VoiceListener(private val context: Context) {
 
     private class SttProxy(
         private val listener: SttListener,
+        private val isActive: () -> Boolean,
+        private val onPartialSeen: () -> Unit,
+        private val onErrorIntercept: (SttError) -> Boolean,
         private val onDone: () -> Unit,
     ) : RecognitionListener {
         override fun onReadyForSpeech(params: Bundle?) = Unit
@@ -214,13 +328,18 @@ class VoiceListener(private val context: Context) {
         override fun onEvent(eventType: Int, params: Bundle?) = Unit
 
         override fun onPartialResults(partialResults: Bundle?) {
+            if (!isActive()) return
             val text = partialResults
                 ?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)
                 ?.firstOrNull()?.trim().orEmpty()
-            if (text.isNotEmpty()) listener.onPartial(text)
+            if (text.isNotEmpty()) {
+                onPartialSeen()
+                listener.onPartial(text)
+            }
         }
 
         override fun onResults(results: Bundle?) {
+            if (!isActive()) return
             val text = results
                 ?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)
                 ?.firstOrNull()?.trim().orEmpty()
@@ -229,15 +348,19 @@ class VoiceListener(private val context: Context) {
         }
 
         override fun onError(error: Int) {
-            listener.onSttError(
-                when (error) {
-                    SpeechRecognizer.ERROR_SPEECH_TIMEOUT,
-                    SpeechRecognizer.ERROR_NO_MATCH -> SttError.NO_SPEECH
-                    SpeechRecognizer.ERROR_NETWORK,
-                    SpeechRecognizer.ERROR_SERVER -> SttError.NETWORK
-                    else -> SttError.UNKNOWN
-                },
-            )
+            if (!isActive()) return
+            val mapped = when (error) {
+                SpeechRecognizer.ERROR_SPEECH_TIMEOUT,
+                SpeechRecognizer.ERROR_NO_MATCH -> SttError.NO_SPEECH
+                SpeechRecognizer.ERROR_NETWORK,
+                SpeechRecognizer.ERROR_SERVER -> SttError.NETWORK
+                SpeechRecognizer.ERROR_AUDIO,
+                SpeechRecognizer.ERROR_CLIENT,
+                SpeechRecognizer.ERROR_RECOGNIZER_BUSY -> SttError.BUSY
+                else -> SttError.UNKNOWN
+            }
+            if (onErrorIntercept(mapped)) return
+            listener.onSttError(mapped)
             onDone()
         }
     }

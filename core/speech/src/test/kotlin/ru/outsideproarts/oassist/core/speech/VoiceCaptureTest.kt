@@ -1,6 +1,7 @@
 package ru.outsideproarts.oassist.core.speech
 
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -72,5 +73,30 @@ class VoiceCaptureSessionTest {
 
         assertTrue(session.state is CaptureState.Idle)
         assertNull(session.stop())
+    }
+}
+
+class SttCallbackGateTest {
+
+    @Test
+    fun newSession_invalidatesPreviousToken() {
+        val gate = SttCallbackGate()
+        val first = gate.newSession()
+        assertTrue(gate.isActive(first))
+
+        val second = gate.newSession()
+
+        assertFalse(gate.isActive(first))
+        assertTrue(gate.isActive(second))
+    }
+
+    @Test
+    fun invalidate_dropsAllTokens() {
+        val gate = SttCallbackGate()
+        val token = gate.newSession()
+
+        gate.invalidate()
+
+        assertFalse(gate.isActive(token))
     }
 }

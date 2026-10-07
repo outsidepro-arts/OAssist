@@ -25,6 +25,8 @@ data class AssistantExtras(
     val autoSpeak: Boolean = true,
     val autoClose: Boolean = true,
     val attachScreenshot: Boolean = true,
+    /** Продолжать диалог автоматически: после озвучки ответа снова включать микрофон. */
+    val continueDialog: Boolean = false,
 )
 
 /** Дополнения режима SHARE. */

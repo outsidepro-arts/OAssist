@@ -6,58 +6,26 @@ import android.os.Bundle
 import android.service.voice.VoiceInteractionSession
 import android.service.voice.VoiceInteractionSessionService
 import android.view.View
-import android.view.ViewGroup
 import android.widget.FrameLayout
-import android.widget.ScrollView
-import android.widget.TextView
-import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.SupervisorJob
-import kotlinx.coroutines.launch
-import ru.outsideproarts.oassist.core.model.AssistMode
+import ru.outsideproarts.oassist.feature.assistant.AssistActivity
+import ru.outsideproarts.oassist.feature.assistant.AssistantOverlayService
 
-/**
- * VoiceInteractionSession: принимает assist-данные (AssistStructure + скриншот),
- * форвардит в AgentFactory и показывает простой UI с ответом.
- */
 class OAssistVoiceInteractionSessionService : VoiceInteractionSessionService() {
     override fun onNewSession(args: Bundle?): VoiceInteractionSession {
         return OAssistVoiceInteractionSession(this)
     }
 }
 
-class OAssistVoiceInteractionSession(service: VoiceInteractionSessionService) : VoiceInteractionSession(service) {
+/**
+ * Тонкий вход: assist-жест извлекает контекст экрана и передаёт управление оверлей-сервису
+ * (через trampoline AssistActivity — там же запрос спецдоступов и микрофона).
+ * Своего UI сессия не держит: окно ассистента живёт в [AssistantOverlayService].
+ */
+class OAssistVoiceInteractionSession(
+    service: VoiceInteractionSessionService,
+) : VoiceInteractionSession(service) {
 
-    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
-    private var resultTextView: TextView? = null
-
-    /** Озвучка сессии: конфиг ASSISTANT применяется перед каждым стримом. */
-    private fun speech() = ru.outsideproarts.oassist.di.AppGraph.get().speechOutput
-
-    override fun onCreateContentView(): View {
-        val scrollView = ScrollView(context)
-        val container = FrameLayout(context).apply {
-            setPadding(48, 96, 48, 48)
-        }
-        val textView = TextView(context).apply {
-            textSize = 16f
-            setPadding(24, 24, 24, 24)
-            text = context.getString(ru.outsideproarts.oassist.R.string.vis_thinking)
-        }
-        resultTextView = textView
-        container.addView(textView, ViewGroup.LayoutParams(
-            ViewGroup.LayoutParams.MATCH_PARENT,
-            ViewGroup.LayoutParams.WRAP_CONTENT,
-        ))
-        scrollView.addView(container)
-        return scrollView
-    }
-
-    override fun onHide() {
-        super.onHide()
-        // Скрытие панели гасит озвучку (barge-in наоборот: UI ушёл — звук тоже).
-        runCatching { speech().stop() }
-    }
+    override fun onCreateContentView(): View = FrameLayout(context)
 
     override fun onHandleAssist(state: AssistState) {
         super.onHandleAssist(state)
@@ -67,85 +35,12 @@ class OAssistVoiceInteractionSession(service: VoiceInteractionSessionService) : 
             null
         }
         val screenContext = extractScreenContext(structure)
-
-        val factory = ru.outsideproarts.oassist.core.agent.AgentFactory.get()
-
-        // Barge-in: новый жест поверх говорящего прерывает озвучку.
-        runCatching { speech().stop() }
-        scope.launch {
-            try {
-                val config = factory.modeConfig(AssistMode.ASSISTANT)
-                val profile = factory.providerForMode(AssistMode.ASSISTANT)
-                if (profile != null) {
-                    val agent = factory.agentFor(profile, AssistMode.ASSISTANT)
-                    val tts = config.effectiveTts()
-                    val autoSpeak = config.assistant?.autoSpeak ?: true
-                    val graph = ru.outsideproarts.oassist.di.AppGraph.get()
-                    graph.applyModeTts(tts)
-                    // В окне сессии нет AnnouncerHost: SCREEN_READER озвучиваем
-                    // одним объявлением готового ответа на Finish (см. ниже),
-                    // стрим-анонсы сюда не дойдут — их не будет вовсе, не дубль.
-                    val screenReader = tts.channel ==
-                        ru.outsideproarts.oassist.core.model.SpeechOutputChannel.SCREEN_READER
-                    val thoughtSpeaker = ru.outsideproarts.oassist.core.speech.StreamSpeaker(
-                        speak = { if (autoSpeak && !screenReader) speech().speak(it) },
-                        speakToolCalls = tts.speakToolCalls,
-                    )
-                    val answerSpeaker = ru.outsideproarts.oassist.core.speech.StreamSpeaker(
-                        speak = { if (autoSpeak && !screenReader) speech().speak(it) },
-                    )
-
-                    val thoughtSb = StringBuilder()
-                    val sb = StringBuilder()
-                    agent.stream(
-                        modelId = config.modelId ?: "",
-                        systemPrompt = factory.systemPromptFor(
-                            AssistMode.ASSISTANT,
-                            screenContext = screenContext,
-                        ),
-                        history = emptyList(),
-                        userMessage = context.getString(ru.outsideproarts.oassist.R.string.vis_default_question),
-                    ).collect { chunk ->
-                        when (chunk) {
-                            is ru.outsideproarts.oassist.core.provider.ChatChunk.Content -> {
-                                if (chunk.isToolComment) {
-                                    // Мысль — только в синтез (при флаге), на экран сессии
-                                    // не выводим: здесь важен только результат.
-                                    thoughtSb.append(chunk.delta)
-                                    thoughtSpeaker.onText(thoughtSb.toString(), true)
-                                } else {
-                                    sb.append(chunk.delta)
-                                    resultTextView?.text = sb.toString()
-                                    answerSpeaker.onText(sb.toString(), false)
-                                }
-                            }
-                            // В голосовой сессии нет диалога: опасные действия отклоняем сразу.
-                            is ru.outsideproarts.oassist.core.provider.ChatChunk.ApprovalNeeded -> {
-                                agent.resolveApproval(
-                                    chunk.request.callId,
-                                    ru.outsideproarts.oassist.core.model.ApprovalDecision.DENY,
-                                )
-                            }
-                            is ru.outsideproarts.oassist.core.provider.ChatChunk.Finish -> {
-                                thoughtSpeaker.onFinish(thoughtSb.toString())
-                                answerSpeaker.onFinish(sb.toString())
-                                if (autoSpeak && screenReader && sb.isNotEmpty()) {
-                                    resultTextView?.announceForAccessibility(sb.toString())
-                                }
-                            }
-                            // Вызовы/результаты тулов — в полотно, не на экран сессии.
-                            else -> {}
-                        }
-                    }
-                } else {
-                    resultTextView?.text =
-                        context.getString(ru.outsideproarts.oassist.R.string.vis_no_provider)
-                }
-            } catch (e: Exception) {
-                resultTextView?.text =
-                    context.getString(ru.outsideproarts.oassist.R.string.vis_error, e.message ?: "?")
-            }
+        val intent = Intent(context, AssistActivity::class.java).apply {
+            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            screenContext?.let { putExtra(AssistantOverlayService.EXTRA_SCREEN_CONTEXT, it) }
         }
+        runCatching { context.startActivity(intent) }
+        hide()
     }
 
     private fun extractScreenContext(structure: AssistStructure?): String? {

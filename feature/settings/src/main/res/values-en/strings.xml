@@ -299,6 +299,7 @@
     <string name="mode_assistant_autospeak">Speak answers aloud</string>
     <string name="mode_assistant_autoclose">Close panel after answer</string>
     <string name="mode_assistant_screenshot">Attach screen context</string>
+    <string name="mode_assistant_continue_dialog">Continue dialog automatically</string>
     <string name="mode_share_extras">Share behavior</string>
     <string name="mode_share_action">What to do with content</string>
     <string name="mode_share_show_in_chat">Show in chat</string>

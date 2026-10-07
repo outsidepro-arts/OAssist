@@ -25,8 +25,4 @@
     <string name="memory_saved">Memory saved</string>
     <string name="fgs_channel_name">Background operations</string>
     <string name="fgs_notification_text">Agent is running a long operation</string>
-    <string name="vis_thinking">OAssist: thinking…</string>
-    <string name="vis_default_question">What is on the screen? Help the user.</string>
-    <string name="vis_no_provider">No provider configured for Assistant mode.</string>
-    <string name="vis_error">Error: %1$s</string>
 </resources>

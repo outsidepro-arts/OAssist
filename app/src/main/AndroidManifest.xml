@@ -36,6 +36,8 @@
     <!-- M5.3: foreground-сервис долгих операций (гео-фикс, WebView-рендер) -->
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
+    <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MICROPHONE" />
 
     <!-- CALL_PHONE/SEND_SMS подразумевают телефонию; явно помечаем необязательной для ChromeOS -->
     <uses-feature android:name="android.hardware.telephony" android:required="false" />

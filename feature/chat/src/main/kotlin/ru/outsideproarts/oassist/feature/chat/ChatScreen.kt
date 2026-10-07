@@ -285,6 +285,7 @@ fun ChatScreen(
                 when (error) {
                     SttError.NO_SPEECH -> micEmptyText
                     SttError.NETWORK -> micErrorText
+                    SttError.BUSY -> micErrorText
                     SttError.UNKNOWN -> micErrorText
                 },
                 Toast.LENGTH_LONG,

@@ -271,6 +271,10 @@ class AppGraph private constructor(context: Context) {
         ru.outsideproarts.oassist.core.speech.SpeechHandle.register(object : ru.outsideproarts.oassist.core.speech.SpeechHandle {
             override fun speak(sentence: String) = speechOutput.speak(sentence)
             override fun stop() = speechOutput.stop()
+            override val speaking: kotlinx.coroutines.flow.StateFlow<Boolean>
+                get() = speechOutput.speaking
+            override val announcer: ru.outsideproarts.oassist.core.a11y.FlowAnnouncer
+                get() = this@AppGraph.announcer
             override fun applyTts(config: ru.outsideproarts.oassist.core.model.TtsConfig) = applyModeTts(config)
             override fun setNarrativeEnabled(enabled: Boolean) {
                 narrator.enabled = enabled

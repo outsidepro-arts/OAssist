@@ -44,12 +44,15 @@ class AgentLoop(
         userMessage: String,
         /** Голосовое приложение PTT к user-ходу (null — текстовый вопрос). */
         audio: ru.outsideproarts.oassist.core.provider.AudioPart? = null,
+        /** Сообщения завершённого хода (assistant с toolCalls → TOOL → финальный assistant), без system/user. */
+        onTurnMessages: ((List<ChatMessage>) -> Unit)? = null,
     ): Flow<ChatChunk> = flow {
         val messages = buildList {
             systemPrompt?.let { add(ChatMessage(ChatRole.SYSTEM, it)) }
             addAll(history)
             add(ChatMessage(ChatRole.USER, userMessage, audio = audio))
         }.toMutableList()
+        val turnStart = messages.size
 
         val tools = toolRegistry?.schemas()?.map {
             ToolSchemaDto(
@@ -83,6 +86,14 @@ class AgentLoop(
             if (toolCalls.isEmpty()) {
                 if (contentSb.isNotEmpty()) emit(ChatChunk.Content(contentSb.toString()))
                 emit(ChatChunk.Finish(reason = "stop"))
+                val turn = messages.drop(turnStart).toList()
+                onTurnMessages?.invoke(
+                    if (contentSb.isNotEmpty()) {
+                        turn + ChatMessage(ChatRole.ASSISTANT, contentSb.toString())
+                    } else {
+                        turn
+                    },
+                )
                 return@flow
             }
 
@@ -141,6 +152,7 @@ class AgentLoop(
 
         emit(ChatChunk.Content("Достигнут лимит вызовов инструментов."))
         emit(ChatChunk.Finish(reason = "max_tool_rounds"))
+        onTurnMessages?.invoke(messages.drop(turnStart).toList())
     }
 
     suspend fun complete(

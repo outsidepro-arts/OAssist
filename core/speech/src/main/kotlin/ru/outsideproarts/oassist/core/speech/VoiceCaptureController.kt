@@ -80,6 +80,7 @@ class AgentVoiceCapture(private val voice: VoiceListener) : VoiceCaptureControll
         fun failureText(error: SttError): String = when (error) {
             SttError.NO_SPEECH -> SILENCE
             SttError.NETWORK -> "Распознавание не удалось — проверьте подключение к сети."
+            SttError.BUSY -> "Аудиовход занят другим звуком — повторите попытку."
             SttError.UNKNOWN -> "Распознавание не удалось."
         }
     }

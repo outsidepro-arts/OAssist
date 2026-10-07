@@ -31,4 +31,11 @@
     <string name="assistant_mic_empty">Не расслышал, повторите</string>
     <string name="assistant_mic_error">Ошибка распознавания</string>
     <string name="assistant_listening">Слушаю…</string>
+    <string name="assistant_mic_state_on">Слушает</string>
+    <string name="assistant_mic_idle">Микрофон выключен</string>
+    <string name="assistant_pill_thinking">Думаю…</string>
+    <string name="assistant_no_provider">Провайдер для режима ассистента не настроен</string>
+    <string name="assistant_no_overlay">Нет разрешения «Показывать поверх других окон»</string>
+    <string name="assistant_fgs_channel">Ассистент</string>
+    <string name="assistant_fgs_text">Оверлей ассистента активен</string>
 </resources>

@@ -184,6 +184,23 @@ class ProviderConfigCodecTest {
     }
 
     @Test
+    fun modeConfig_continueDialog_roundTripAndLegacyDefault() {
+        val config = ModeConfig(
+            mode = AssistMode.ASSISTANT,
+            assistant = AssistantExtras(continueDialog = true),
+        )
+
+        val decoded = json.decodeFromString<ModeConfig>(json.encodeToString(config))
+
+        assertEquals(config, decoded)
+
+        val legacy = json.decodeFromString<ModeConfig>(
+            """{"mode":"ASSISTANT","assistant":{"autoSpeak":false,"autoClose":true,"attachScreenshot":true}}""",
+        )
+        assertEquals(false, legacy.assistant?.continueDialog)
+    }
+
+    @Test
     fun modelCatalog_roundTrip() {
         val catalog = ModelCatalog(
             providerId = "p1",

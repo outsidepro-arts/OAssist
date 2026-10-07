@@ -12,6 +12,12 @@ interface SpeechHandle {
     /** Стоп / barge-in. */
     fun stop()
 
+    /** Идёт ли озвучка (очередь TTS непуста): false = всё договорено (для авто-продолжения диалога). */
+    val speaking: kotlinx.coroutines.flow.StateFlow<Boolean>
+
+    /** Анонсер экранным чтецом (SCREEN_READER-канал); null — канал недоступен. */
+    val announcer: ru.outsideproarts.oassist.core.a11y.FlowAnnouncer?
+
     /** Применить конфиг озвучки активного режима (канал + тембр + голос). */
     fun applyTts(config: ru.outsideproarts.oassist.core.model.TtsConfig)
 

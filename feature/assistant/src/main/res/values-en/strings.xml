@@ -31,4 +31,11 @@
     <string name="assistant_mic_empty">Didn’t catch that, please repeat</string>
     <string name="assistant_mic_error">Recognition error</string>
     <string name="assistant_listening">Listening…</string>
+    <string name="assistant_mic_state_on">Listening</string>
+    <string name="assistant_mic_idle">Microphone off</string>
+    <string name="assistant_pill_thinking">Thinking…</string>
+    <string name="assistant_no_provider">No provider configured for assistant mode</string>
+    <string name="assistant_no_overlay">No permission to display over other apps</string>
+    <string name="assistant_fgs_channel">Assistant</string>
+    <string name="assistant_fgs_text">Assistant overlay is active</string>
 </resources>

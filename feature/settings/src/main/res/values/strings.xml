@@ -297,6 +297,7 @@
     <string name="mode_assistant_autospeak">Озвучивать ответы</string>
     <string name="mode_assistant_autoclose">Закрывать панель после ответа</string>
     <string name="mode_assistant_screenshot">Прикреплять контекст экрана</string>
+    <string name="mode_assistant_continue_dialog">Продолжать диалог автоматически</string>
     <string name="mode_share_extras">Поведение отправки</string>
     <string name="mode_share_action">Что делать с контентом</string>
     <string name="mode_share_show_in_chat">Показывать в чате</string>
