@@ -103,4 +103,64 @@ class AgentLoopTurnMessagesTest {
         assertTrue(exported.none { it.role == ChatRole.SYSTEM })
         assertTrue(exported.none { it.content.contains("старый") })
     }
+
+    @Test
+    fun toolLoop_stopsAtConfiguredLimit() = runTest {
+        val tool = PingTool()
+        val client = object : ModelClient {
+            val seen = mutableListOf<List<ChatMessage>>()
+            override suspend fun fetchModels(): List<ModelInfo> = emptyList()
+            override fun chatCompletionStream(
+                modelId: String,
+                messages: List<ChatMessage>,
+                tools: List<ToolSchemaDto>,
+            ): Flow<ChatChunk> {
+                seen.add(messages)
+                return flowOf(
+                    ChatChunk.ToolCall(id = "c${seen.size}", name = "ping", argumentsJson = "{}"),
+                    ChatChunk.Finish("tool_calls"),
+                )
+            }
+        }
+        val agent = AgentLoop(client, ToolRegistry(listOf(tool)), maxToolRounds = 2)
+        var turn: List<ChatMessage>? = null
+
+        val chunks = agent.stream("m", null, emptyList(), "вопрос", onTurnMessages = { turn = it }).toList()
+
+        assertEquals(2, client.seen.size)
+        assertTrue(chunks.any { it is ChatChunk.Finish && it.reason == "max_tool_rounds" })
+        val exported = requireNotNull(turn)
+        assertEquals(4, exported.size)
+    }
+
+    @Test
+    fun toolLoop_unlimitedCompletesBeyondOldCap() = runTest {
+        val tool = PingTool()
+        val client = object : ModelClient {
+            var round = 0
+            override suspend fun fetchModels(): List<ModelInfo> = emptyList()
+            override fun chatCompletionStream(
+                modelId: String,
+                messages: List<ChatMessage>,
+                tools: List<ToolSchemaDto>,
+            ): Flow<ChatChunk> {
+                round++
+                return if (round <= 8) {
+                    flowOf(
+                        ChatChunk.ToolCall(id = "c$round", name = "ping", argumentsJson = "{}"),
+                        ChatChunk.Finish("tool_calls"),
+                    )
+                } else {
+                    flowOf(ChatChunk.Content("готово"), ChatChunk.Finish("stop"))
+                }
+            }
+        }
+        val agent = AgentLoop(client, ToolRegistry(listOf(tool)), maxToolRounds = 0)
+
+        val chunks = agent.stream("m", null, emptyList(), "вопрос").toList()
+
+        assertEquals(9, client.round)
+        assertTrue(chunks.none { it is ChatChunk.Finish && it.reason == "max_tool_rounds" })
+        assertTrue(chunks.any { it is ChatChunk.Content && it.delta == "готово" })
+    }
 }

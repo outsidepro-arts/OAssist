@@ -142,6 +142,9 @@
     <string name="tool_ask">Спрашивать перед выполнением</string>
     <string name="tools_reset">Сбросить настройки инструментов</string>
     <string name="tools_reset_subtitle">Вернуть включение и вопросы к значениям по умолчанию</string>
+    <string name="tools_max_rounds">Лимит действий агента</string>
+    <string name="tools_max_rounds_subtitle">Сколько раундов вызова инструментов может выполнить агент за один ход. Без лимита: ход завершит только сам агент</string>
+    <string name="tools_max_rounds_none">Без лимита</string>
     <string name="tools_reset_done">Настройки инструментов сброшены</string>
     <string name="tool_unknown_desc">Действие агента</string>
     <string name="tool_app_launch_title">Запуск приложений</string>

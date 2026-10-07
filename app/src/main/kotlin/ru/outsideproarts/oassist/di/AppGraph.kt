@@ -84,6 +84,7 @@ class AppGraph private constructor(context: Context) {
                 ru.outsideproarts.oassist.a11y.OAssistAccessibilityService.instance
             },
             privProvider = { privilegeExecutor() },
+            overlayControl = { ru.outsideproarts.oassist.core.agent.OverlayControl.get() },
         )
     }
 
@@ -172,7 +173,13 @@ class AppGraph private constructor(context: Context) {
                 privilegeExecutor(),
                 resolveMcpTools(),
             )
-            return ru.outsideproarts.oassist.core.agent.AgentLoop(client, tools, approvalPolicy = approvalPolicy, events = narratorEvents)
+            return ru.outsideproarts.oassist.core.agent.AgentLoop(
+                client,
+                tools,
+                approvalPolicy = approvalPolicy,
+                events = narratorEvents,
+                maxToolRounds = prefs.maxToolRounds,
+            )
         }
 
         override suspend fun systemPromptFor(

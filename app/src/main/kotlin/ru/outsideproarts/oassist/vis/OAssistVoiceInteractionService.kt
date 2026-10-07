@@ -1,8 +1,11 @@
 package ru.outsideproarts.oassist.vis
 
+import android.Manifest
 import android.app.assist.AssistStructure
 import android.content.Intent
+import android.content.pm.PackageManager
 import android.os.Bundle
+import android.provider.Settings
 import android.service.voice.VoiceInteractionSession
 import android.service.voice.VoiceInteractionSessionService
 import android.view.View
@@ -35,12 +38,34 @@ class OAssistVoiceInteractionSession(
             null
         }
         val screenContext = extractScreenContext(structure)
-        val intent = Intent(context, AssistActivity::class.java).apply {
-            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        if (!startOverlay(screenContext)) {
+            val intent = Intent(context, AssistActivity::class.java).apply {
+                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                screenContext?.let { putExtra(AssistantOverlayService.EXTRA_SCREEN_CONTEXT, it) }
+            }
+            runCatching { context.startActivity(intent) }
+        }
+        hide()
+    }
+
+    /**
+     * Прямой старт оверлей-сервиса без activity: на путь влияет трамплин (запрос разрешений,
+     * изолированный таск). При выданных разрешениях стартуем сервис напрямую — так таск
+     * приложения вообще не трогается; исключение FGS-старта откатывает на трамплин.
+     */
+    private fun startOverlay(screenContext: String?): Boolean {
+        if (!Settings.canDrawOverlays(context)) return false
+        if (context.checkSelfPermission(Manifest.permission.RECORD_AUDIO) !=
+            PackageManager.PERMISSION_GRANTED
+        ) {
+            return false
+        }
+        val intent = Intent(context, AssistantOverlayService::class.java).apply {
             screenContext?.let { putExtra(AssistantOverlayService.EXTRA_SCREEN_CONTEXT, it) }
         }
-        runCatching { context.startActivity(intent) }
-        hide()
+        return runCatching {
+            context.startForegroundService(intent)
+        }.isSuccess
     }
 
     private fun extractScreenContext(structure: AssistStructure?): String? {

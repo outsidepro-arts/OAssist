@@ -8,18 +8,29 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.ExposedDropdownMenuAnchorType
+import androidx.compose.material3.ExposedDropdownMenuBox
+import androidx.compose.material3.ExposedDropdownMenuDefaults
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.stateDescription
+import ru.outsideproarts.oassist.core.a11y.oassistDropdownClassName
 import ru.outsideproarts.oassist.core.a11y.oassistHeading
 import ru.outsideproarts.oassist.core.a11y.oassistRole
 import ru.outsideproarts.oassist.core.a11y.oassistTouchTarget
@@ -40,10 +51,12 @@ fun ToolsSettingsScreen(
     tools: List<ToolDescriptor>,
     disabled: Set<String>,
     askOverrides: Map<String, Boolean>,
+    maxToolRounds: Int = ru.outsideproarts.oassist.core.model.ToolPreferences.DEFAULT_MAX_TOOL_ROUNDS,
     toolPermissions: Map<String, List<String>> = emptyMap(),
     missingPermissions: Set<String> = emptySet(),
     onToggleEnabled: (String, Boolean) -> Unit,
     onToggleAsk: (String, Boolean) -> Unit,
+    onMaxToolRoundsChange: (Int) -> Unit = {},
     onGrantPermission: (String) -> Unit = {},
     onResetApprovals: () -> Unit,
     onResetTools: () -> Unit,
@@ -97,6 +110,10 @@ fun ToolsSettingsScreen(
         Column(verticalArrangement = Arrangement.spacedBy(OAssistDimens.ItemSpacing)) {
             OAssistSectionHeading(text = securitySection)
             OAssistPanel(title = securitySection) {
+                MaxToolRoundsRow(
+                    maxToolRounds = maxToolRounds,
+                    onChange = onMaxToolRoundsChange,
+                )
                 OAssistSettingRow(
                     title = stringResource(R.string.approvals_reset),
                     subtitle = stringResource(R.string.approvals_reset_subtitle),
@@ -314,4 +331,53 @@ private fun permissionLabel(permission: String): String = when (permission) {
     android.Manifest.permission.ACCESS_FINE_LOCATION,
     android.Manifest.permission.ACCESS_COARSE_LOCATION -> stringResource(R.string.perm_location)
     else -> permission
+}
+
+private val MAX_TOOL_ROUND_OPTIONS = listOf(0, 5, 10, 15, 20, 30)
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun MaxToolRoundsRow(
+    maxToolRounds: Int,
+    onChange: (Int) -> Unit,
+) {
+    var expanded by remember { mutableStateOf(false) }
+    val noneLabel = stringResource(R.string.tools_max_rounds_none)
+    Column(verticalArrangement = Arrangement.spacedBy(OAssistDimens.HairlineSpacing)) {
+        Text(
+            text = stringResource(R.string.tools_max_rounds_subtitle),
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        ExposedDropdownMenuBox(
+            expanded = expanded,
+            onExpandedChange = { expanded = it },
+        ) {
+            OutlinedTextField(
+                value = if (maxToolRounds <= 0) noneLabel else maxToolRounds.toString(),
+                onValueChange = {},
+                readOnly = true,
+                label = { Text(stringResource(R.string.tools_max_rounds)) },
+                trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = expanded) },
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .menuAnchor(ExposedDropdownMenuAnchorType.PrimaryNotEditable)
+                    .oassistDropdownClassName(),
+            )
+            ExposedDropdownMenu(
+                expanded = expanded,
+                onDismissRequest = { expanded = false },
+            ) {
+                MAX_TOOL_ROUND_OPTIONS.forEach { option ->
+                    DropdownMenuItem(
+                        text = { Text(if (option <= 0) noneLabel else option.toString()) },
+                        onClick = {
+                            expanded = false
+                            onChange(option)
+                        },
+                    )
+                }
+            }
+        }
+    }
 }

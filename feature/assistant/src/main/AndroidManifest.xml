@@ -4,6 +4,10 @@
         <activity
             android:name=".AssistActivity"
             android:exported="true"
+            android:taskAffinity=""
+            android:launchMode="singleInstance"
+            android:excludeFromRecents="true"
+            android:noHistory="true"
             android:theme="@style/Theme.OAssist.Assist"
             android:windowSoftInputMode="adjustResize">
             <intent-filter>

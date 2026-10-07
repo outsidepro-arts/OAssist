@@ -143,6 +143,9 @@
     <string name="tool_ask">Ask before executing</string>
     <string name="tools_reset">Reset tool settings</string>
     <string name="tools_reset_subtitle">Restore default enablement and confirmations</string>
+    <string name="tools_max_rounds">Agent action limit</string>
+    <string name="tools_max_rounds_subtitle">How many tool-call rounds the agent may run per turn. With no limit, only the agent itself ends the turn</string>
+    <string name="tools_max_rounds_none">No limit</string>
     <string name="tools_reset_done">Tool settings reset</string>
     <string name="tool_unknown_desc">Agent action</string>
     <string name="tool_app_launch_title">Launch apps</string>

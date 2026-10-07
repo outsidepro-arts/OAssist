@@ -5,6 +5,7 @@ import androidx.datastore.core.DataStore
 import androidx.datastore.preferences.core.Preferences
 import androidx.datastore.preferences.core.booleanPreferencesKey
 import androidx.datastore.preferences.core.edit
+import androidx.datastore.preferences.core.intPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.first
@@ -31,7 +32,11 @@ class ToolConfigStore(private val context: Context) {
                     askOverrides[name.removePrefix(PREFIX_ASK)] = value
             }
         }
-        ToolPreferences(disabled = disabled, askOverrides = askOverrides)
+        ToolPreferences(
+            disabled = disabled,
+            askOverrides = askOverrides,
+            maxToolRounds = prefs[KEY_MAX_TOOL_ROUNDS] ?: ToolPreferences.DEFAULT_MAX_TOOL_ROUNDS,
+        )
     }
 
     suspend fun snapshot(): ToolPreferences = preferences.first()
@@ -48,11 +53,29 @@ class ToolConfigStore(private val context: Context) {
         }
     }
 
+    suspend fun setMaxToolRounds(rounds: Int) {
+        context.toolConfigDataStore.edit { prefs ->
+            prefs[KEY_MAX_TOOL_ROUNDS] = normalizeMaxToolRounds(rounds)
+        }
+    }
+
+    /** 0 — без лимита; остальное — в границах [MIN_MAX_TOOL_ROUNDS]..[MAX_MAX_TOOL_ROUNDS]. */
+    private fun normalizeMaxToolRounds(rounds: Int): Int =
+        if (rounds <= ToolPreferences.UNLIMITED_MAX_TOOL_ROUNDS) {
+            ToolPreferences.UNLIMITED_MAX_TOOL_ROUNDS
+        } else {
+            rounds.coerceIn(MIN_MAX_TOOL_ROUNDS, MAX_MAX_TOOL_ROUNDS)
+        }
+
     /** Сбросить всё к дефолтам: убрать записи включения и переопределения «спрашивать». */
     suspend fun resetAll() {
         context.toolConfigDataStore.edit { prefs ->
             prefs.asMap().keys
-                .filter { it.name.startsWith(PREFIX_ENABLED) || it.name.startsWith(PREFIX_ASK) }
+                .filter {
+                    it.name.startsWith(PREFIX_ENABLED) ||
+                        it.name.startsWith(PREFIX_ASK) ||
+                        it == KEY_MAX_TOOL_ROUNDS
+                }
                 .forEach { prefs.remove(it) }
         }
     }
@@ -65,11 +88,15 @@ class ToolConfigStore(private val context: Context) {
             prefs.askOverrides.forEach { (name, ask) ->
                 store[booleanPreferencesKey(PREFIX_ASK + name)] = ask
             }
+            store[KEY_MAX_TOOL_ROUNDS] = normalizeMaxToolRounds(prefs.maxToolRounds)
         }
     }
 
     companion object {
         private const val PREFIX_ENABLED = "tool.enabled."
         private const val PREFIX_ASK = "tool.ask."
+        private val KEY_MAX_TOOL_ROUNDS = intPreferencesKey("tool.max_rounds")
+        const val MIN_MAX_TOOL_ROUNDS = 1
+        const val MAX_MAX_TOOL_ROUNDS = 100
     }
 }

@@ -505,6 +505,7 @@ private fun OAssistApp(
                     tools = ru.outsideproarts.oassist.core.agent.ToolCatalog.descriptors(),
                     disabled = prefs.disabled,
                     askOverrides = prefs.askOverrides,
+                    maxToolRounds = prefs.maxToolRounds,
                     toolPermissions = toolPermissions,
                     missingPermissions = missingPermissions,
                     onToggleEnabled = { name, enabled ->
@@ -512,6 +513,9 @@ private fun OAssistApp(
                     },
                     onToggleAsk = { name, ask ->
                         scope.launch { graph.data.toolConfigs.setAskBefore(name, ask) }
+                    },
+                    onMaxToolRoundsChange = { rounds ->
+                        scope.launch { graph.data.toolConfigs.setMaxToolRounds(rounds) }
                     },
                     onGrantPermission = { permission ->
                         permLauncher.launch(arrayOf(permission))

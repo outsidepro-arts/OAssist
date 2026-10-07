@@ -31,6 +31,7 @@ class AgentLoop(
     val approvalController: ApprovalController = ApprovalController(),
     private val approvalPolicy: ApprovalPolicy = InMemoryApprovalPolicy(),
     private val events: AgentEvents? = null,
+    private val maxToolRounds: Int = ru.outsideproarts.oassist.core.model.ToolPreferences.DEFAULT_MAX_TOOL_ROUNDS,
 ) {
 
     /** Ответить на запрос подтверждения; `false` — такого ожидания нет. */
@@ -64,7 +65,9 @@ class AgentLoop(
             )
         } ?: emptyList()
 
-        repeat(MAX_TOOL_ROUNDS) {
+        var rounds = 0
+        while (maxToolRounds <= 0 || rounds < maxToolRounds) {
+            rounds++
             val toolCalls = mutableListOf<ChatChunk.ToolCall>()
             val contentSb = StringBuilder()
 
@@ -212,9 +215,5 @@ class AgentLoop(
             }
             ApprovalDecision.DENY -> ToolResult(false, "Отклонено пользователем")
         }
-    }
-
-    companion object {
-        private const val MAX_TOOL_ROUNDS = 5
     }
 }
