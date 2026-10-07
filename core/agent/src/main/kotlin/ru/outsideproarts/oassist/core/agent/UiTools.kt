@@ -23,7 +23,7 @@ class UiGetScreenTool(private val ui: UiActions) : Tool {
 
     override suspend fun execute(arguments: JsonObject): ToolResult {
         return ui.snapshot().fold(
-            onSuccess = { ToolResult(true, formatSnapshot(it)) },
+            onSuccess = { ToolResult(true, formatSnapshot(it.nodes, it.total, it.screenHeight, it.fromOwnWindow)) },
             onFailure = { ToolResult(false, it.message ?: "Нет снимка") },
         )
     }

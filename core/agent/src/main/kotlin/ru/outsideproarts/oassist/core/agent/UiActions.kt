@@ -36,9 +36,23 @@ class UiActions(
     }
 
     /** Скрыть наш оверлей на время координатного жеста: панель перехватывает тапы по приложению. */
-    private suspend fun <T> gestureThrough(block: suspend () -> T): T {
+    /** Скрытие оверлея на время [block]: захват жестов и снапшотов без перекрытия панелью. */
+    private suspend fun <T> gestureThrough(block: suspend () -> T): T = overlayHidden(block = block)
+
+    /**
+     * Панель ассистента скрыта на время [block]; [settleMs] — ожидание обновления
+     * a11y-дерева после скрытия (иначе узлы под панелью перечитываются со старым состоянием).
+     */
+    private suspend fun <T> overlayHidden(settleMs: Long = 0L, block: suspend () -> T): T {
         val control = overlayControl()
-        return if (control != null) control.withOverlayHidden(block) else block()
+        return if (control != null) {
+            control.withOverlayHidden {
+                if (settleMs > 0) kotlinx.coroutines.delay(settleMs)
+                block()
+            }
+        } else {
+            block()
+        }
     }
 
     /**
@@ -46,8 +60,10 @@ class UiActions(
      * наш оверлей (панель ассистента), клавиатура и декор a11y мешают видеть приложение
      * под собой. Fallback — активное окно.
      */
+    private class RootPick(val root: AccessibilityNodeInfo?, val fromOwnWindow: Boolean)
+
     @Suppress("DEPRECATION")
-    private fun targetRoot(service: AccessibilityService): AccessibilityNodeInfo? {
+    private fun targetRoot(service: AccessibilityService): RootPick {
         val own = service.packageName
         val windows = service.windows
         val index = pickWindowIndex(
@@ -56,17 +72,27 @@ class UiActions(
             },
             own,
         )
-        return index?.let { windows[it].root } ?: service.rootInActiveWindow
+        if (index != null) return RootPick(windows[index].root, false)
+        val fallback = service.rootInActiveWindow
+        return RootPick(fallback, fallback?.packageName?.toString() == own)
     }
 
     /** Свежий снимок дерева активного окна. */
     @Suppress("DEPRECATION")
-    fun snapshot(): Result<List<UiNode>> {
+    suspend fun snapshot(): Result<UiSnapshotResult> = overlayHidden(settleMs = SNAPSHOT_SETTLE_MS) { snapshotDirect() }
+
+    @Suppress("DEPRECATION")
+    private fun snapshotDirect(): Result<UiSnapshotResult> {
         val service = serviceOrError().getOrElse { return Result.failure(it) }
-        val root = targetRoot(service)
+        val pick = targetRoot(service)
+        val root = pick.root
             ?: return Result.failure(IllegalStateException("Нет активного окна"))
         return try {
-            Result.success(collectNodes(root))
+            val walk = collectCandidates(root)
+            val screenHeight = runCatching { service.resources.displayMetrics.heightPixels }.getOrDefault(0)
+            val shown = selectPositions(walk.nodes, SHOW_NODES, screenHeight)
+                .mapIndexed { display, pos -> walk.nodes[pos].copy(index = display) }
+            Result.success(UiSnapshotResult(shown, walk.total, screenHeight, pick.fromOwnWindow))
         } finally {
             root.recycle()
         }
@@ -104,13 +130,13 @@ class UiActions(
         node.performAction(AccessibilityNodeInfo.ACTION_SET_TEXT, args)
     }
 
-    fun scroll(index: Int?, direction: String): ToolResult {
+    suspend fun scroll(index: Int?, direction: String): ToolResult {
         val forward = when (direction.lowercase()) {
             "down", "forward", "вниз" -> true
             "up", "backward", "вверх" -> false
             else -> return ToolResult(false, "Направление: down/up")
         }
-        val nodes = snapshot().getOrElse { return ToolResult(false, it.message ?: "Нет снимка") }
+        val nodes = snapshotDirect().map { it.nodes }.getOrElse { return ToolResult(false, it.message ?: "Нет снимка") }
         val target = if (index != null) {
             nodes.find { it.index == index }
                 ?: return ToolResult(false, "Узел №$index не найден")
@@ -198,7 +224,7 @@ class UiActions(
 
     /** Центр узла из свежего снимка — для фолбэка тапов. */
     private fun nodeCenter(index: Int): Pair<Int, Int>? {
-        val node = snapshot().getOrNull()?.find { it.index == index } ?: return null
+        val node = snapshotDirect().getOrNull()?.nodes?.find { it.index == index } ?: return null
         val b = node.bounds
         return ((b.left + b.right) / 2) to ((b.top + b.bottom) / 2)
     }
@@ -212,10 +238,12 @@ class UiActions(
     }
 
     /** Ждать появления текста на экране (опрос снимков, лимит [timeoutMs]). */
-    suspend fun waitForText(text: String, timeoutMs: Long): ToolResult {
+    suspend fun waitForText(text: String, timeoutMs: Long): ToolResult = overlayHidden { waitForTextLoop(text, timeoutMs) }
+
+    private suspend fun waitForTextLoop(text: String, timeoutMs: Long): ToolResult {
         val deadline = System.currentTimeMillis() + timeoutMs.coerceIn(1, MAX_WAIT_MS)
         while (true) {
-            val nodes = snapshot().getOrNull()
+            val nodes = snapshotDirect().getOrNull()?.nodes
             if (nodes != null && nodes.any { it.label?.contains(text, ignoreCase = true) == true }) {
                 return ToolResult(true, "Текст «$text» найден")
             }
@@ -239,10 +267,12 @@ class UiActions(
         action: (AccessibilityNodeInfo) -> Boolean,
     ): ToolResult {
         val service = serviceOrError().getOrElse { return ToolResult(false, it.message ?: "Сервис недоступен") }
-        val root = targetRoot(service)
+        val pick = targetRoot(service)
+        val root = pick.root
             ?: return ToolResult(false, "Нет активного окна")
+        val screenH = runCatching { service.resources.displayMetrics.heightPixels }.getOrDefault(0)
         return try {
-            val node = findByIndex(root, index)
+            val node = findByIndex(root, index, screenH)
                 ?: return ToolResult(false, "Узел №$index не найден")
             try {
                 if (action(node)) ToolResult(true, "Удалось $verb (узел №$index)")
@@ -255,12 +285,15 @@ class UiActions(
         }
     }
 
-    private fun collectNodes(root: AccessibilityNodeInfo): List<UiNode> {
+    private class Walk(val refs: List<AccessibilityNodeInfo>, val nodes: List<UiNode>, val total: Int)
+
+    private fun collectCandidates(root: AccessibilityNodeInfo): Walk {
+        val refs = mutableListOf<AccessibilityNodeInfo>()
         val out = mutableListOf<UiNode>()
         val queue = ArrayDeque<Pair<AccessibilityNodeInfo, Int>>()
         queue.add(root to 0)
-        var index = 0
-        while (queue.isNotEmpty() && out.size < MAX_NODES) {
+        var total = 0
+        while (queue.isNotEmpty()) {
             val (node, depth) = queue.removeFirst()
             val text = node.text?.toString()
             val desc = node.contentDescription?.toString()
@@ -268,61 +301,50 @@ class UiActions(
                 node.className?.toString() == "android.widget.EditText"
             val informative = !text.isNullOrBlank() || !desc.isNullOrBlank()
             if ((actionable || informative) && depth > 0) {
-                val bounds = Rect()
-                node.getBoundsInScreen(bounds)
-                out.add(
-                    UiNode(
-                        index = index++,
-                        className = node.className?.toString() ?: "View",
-                        text = text,
-                        contentDescription = desc,
-                        clickable = node.isClickable,
-                        editable = node.isEditable,
-                        scrollable = node.isScrollable,
-                        bounds = UiRect(bounds.left, bounds.top, bounds.right, bounds.bottom),
-                    ),
-                )
+                total++
+                if (out.size < MAX_CANDIDATES) {
+                    val bounds = Rect()
+                    node.getBoundsInScreen(bounds)
+                    refs.add(node)
+                    out.add(
+                        UiNode(
+                            index = out.size,
+                            className = node.className?.toString() ?: "View",
+                            text = text,
+                            contentDescription = desc,
+                            clickable = node.isClickable,
+                            editable = node.isEditable,
+                            scrollable = node.isScrollable,
+                            bounds = UiRect(bounds.left, bounds.top, bounds.right, bounds.bottom),
+                        ),
+                    )
+                }
             }
             if (depth < MAX_DEPTH) {
                 for (i in 0 until node.childCount) {
-                    // Дочерние ссылки живут до recycle корня; объём ограничен MAX_NODES.
+                    // Дочерние ссылки живут до recycle корня; объём ограничен MAX_CANDIDATES.
                     node.getChild(i)?.let { queue.add(it to depth + 1) }
                 }
             }
         }
-        return out
+        return Walk(refs, out, total)
     }
 
-    private fun findByIndex(root: AccessibilityNodeInfo, index: Int): AccessibilityNodeInfo? {
-        // Индексы соответствуют порядку collectNodes (BFS, те же фильтры).
-        val queue = ArrayDeque<Pair<AccessibilityNodeInfo, Int>>()
-        queue.add(root to 0)
-        var current = 0
-        while (queue.isNotEmpty() && current < MAX_NODES + index) {
-            val (node, depth) = queue.removeFirst()
-            val text = node.text?.toString()
-            val desc = node.contentDescription?.toString()
-            val actionable = node.isClickable || node.isEditable || node.isScrollable ||
-                node.className?.toString() == "android.widget.EditText"
-            val informative = !text.isNullOrBlank() || !desc.isNullOrBlank()
-            if ((actionable || informative) && depth > 0) {
-                if (current == index) return node
-                current++
-            }
-            if (depth < MAX_DEPTH) {
-                for (i in 0 until node.childCount) {
-                    node.getChild(i)?.let { queue.add(it to depth + 1) }
-                }
-            }
-        }
-        return null
+    private fun findByIndex(root: AccessibilityNodeInfo, index: Int, screenHeight: Int): AccessibilityNodeInfo? {
+        // Индексы соответствуют показанному снапшоту: тот же BFS + selectPositions.
+        val walk = collectCandidates(root)
+        val shown = selectPositions(walk.nodes, SHOW_NODES, screenHeight)
+        val pos = shown.getOrNull(index) ?: return null
+        return walk.refs[pos]
     }
 
     companion object {
         const val SERVICE_DISABLED_MESSAGE =
             "Сервис доступности OAssist выключен — включите его в системных настройках"
-        private const val MAX_NODES = 100
-        private const val MAX_DEPTH = 12
+        private const val SHOW_NODES = 250
+        private const val MAX_CANDIDATES = 1000
+        private const val MAX_DEPTH = 32
+        private const val SNAPSHOT_SETTLE_MS = 150L
         private const val GESTURE_TIMEOUT_MS = 5000L
         private const val MAX_WAIT_MS = 10000L
         private const val POLL_MS = 500L

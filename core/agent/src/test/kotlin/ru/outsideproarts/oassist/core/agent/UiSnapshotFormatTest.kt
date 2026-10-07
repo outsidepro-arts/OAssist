@@ -2,6 +2,7 @@ package ru.outsideproarts.oassist.core.agent
 
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
+import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class UiSnapshotFormatTest {
@@ -67,5 +68,37 @@ class UiSnapshotFormatTest {
         val rect = UiRect(100, 200, 300, 400)
         assertEquals(200, rect.centerX)
         assertEquals(300, rect.centerY)
+    }
+
+    @Test
+    fun format_truncationMarker_whenTotalExceedsShown() {
+        val nodes = listOf(
+            UiNode(0, "View", "x", null, true, false, false, UiRect(0, 0, 10, 10)),
+        )
+        val text = formatSnapshot(nodes, total = 42)
+        val lines = text.lines()
+        assertEquals(2, lines.size)
+        assertTrue(lines[0].contains("показано 1 из 42"))
+        assertTrue(lines[1].startsWith("[0]"))
+    }
+
+    @Test
+    fun format_header_screenAndOwnWindow() {
+        val nodes = listOf(
+            UiNode(0, "View", "x", null, true, false, false, UiRect(0, 0, 10, 10)),
+        )
+        val text = formatSnapshot(nodes, total = 1, screenHeight = 2400, fromOwnWindow = true)
+        val header = text.lines()[0]
+        assertTrue(header.contains("0..2400"))
+        assertTrue(header.contains("OAssist"))
+    }
+
+    @Test
+    fun format_noHeader_withoutFlags() {
+        val nodes = listOf(
+            UiNode(0, "View", "x", null, true, false, false, UiRect(0, 0, 10, 10)),
+        )
+        val text = formatSnapshot(nodes)
+        assertEquals(1, text.lines().size)
     }
 }
