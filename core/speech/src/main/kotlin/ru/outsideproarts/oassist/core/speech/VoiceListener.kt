@@ -4,8 +4,11 @@ import android.Manifest
 import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
+import android.media.AudioAttributes
+import android.media.AudioFocusRequest
 import android.media.AudioFormat
 import android.media.AudioRecord
+import android.media.AudioManager
 import android.media.MediaRecorder
 import android.os.Bundle
 import android.os.Handler
@@ -45,6 +48,36 @@ class VoiceListener(private val context: Context) {
     private var pendingRetry: Runnable? = null
     private var sttSession: SttSession? = null
 
+    /**
+     * Фокус на время слушания: GAIN_TRANSIENT — speech-контент (TalkBack) прерывает речь,
+     * плееры встают на паузу до отпускания. Тишина нужна распознаванию, а не нам —
+     * поэтому без MAY_DUCK.
+     */
+    private val listenFocusRequest: AudioFocusRequest by lazy {
+        AudioFocusRequest.Builder(AudioManager.AUDIOFOCUS_GAIN_TRANSIENT)
+            .setAudioAttributes(
+                AudioAttributes.Builder()
+                    .setUsage(AudioAttributes.USAGE_ASSISTANT)
+                    .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH)
+                    .build(),
+            )
+            .setWillPauseWhenDucked(false)
+            .build()
+    }
+
+    private val listenFocus = ListenFocusWindow(
+        requestFocus = {
+            runCatching {
+                context.getSystemService(AudioManager::class.java)?.requestAudioFocus(listenFocusRequest)
+            }
+        },
+        abandonFocus = {
+            runCatching {
+                context.getSystemService(AudioManager::class.java)?.abandonAudioFocusRequest(listenFocusRequest)
+            }
+        },
+    )
+
     /** Одна пользовательская сессия распознавания со всеми её попытками старта. */
     private class SttSession(
         val language: String,
@@ -69,10 +102,11 @@ class VoiceListener(private val context: Context) {
         }
         val startSession = SttSession(language, listener)
         sttSession = startSession
+        // Фокус берём до старта захвата и держим через все retry-попытки одной сессии.
+        listenFocus.open()
         val error = startSttAttempt(startSession, isFirst = true)
         if (error != null) {
-            sttSession = null
-            session.reset()
+            finishSttSession()
             return error
         }
         return null
@@ -180,6 +214,7 @@ class VoiceListener(private val context: Context) {
         sttSession = null
         session.reset()
         _state.value = CaptureState.Idle
+        listenFocus.close()
     }
 
     /** Попросить финал (придёт в onFinal). В покое — no-op. */

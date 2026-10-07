@@ -104,14 +104,15 @@ class SpeechOutput(
         .build()
 
     /**
-     * Ducking чужого звука на время озвучки: MAY_DUCK + forceDucking (даже у приложений
-     * без поддержки duck) и БЕЗ willPauseWhenDucked — плееры только убавляются, не встают.
+     * Ducking чужого звука на время озвучки: MAY_DUCK и БЕЗ willPauseWhenDucked — плееры
+     * только убавляются (стандартный auto-duck), не встают на паузу.
+     * setForceDucking здесь не работает: система чествует его только для
+     * USAGE_ASSISTANCE_ACCESSIBILITY из accessibility-сервиса.
      */
     private val focusRequest: AudioFocusRequest by lazy {
         AudioFocusRequest.Builder(AudioManager.AUDIOFOCUS_GAIN_TRANSIENT_MAY_DUCK)
             .setAudioAttributes(speechAudioAttributes)
             .setWillPauseWhenDucked(false)
-            .setForceDucking(true)
             .setOnAudioFocusChangeListener { }
             .build()
     }
