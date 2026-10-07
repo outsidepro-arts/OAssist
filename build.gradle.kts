@@ -6,3 +6,13 @@
     alias(libs.plugins.kotlin.serialization) apply false
     alias(libs.plugins.ksp) apply false
 }
+
+subprojects {
+    tasks.withType<JavaCompile>().configureEach {
+        options.setFork(false)
+    }
+    tasks.withType<Test>().configureEach {
+        maxParallelForks = 1
+        forkEvery = 0
+    }
+}

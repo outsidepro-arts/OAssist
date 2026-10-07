@@ -66,6 +66,27 @@ for /f "tokens=2 delims=," %i in ('tasklist /fi "imagename eq java.exe" /fo csv 
 - **Перед разрушительными операциями — проверить чужую активность:** `gradlew --status` + `tasklist /fi "imagename eq java.exe"`. Параллельный актор (IDE-синк, вторая сессия) + файловые локи = рецидив 2026-10-02 (чужие билды в логе демона за минуты до падения).
 - **Диагностика «висит ли билд» — по логу демона, а не по молчанию инструмента:** `C:\Users\<user>\.gradle\daemon\<gradle-ver>\daemon-<pid>.out.log`. Маркеры: `Received command: Build` (старт), `BUILD FAILED/SUCCESSFUL` (итог), `Finishing executing command` (результат отдан клиенту — дальше Gradle ни при чём, смотреть клиент/пайп/harness), `Stop ... not running a build` (демона остановил чужой `--stop`).
 
+## Сборка и тесты (Windows, минимизация JVM)
+
+- Синхронно разрешены только быстрые задачи: `:<module>:compileDebugKotlin`,
+  `:<module>:testDebugUnitTest`, таймаут ≤ 300000 мс.
+- Тяжёлые задачи (`assemble*`, `lint*`, полные прогоны) — **только** через
+  `tools/run-build.ps1 start|status|stop` (detached + polling). Никогда не запускать
+  их одним синхронным tool-call'ом.
+- Перед любой сборкой — `tools/run-build.ps1 clean-orphans` (убивает Gradle/Kotlin daemon'ы,
+  оставшиеся от предыдущих запусков, через `taskkill /T /F`).
+- `org.gradle.jvmargs` и `GRADLE_OPTS` (в `tools/run-*.ps1`) обязаны совпадать
+  **в точности** — только так сборка идёт в клиентском JVM без single-use daemon.
+  В составе строки обязательны `-Xms64m` (gradlew.bat добавляет
+  `DEFAULT_JVM_OPTS="-Xmx64m" "-Xms64m"`) и `--add-modules=ALL-DEFAULT`
+  (java.exe этого JDK инжектирует флаг в каждый запуск). Меняете одно —
+  меняйте оба, иначе вернётся форк single-use daemon и сироты при kill.
+- `org.gradle.internal.instrumentation.agent=false` — обязателен (клиент gradlew
+  запущен без `-javaagent`, иначе mismatch agent-статуса форкает single-use daemon).
+- `kotlin.compiler.execution.strategy=in-process` — обязателен.
+- Скрипты в `tools/` пишем ASCII-only: Windows PowerShell 5.1 читает `.ps1`
+  без BOM как ANSI, em-dash/кириллица ломают парсер.
+
 ## Архитектура
 
 Мультипроект Gradle, ручной DI (`AppGraph`) — **без** Hilt/Koin/аннотаций-процессоров, кроме Room (KSP). Ниже — целевой состав; фактически созданные модули на текущий milestone перечислены в `MEMORY.md`.
