@@ -26,6 +26,7 @@ import java.util.ArrayDeque
 class UiActions(
     private val serviceProvider: () -> AccessibilityService?,
     private val privProvider: suspend () -> PrivExecutor = { NoopExecutor() },
+    private val overlayControl: () -> OverlayControl? = { null },
 ) {
 
     private fun serviceOrError(): Result<AccessibilityService> {
@@ -34,11 +35,35 @@ class UiActions(
         return Result.success(service)
     }
 
+    /** Скрыть наш оверлей на время координатного жеста: панель перехватывает тапы по приложению. */
+    private suspend fun <T> gestureThrough(block: suspend () -> T): T {
+        val control = overlayControl()
+        return if (control != null) control.withOverlayHidden(block) else block()
+    }
+
+    /**
+     * Корень дерева интерфейса: верхнее (по слою) интерактивное окно, кроме игнорируемых —
+     * наш оверлей (панель ассистента), клавиатура и декор a11y мешают видеть приложение
+     * под собой. Fallback — активное окно.
+     */
+    @Suppress("DEPRECATION")
+    private fun targetRoot(service: AccessibilityService): AccessibilityNodeInfo? {
+        val own = service.packageName
+        val windows = service.windows
+        val index = pickWindowIndex(
+            windows.map {
+                UiWindowState(it.root?.packageName?.toString(), it.type, it.isActive, it.isFocused)
+            },
+            own,
+        )
+        return index?.let { windows[it].root } ?: service.rootInActiveWindow
+    }
+
     /** Свежий снимок дерева активного окна. */
     @Suppress("DEPRECATION")
     fun snapshot(): Result<List<UiNode>> {
         val service = serviceOrError().getOrElse { return Result.failure(it) }
-        val root = service.rootInActiveWindow
+        val root = targetRoot(service)
             ?: return Result.failure(IllegalStateException("Нет активного окна"))
         return try {
             Result.success(collectNodes(root))
@@ -52,7 +77,7 @@ class UiActions(
             node.isClickable && node.performAction(AccessibilityNodeInfo.ACTION_CLICK)
         }
         if (direct.success) return direct
-        return tapNodeCenter(index, "нажать")
+        return gestureThrough { tapNodeCenter(index, "нажать") }
     }
 
     suspend fun longClick(index: Int): ToolResult {
@@ -61,11 +86,13 @@ class UiActions(
         }
         if (direct.success) return direct
         val center = nodeCenter(index) ?: return ToolResult(false, "Узел №$index не найден")
-        return privProvider().inputSwipe(center.first, center.second, center.first, center.second, 800)
-            .fold(
+        return gestureThrough {
+            privProvider().inputSwipe(center.first, center.second, center.first, center.second, 800)
+                .fold(
                 onSuccess = { ToolResult(true, "Удалось долго нажать (узел №$index, фолбэк input)") },
                 onFailure = { ToolResult(false, "Не удалось долго нажать (узел №$index): ${it.message}") },
-            )
+                )
+        }
     }
 
     fun setText(index: Int, text: String): ToolResult = performOnNode(index, "ввести текст") { node ->
@@ -122,7 +149,10 @@ class UiActions(
         )
     }
 
-    suspend fun swipe(fromX: Int, fromY: Int, toX: Int, toY: Int, durationMs: Long): ToolResult {
+    suspend fun swipe(fromX: Int, fromY: Int, toX: Int, toY: Int, durationMs: Long): ToolResult =
+        gestureThrough { swipeInternal(fromX, fromY, toX, toY, durationMs) }
+
+    private suspend fun swipeInternal(fromX: Int, fromY: Int, toX: Int, toY: Int, durationMs: Long): ToolResult {
         val service = serviceOrError().getOrElse { return ToolResult(false, it.message ?: "Сервис недоступен") }
         val path = Path().apply {
             moveTo(fromX.toFloat(), fromY.toFloat())
@@ -209,7 +239,7 @@ class UiActions(
         action: (AccessibilityNodeInfo) -> Boolean,
     ): ToolResult {
         val service = serviceOrError().getOrElse { return ToolResult(false, it.message ?: "Сервис недоступен") }
-        val root = service.rootInActiveWindow
+        val root = targetRoot(service)
             ?: return ToolResult(false, "Нет активного окна")
         return try {
             val node = findByIndex(root, index)

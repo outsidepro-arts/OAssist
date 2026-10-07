@@ -33,6 +33,7 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import ru.outsideproarts.oassist.core.agent.AgentFactory
 import ru.outsideproarts.oassist.core.agent.AgentSession
 import ru.outsideproarts.oassist.core.agent.AgentToolEvent
@@ -90,6 +91,37 @@ class AssistantOverlayService : LifecycleService(), SavedStateRegistryOwner {
     private val voice get() = VoiceHandle.get()
     private val speech get() = SpeechHandle.get()
 
+    private val overlayHideMutex = kotlinx.coroutines.sync.Mutex()
+
+    /** Скрытие панели на время координатных жестов агента: тапы должны доставаться приложению. */
+    private val overlayControlImpl = object : ru.outsideproarts.oassist.core.agent.OverlayControl {
+        override suspend fun <T> withOverlayHidden(block: suspend () -> T): T {
+            overlayHideMutex.lock()
+            try {
+                withContext(Dispatchers.Main) { setOverlayVisible(false) }
+                return block()
+            } finally {
+                withContext(kotlinx.coroutines.NonCancellable + Dispatchers.Main) {
+                    setOverlayVisible(true)
+                }
+                overlayHideMutex.unlock()
+            }
+        }
+    }
+
+    private fun setOverlayVisible(visible: Boolean) {
+        val view = overlayView ?: return
+        val lp = view.layoutParams as? WindowManager.LayoutParams ?: return
+        if (visible) {
+            lp.flags = lp.flags and WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE.inv()
+            view.visibility = android.view.View.VISIBLE
+        } else {
+            lp.flags = lp.flags or WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE
+            view.visibility = android.view.View.INVISIBLE
+        }
+        runCatching { windowManager.updateViewLayout(view, lp) }
+    }
+
     override fun onBind(intent: Intent): IBinder? {
         super.onBind(intent)
         return null
@@ -100,6 +132,7 @@ class AssistantOverlayService : LifecycleService(), SavedStateRegistryOwner {
         savedStateRegistryController.performRestore(null)
         super.onCreate()
         ensureChannel()
+        ru.outsideproarts.oassist.core.agent.OverlayControl.register(overlayControlImpl)
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
@@ -124,6 +157,7 @@ class AssistantOverlayService : LifecycleService(), SavedStateRegistryOwner {
     }
 
     override fun onDestroy() {
+        ru.outsideproarts.oassist.core.agent.OverlayControl.unregister(overlayControlImpl)
         execute(voiceFlow.onClose())
         mediaRouter?.release()
         mediaRouter = null

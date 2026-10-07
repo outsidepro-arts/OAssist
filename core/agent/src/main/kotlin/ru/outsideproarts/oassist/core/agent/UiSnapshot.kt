@@ -1,5 +1,45 @@
 package ru.outsideproarts.oassist.core.agent
 
+import android.view.accessibility.AccessibilityWindowInfo
+
+/**
+ * Окна, которые не должны попадать в снимок интерфейса для агента: клавиатура,
+ * декор экранных чтецов и **наш собственный оверлей** (панель ассистента мешает
+ * видеть и трогать приложение под собой). Activity-окна собственного пакета
+ * остаются — агент может работать и с нашим UI.
+ */
+fun isIgnorableWindow(
+    windowPackage: String?,
+    windowType: Int,
+    ownPackage: String,
+): Boolean {
+    if (windowType == AccessibilityWindowInfo.TYPE_INPUT_METHOD) return true
+    if (windowType == AccessibilityWindowInfo.TYPE_ACCESSIBILITY_OVERLAY) return true
+    return windowPackage == ownPackage && windowType != AccessibilityWindowInfo.TYPE_APPLICATION
+}
+
+/** Состояние окна для выбора цели снимка (без Android-типов в логике — тестируется на JVM). */
+data class UiWindowState(
+    val packageName: String?,
+    val type: Int,
+    val active: Boolean,
+    val focused: Boolean,
+)
+
+/**
+ * Выбор окна для снимка интерфейса: активное/фокусное (кроме игнорируемых), иначе — верхнее
+ * окно приложения. Системная хромировка (статус-бар/навбар) целью не становится вовсе:
+ * её слой выше приложения, и по одному слою она всегда выигрывала бы. null — вызывающий
+ * фолбэчит на активное окно.
+ */
+fun pickWindowIndex(windows: List<UiWindowState>, ownPackage: String): Int? {
+    val candidates = windows.indices.filterNot {
+        isIgnorableWindow(windows[it].packageName, windows[it].type, ownPackage)
+    }
+    return candidates.firstOrNull { windows[it].active || windows[it].focused }
+        ?: candidates.firstOrNull { windows[it].type == AccessibilityWindowInfo.TYPE_APPLICATION }
+}
+
 /**
  * Один узел снимка экрана. Индексы стабильны в пределах одного снимка;
  * инструменты перечитывают снимок перед действием (узлы протухают).
