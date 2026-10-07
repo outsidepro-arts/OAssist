@@ -1,5 +1,8 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
+    <string name="assistant_session_channel">Assistant session</string>
+    <string name="assistant_reply_action">Reply</string>
+    <string name="assistant_reply_hint">Message</string>
     <string name="assistant_title">Assistant</string>
     <string name="assistant_empty_title">Assistant is not set up yet</string>
     <string name="assistant_empty_body">Make OAssist the default assistant and pick a model in Settings.</string>

@@ -99,6 +99,7 @@ fun ModeConfigScreen(
     var autoClose by remember { mutableStateOf(config.assistant?.autoClose ?: true) }
     var attachScreenshot by remember { mutableStateOf(config.assistant?.attachScreenshot ?: true) }
     var continueDialog by remember { mutableStateOf(config.assistant?.continueDialog ?: false) }
+    var showOverlay by remember { mutableStateOf(config.assistant?.showOverlay ?: true) }
     var sharedAction by remember { mutableStateOf(config.share?.sharedContentAction ?: "") }
     var showInChat by remember { mutableStateOf(config.share?.showInChat ?: true) }
     val baseTts = config.effectiveTts()
@@ -131,6 +132,7 @@ fun ModeConfigScreen(
         autoClose = config.assistant?.autoClose ?: true
         attachScreenshot = config.assistant?.attachScreenshot ?: true
         continueDialog = config.assistant?.continueDialog ?: false
+        showOverlay = config.assistant?.showOverlay ?: true
         sharedAction = config.share?.sharedContentAction ?: ""
         showInChat = config.share?.showInChat ?: true
         val tts = config.effectiveTts()
@@ -367,6 +369,13 @@ fun ModeConfigScreen(
                     onState = onState,
                     offState = offState,
                 )
+                ModeSwitch(
+                    title = stringResource(R.string.mode_assistant_show_overlay),
+                    checked = showOverlay,
+                    onCheckedChange = { showOverlay = it },
+                    onState = onState,
+                    offState = offState,
+                )
             }
             if (mode == AssistMode.SHARE) {
                 OAssistSectionHeading(text = stringResource(R.string.mode_share_extras))
@@ -442,6 +451,7 @@ fun ModeConfigScreen(
                                     autoClose = autoClose,
                                     attachScreenshot = attachScreenshot,
                                     continueDialog = continueDialog,
+                                    showOverlay = showOverlay,
                                 )
                             } else {
                                 config.assistant

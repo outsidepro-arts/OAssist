@@ -54,7 +54,14 @@ class OAssistVoiceInteractionSession(
      * приложения вообще не трогается; исключение FGS-старта откатывает на трамплин.
      */
     private fun startOverlay(screenContext: String?): Boolean {
-        if (!Settings.canDrawOverlays(context)) return false
+        val showOverlay = kotlinx.coroutines.runBlocking {
+            runCatching {
+                ru.outsideproarts.oassist.core.agent.AgentFactory.get()
+                    .modeConfig(ru.outsideproarts.oassist.core.model.AssistMode.ASSISTANT)
+                    .assistant?.showOverlay ?: true
+            }.getOrDefault(true)
+        }
+        if (showOverlay && !Settings.canDrawOverlays(context)) return false
         if (context.checkSelfPermission(Manifest.permission.RECORD_AUDIO) !=
             PackageManager.PERMISSION_GRANTED
         ) {

@@ -27,6 +27,11 @@ data class AssistantExtras(
     val attachScreenshot: Boolean = true,
     /** Продолжать диалог автоматически: после озвучки ответа снова включать микрофон. */
     val continueDialog: Boolean = false,
+    /**
+     * Показывать панель ассистента поверх экрана; false — режим уведомления:
+     * окно не создаётся, сессия живёт в уведомлении (приложения не перекрываются).
+     */
+    val showOverlay: Boolean = true,
 )
 
 /** Дополнения режима SHARE. */

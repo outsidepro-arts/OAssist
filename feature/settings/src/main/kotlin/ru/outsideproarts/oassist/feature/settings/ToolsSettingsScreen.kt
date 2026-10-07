@@ -267,6 +267,7 @@ private fun toolTitle(name: String): String = when (name) {
     "volume_set" -> stringResource(R.string.tool_volume_set_title)
     "dnd_set" -> stringResource(R.string.tool_dnd_set_title)
     "brightness_set" -> stringResource(R.string.tool_brightness_set_title)
+    "bye" -> stringResource(R.string.tool_bye_title)
     else -> name
 }
 
@@ -316,6 +317,7 @@ private fun toolDescription(name: String): String = when (name) {
     "volume_set" -> stringResource(R.string.tool_volume_set_desc)
     "dnd_set" -> stringResource(R.string.tool_dnd_set_desc)
     "brightness_set" -> stringResource(R.string.tool_brightness_set_desc)
+    "bye" -> stringResource(R.string.tool_bye_desc)
     else -> stringResource(R.string.tool_unknown_desc)
 }
 

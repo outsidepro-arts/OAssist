@@ -223,6 +223,8 @@
     <string name="tool_volume_set_desc">Громкость потоков: музыка, звонок, будильник</string>
     <string name="tool_dnd_set_title">Не беспокоить</string>
     <string name="tool_dnd_set_desc">Режим «Не беспокоить» (нужен спецдоступ)</string>
+    <string name="tool_bye_title">Завершение диалога</string>
+    <string name="tool_bye_desc">Агент завершает сессию ассистента, когда пользователь прощается, благодарит или ясно даёт понять, что диалог окончен</string>
     <string name="tool_brightness_set_title">Яркость экрана</string>
     <string name="tool_brightness_set_desc">Яркость в ручном режиме (нужен спецдоступ)</string>
     <string name="perm_microphone">Микрофон</string>
@@ -300,6 +302,7 @@
     <string name="mode_assistant_autospeak">Озвучивать ответы</string>
     <string name="mode_assistant_autoclose">Закрывать панель после ответа</string>
     <string name="mode_assistant_screenshot">Прикреплять контекст экрана</string>
+    <string name="mode_assistant_show_overlay">Показывать панель поверх экрана</string>
     <string name="mode_assistant_continue_dialog">Продолжать диалог автоматически</string>
     <string name="mode_share_extras">Поведение отправки</string>
     <string name="mode_share_action">Что делать с контентом</string>

@@ -1,5 +1,8 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
+    <string name="assistant_session_channel">Сессия ассистента</string>
+    <string name="assistant_reply_action">Ответить</string>
+    <string name="assistant_reply_hint">Сообщение</string>
     <string name="assistant_title">Ассистент</string>
     <string name="assistant_empty_title">Ассистент пока не настроен</string>
     <string name="assistant_empty_body">Сделайте OAssist ассистентом по умолчанию и выберите модель в Настройках.</string>

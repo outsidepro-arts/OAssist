@@ -68,6 +68,7 @@ object ToolCatalog {
         ToolDescriptor("volume_set", ActionRisk.ASK),
         ToolDescriptor("dnd_set", ActionRisk.ASK),
         ToolDescriptor("brightness_set", ActionRisk.ASK),
+        ToolDescriptor("bye", ActionRisk.AUTO),
     )
 
     fun createTools(
@@ -125,6 +126,7 @@ object ToolCatalog {
         ShellExecTool(priv),
         ShellGetSettingTool(priv),
         ShellPutSettingTool(priv),
+        ByeTool(),
     )
 
     fun createRegistry(

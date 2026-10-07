@@ -5,6 +5,7 @@ import android.annotation.SuppressLint
 import android.app.Notification
 import android.app.NotificationChannel
 import android.app.NotificationManager
+import android.app.RemoteInput
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.content.pm.ServiceInfo
@@ -87,6 +88,10 @@ class AssistantOverlayService : LifecycleService(), SavedStateRegistryOwner {
 
     private var sttLanguage: String = "ru-RU"
     private var continueDialog: Boolean = false
+    private var showOverlay: Boolean = true
+    private var sessionActive = false
+    private var pendingBye = false
+    private var lastNotifAt = 0L
 
     private val voice get() = VoiceHandle.get()
     private val speech get() = SpeechHandle.get()
@@ -137,17 +142,35 @@ class AssistantOverlayService : LifecycleService(), SavedStateRegistryOwner {
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         super.onStartCommand(intent, flags, startId)
+        kotlinx.coroutines.runBlocking { loadModeConfig() }
         startForegroundCompat()
+        when (intent?.getStringExtra(EXTRA_CMD)) {
+            CMD_MIC -> {
+                execute(voiceFlow.onPlayPause())
+                return START_NOT_STICKY
+            }
+            CMD_CLOSE -> {
+                stopSelf()
+                return START_NOT_STICKY
+            }
+            CMD_REPLY -> {
+                val text = android.app.RemoteInput.getResultsFromIntent(intent)
+                    ?.getCharSequence(EXTRA_REPLY)?.toString()
+                if (!text.isNullOrBlank()) execute(voiceFlow.onUserSubmit(text))
+                return START_NOT_STICKY
+            }
+        }
         val session = AssistSessionStore.getOrCreate()
         intent?.getStringExtra(EXTRA_SCREEN_CONTEXT)?.let { session.screenContext = it }
-        serviceScope.launch { loadModeConfig() }
-        val effects = if (overlayView == null) {
-            if (!Settings.canDrawOverlays(this)) {
+        val effects = if (!sessionActive) {
+            if (showOverlay && !Settings.canDrawOverlays(this)) {
                 hintText = getString(R.string.assistant_no_overlay)
+                refreshSessionNotification(force = true)
                 return START_NOT_STICKY
             }
             mediaRouter = MediaButtonRouter(this) { execute(voiceFlow.onPlayPause()) }.also { it.start() }
-            addOverlay()
+            if (showOverlay) addOverlay()
+            sessionActive = true
             voiceFlow.onActivate()
         } else {
             voiceFlow.onReactivate()
@@ -189,9 +212,9 @@ class AssistantOverlayService : LifecycleService(), SavedStateRegistryOwner {
             } else {
                 ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE
             }
-            startForeground(NOTIFICATION_ID, buildNotification(), type)
+            startForeground(NOTIFICATION_ID, activeNotification(), type)
         } else {
-            startForeground(NOTIFICATION_ID, buildNotification())
+            startForeground(NOTIFICATION_ID, activeNotification())
         }
     }
 
@@ -206,6 +229,18 @@ class AssistantOverlayService : LifecycleService(), SavedStateRegistryOwner {
                 ),
             )
         }
+        if (manager.getNotificationChannel(SESSION_CHANNEL_ID) == null) {
+            manager.createNotificationChannel(
+                NotificationChannel(
+                    SESSION_CHANNEL_ID,
+                    getString(R.string.assistant_session_channel),
+                    NotificationManager.IMPORTANCE_DEFAULT,
+                ).apply {
+                    setSound(null, null)
+                    enableVibration(false)
+                },
+            )
+        }
     }
 
     private fun buildNotification(): Notification =
@@ -215,6 +250,71 @@ class AssistantOverlayService : LifecycleService(), SavedStateRegistryOwner {
             .setSmallIcon(android.R.drawable.stat_sys_download)
             .setOngoing(true)
             .build()
+
+    private fun activeNotification(): Notification =
+        if (showOverlay) buildNotification() else buildSessionNotification()
+
+    private fun buildSessionNotification(): Notification {
+        val title = when {
+            listening -> getString(R.string.assistant_mic_state_on)
+            isStreaming -> getString(R.string.assistant_pill_thinking)
+            else -> getString(R.string.assistant_title)
+        }
+        val sttPreviewText = sttPreview.takeIf { it.isNotBlank() }
+        val text = sttPreviewText ?: answer.ifBlank { hintText ?: getString(R.string.assistant_fgs_text) }
+        val micAction = Notification.Action.Builder(
+            android.R.drawable.ic_btn_speak_now,
+            getString(R.string.assistant_mic),
+            commandIntent(CMD_MIC),
+        ).build()
+        val replyAction = Notification.Action.Builder(
+            android.R.drawable.ic_menu_send,
+            getString(R.string.assistant_reply_action),
+            commandIntent(CMD_REPLY, mutable = true),
+        ).addRemoteInput(
+            RemoteInput.Builder(EXTRA_REPLY)
+                .setLabel(getString(R.string.assistant_reply_hint))
+                .build(),
+        ).setAllowGeneratedReplies(true).build()
+        val closeAction = Notification.Action.Builder(
+            android.R.drawable.ic_menu_close_clear_cancel,
+            getString(R.string.assistant_close),
+            commandIntent(CMD_CLOSE),
+        ).build()
+        return Notification.Builder(this, SESSION_CHANNEL_ID)
+            .setContentTitle(title)
+            .setContentText(text)
+            .setStyle(Notification.BigTextStyle().bigText(text))
+            .setSmallIcon(android.R.drawable.stat_sys_download)
+            .setOngoing(true)
+            .addAction(micAction)
+            .addAction(replyAction)
+            .addAction(closeAction)
+            .build()
+    }
+
+    private fun commandIntent(cmd: String, mutable: Boolean = false): android.app.PendingIntent {
+        val intent = Intent(this, javaClass).putExtra(EXTRA_CMD, cmd)
+        val flags = if (mutable) {
+            android.app.PendingIntent.FLAG_UPDATE_CURRENT or android.app.PendingIntent.FLAG_MUTABLE
+        } else {
+            android.app.PendingIntent.FLAG_UPDATE_CURRENT or android.app.PendingIntent.FLAG_IMMUTABLE
+        }
+        return android.app.PendingIntent.getService(this, cmd.hashCode(), intent, flags)
+    }
+
+    /** Обновление сессионного уведомления в режиме без оверлея; [force] — мимо троттла. */
+    @SuppressLint("NotificationPermission")
+    private fun refreshSessionNotification(force: Boolean = false) {
+        if (showOverlay) return
+        val now = System.currentTimeMillis()
+        if (!force && now - lastNotifAt < NOTIF_MIN_INTERVAL_MS) return
+        lastNotifAt = now
+        runCatching {
+            getSystemService(NotificationManager::class.java)
+                ?.notify(NOTIFICATION_ID, buildSessionNotification())
+        }
+    }
 
     private fun execute(effects: List<AssistVoiceEffect>) {
         for (effect in effects) {
@@ -244,11 +344,13 @@ class AssistantOverlayService : LifecycleService(), SavedStateRegistryOwner {
             if (handle == null || !handle.isSttAvailable()) {
                 hintText = getString(R.string.assistant_no_recognizer)
                 voiceFlow.onSttStartFailed()
+                refreshSessionNotification(force = true)
                 return@launch
             }
             if (checkSelfPermission(Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) {
                 hintText = getString(R.string.assistant_mic_denied)
                 voiceFlow.onSttStartFailed()
+                refreshSessionNotification(force = true)
                 return@launch
             }
             hintText = null
@@ -261,6 +363,7 @@ class AssistantOverlayService : LifecycleService(), SavedStateRegistryOwner {
             } else {
                 listening = true
             }
+            refreshSessionNotification(force = true)
         }
     }
 
@@ -268,11 +371,13 @@ class AssistantOverlayService : LifecycleService(), SavedStateRegistryOwner {
         override fun onPartial(text: String) {
             sttPreview = text
             voiceFlow.onSttPartial(text)
+            refreshSessionNotification()
         }
 
         override fun onFinal(text: String) {
             sttPreview = ""
             listening = false
+            refreshSessionNotification(force = true)
             execute(voiceFlow.onSttFinal(text))
         }
 
@@ -287,6 +392,7 @@ class AssistantOverlayService : LifecycleService(), SavedStateRegistryOwner {
                 -> getString(R.string.assistant_mic_error)
             }
             voiceFlow.onSttStartFailed()
+            refreshSessionNotification(force = true)
         }
     }
 
@@ -301,6 +407,7 @@ class AssistantOverlayService : LifecycleService(), SavedStateRegistryOwner {
     private fun startTurn(text: String) {
         val session = AssistSessionStore.getOrCreate()
         isStreaming = true
+        pendingBye = false
         answer = ""
         thought = ""
         toolEvents.clear()
@@ -321,7 +428,8 @@ class AssistantOverlayService : LifecycleService(), SavedStateRegistryOwner {
                     hintText = getString(R.string.assistant_no_provider)
                     return@launch
                 }
-                continueDialog = config.assistant?.continueDialog ?: false
+        continueDialog = config.assistant?.continueDialog ?: false
+        showOverlay = config.assistant?.showOverlay ?: true
                 val autoSpeak = config.assistant?.autoSpeak ?: true
                 val tts = config.effectiveTts()
                 speech?.applyTts(tts)
@@ -365,9 +473,12 @@ class AssistantOverlayService : LifecycleService(), SavedStateRegistryOwner {
                                 answer = answerSb.toString()
                                 answerSpeaker.onText(answerSb.toString(), false)
                             }
+                            refreshSessionNotification()
                         }
                         is ChatChunk.ToolCall -> {
+                            if (chunk.name == BYE_TOOL_NAME) pendingBye = true
                             toolEvents.add(AgentToolEvent(name = chunk.name))
+                            refreshSessionNotification()
                         }
                         is ChatChunk.ToolResult -> {
                             val pending = toolEvents.indexOfLast {
@@ -387,6 +498,7 @@ class AssistantOverlayService : LifecycleService(), SavedStateRegistryOwner {
                         is ChatChunk.Finish -> {
                             thoughtSpeaker.onFinish(thoughtSb.toString())
                             answerSpeaker.onFinish(answerSb.toString())
+                            refreshSessionNotification(force = true)
                         }
                     }
                 }
@@ -394,6 +506,11 @@ class AssistantOverlayService : LifecycleService(), SavedStateRegistryOwner {
                     hintText = error.userMessage(this@AssistantOverlayService)
                 }
                 speech?.speaking?.first { !it }
+                refreshSessionNotification(force = true)
+                if (pendingBye) {
+                    stopSelf()
+                    return@launch
+                }
                 execute(voiceFlow.onTurnFinished(continueDialog))
             } finally {
                 isStreaming = false
@@ -488,6 +605,14 @@ class AssistantOverlayService : LifecycleService(), SavedStateRegistryOwner {
     companion object {
         const val EXTRA_SCREEN_CONTEXT = "screen_context"
         private const val CHANNEL_ID = "oassist_overlay"
+        private const val SESSION_CHANNEL_ID = "oassist_session"
         private const val NOTIFICATION_ID = 0x0A52
+        private const val NOTIF_MIN_INTERVAL_MS = 500L
+        const val EXTRA_CMD = "cmd"
+        const val EXTRA_REPLY = "reply_text"
+        const val CMD_MIC = "mic"
+        const val CMD_CLOSE = "close"
+        const val CMD_REPLY = "reply"
+        private const val BYE_TOOL_NAME = "bye"
     }
 }

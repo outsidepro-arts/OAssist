@@ -201,6 +201,24 @@ class ProviderConfigCodecTest {
     }
 
     @Test
+    fun modeConfig_showOverlay_roundTripAndLegacyDefault() {
+        val config = ModeConfig(
+            mode = AssistMode.ASSISTANT,
+            assistant = AssistantExtras(showOverlay = false),
+        )
+
+        val decoded = json.decodeFromString<ModeConfig>(json.encodeToString(config))
+
+        assertEquals(config, decoded)
+        assertEquals(false, decoded.assistant?.showOverlay)
+
+        val legacy = json.decodeFromString<ModeConfig>(
+            """{"mode":"ASSISTANT","assistant":{"autoSpeak":false,"autoClose":true,"attachScreenshot":true}}""",
+        )
+        assertEquals(true, legacy.assistant?.showOverlay)
+    }
+
+    @Test
     fun modelCatalog_roundTrip() {
         val catalog = ModelCatalog(
             providerId = "p1",

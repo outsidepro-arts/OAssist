@@ -19,13 +19,21 @@ import androidx.core.net.toUri
 class AssistActivity : AppCompatActivity() {
 
     private var screenContext: String? = null
+    private var overlayNeeded = true
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         screenContext = extractScreenContext(intent)
             ?: intent?.getStringExtra(AssistantOverlayService.EXTRA_SCREEN_CONTEXT)
+        overlayNeeded = kotlinx.coroutines.runBlocking {
+            runCatching {
+                ru.outsideproarts.oassist.core.agent.AgentFactory.get()
+                    .modeConfig(ru.outsideproarts.oassist.core.model.AssistMode.ASSISTANT)
+                    .assistant?.showOverlay ?: true
+            }.getOrDefault(true)
+        }
 
-        if (!Settings.canDrawOverlays(this)) {
+        if (overlayNeeded && !Settings.canDrawOverlays(this)) {
             val overlayIntent = Intent(
                 Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
                 "package:$packageName".toUri(),
@@ -39,7 +47,7 @@ class AssistActivity : AppCompatActivity() {
     private val overlayLauncher = registerForActivityResult(
         ActivityResultContracts.StartActivityForResult(),
     ) {
-        if (Settings.canDrawOverlays(this)) {
+        if (!overlayNeeded || Settings.canDrawOverlays(this)) {
             ensureMicAndStart()
         } else {
             Toast.makeText(this, R.string.assistant_no_overlay, Toast.LENGTH_LONG).show()

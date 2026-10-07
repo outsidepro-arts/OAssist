@@ -19,6 +19,9 @@ data class NotifyItem(
     val time: Long,
 )
 
+/** Свои уведомления (того же пакета) скрыты от notify-тулов. Чистая — покрыта тестом. */
+fun isOwnNotification(packageName: String?, ownPackage: String?): Boolean = packageName == ownPackage
+
 /** Компактный список уведомлений для модели. */
 fun formatNotifications(items: List<NotifyItem>): String {
     if (items.isEmpty()) return "Активных уведомлений нет"
@@ -50,6 +53,7 @@ class NotifyActions(
         val service = serviceOrError().getOrElse { return ToolResult(false, it.message ?: "Сервис недоступен") }
         return runCatching {
             val items = service.activeNotifications
+                ?.filter { !isOwnNotification(it.packageName, service.packageName) }
                 ?.take(MAX_ITEMS)
                 ?.map { it.toItem() }
                 ?: emptyList()
@@ -61,6 +65,7 @@ class NotifyActions(
         val service = serviceOrError().getOrElse { return ToolResult(false, it.message ?: "Сервис недоступен") }
         val sbn = service.activeNotifications?.find { it.key == key }
             ?: return ToolResult(false, "Уведомление не найдено — обновите список")
+        if (isOwnNotification(sbn.packageName, service.packageName)) return ToolResult(false, OWN_NOTIFICATION_MESSAGE)
         val intent = sbn.notification.contentIntent
             ?: return ToolResult(false, "У уведомления нет действия открытия")
         return runCatching {
@@ -71,6 +76,10 @@ class NotifyActions(
 
     fun clear(key: String): ToolResult {
         val service = serviceOrError().getOrElse { return ToolResult(false, it.message ?: "Сервис недоступен") }
+        val sbn = service.activeNotifications?.find { it.key == key }
+        if (sbn != null && isOwnNotification(sbn.packageName, service.packageName)) {
+            return ToolResult(false, OWN_NOTIFICATION_MESSAGE)
+        }
         return runCatching {
             service.cancelNotification(key)
             ToolResult(true, "Уведомление скрыто")
@@ -84,6 +93,7 @@ class NotifyActions(
         if (trimmed.isEmpty()) return ToolResult(false, "Пустой текст ответа")
         val sbn = service.activeNotifications?.find { it.key == key }
             ?: return ToolResult(false, "Уведомление не найдено — обновите список")
+        if (isOwnNotification(sbn.packageName, service.packageName)) return ToolResult(false, OWN_NOTIFICATION_MESSAGE)
         val action = sbn.notification.actions?.firstOrNull { !(it.remoteInputs.isNullOrEmpty()) }
             ?: return ToolResult(false, "У уведомления нет действия ответа")
         return runCatching {
@@ -112,6 +122,10 @@ class NotifyActions(
         const val SERVICE_DISABLED_MESSAGE =
             "Доступ к уведомлениям не выдан — включите его в системных настройках"
         private const val MAX_ITEMS = 20
+
+        /** Свои уведомления OAssist (FGS-заглушки, сессия ассистента) скрыты от notify-тулов. */
+        const val OWN_NOTIFICATION_MESSAGE =
+            "Собственное уведомление OAssist скрыто и недоступно инструментам работы с уведомлениями"
         const val MAX_REPLY_CHARS = 500
     }
 }
