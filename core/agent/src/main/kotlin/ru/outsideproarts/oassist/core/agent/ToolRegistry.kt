@@ -3,6 +3,7 @@ package ru.outsideproarts.oassist.core.agent
 import kotlinx.serialization.json.JsonObject
 import ru.outsideproarts.oassist.core.model.ActionRisk
 import ru.outsideproarts.oassist.core.model.PrivilegeLevel
+import ru.outsideproarts.oassist.core.provider.ImagePart
 
 /** Описание инструмента для передачи в LLM (OpenAI function calling). */
 data class ToolSchema(
@@ -15,6 +16,8 @@ data class ToolSchema(
 data class ToolResult(
     val success: Boolean,
     val output: String,
+    /** Образы в результате (скриншоты): уходят в TOOL-сообщение, в модель — только при vision. */
+    val images: List<ImagePart> = emptyList(),
 )
 
 /** Инструмент агента. */

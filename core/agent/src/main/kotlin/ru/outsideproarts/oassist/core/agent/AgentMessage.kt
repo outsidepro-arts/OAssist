@@ -10,6 +10,7 @@ data class AgentToolEvent(
     val name: String,
     val output: String? = null,
     val isError: Boolean = false,
+    val images: List<ru.outsideproarts.oassist.core.provider.ImagePart> = emptyList(),
 )
 
 /** Три проекции ответа агента — раздельные сущности для UI и синтеза. */
@@ -45,6 +46,7 @@ class AgentMessageAssembler {
                     name = chunk.name,
                     output = chunk.output,
                     isError = chunk.isError,
+                    images = chunk.images,
                 )
                 if (pending >= 0) toolEvents[pending] = event else toolEvents.add(event)
             }

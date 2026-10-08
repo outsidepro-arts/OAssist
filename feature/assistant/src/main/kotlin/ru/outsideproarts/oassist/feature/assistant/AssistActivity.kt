@@ -2,6 +2,7 @@ package ru.outsideproarts.oassist.feature.assistant
 
 import android.Manifest
 import android.app.assist.AssistStructure
+import android.graphics.Bitmap
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.os.Bundle
@@ -19,6 +20,7 @@ import androidx.core.net.toUri
 class AssistActivity : AppCompatActivity() {
 
     private var screenContext: String? = null
+    private var screenImage: String? = null
     private var overlayNeeded = true
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -32,6 +34,15 @@ class AssistActivity : AppCompatActivity() {
                     .assistant?.showOverlay ?: true
             }.getOrDefault(true)
         }
+        val attachScreenshot = kotlinx.coroutines.runBlocking {
+            runCatching {
+                ru.outsideproarts.oassist.core.agent.AgentFactory.get()
+                    .modeConfig(ru.outsideproarts.oassist.core.model.AssistMode.ASSISTANT)
+                    .assistant?.attachScreenshot ?: true
+            }.getOrDefault(true)
+        }
+        screenImage = intent?.getStringExtra(AssistantOverlayService.EXTRA_SCREEN_IMAGE)
+            ?: if (attachScreenshot) extractScreenImage(intent) else null
 
         if (overlayNeeded && !Settings.canDrawOverlays(this)) {
             val overlayIntent = Intent(
@@ -75,8 +86,21 @@ class AssistActivity : AppCompatActivity() {
         screenContext?.let {
             serviceIntent.putExtra(AssistantOverlayService.EXTRA_SCREEN_CONTEXT, it)
         }
+        screenImage?.let {
+            serviceIntent.putExtra(AssistantOverlayService.EXTRA_SCREEN_IMAGE, it)
+        }
         startForegroundService(serviceIntent)
         finish()
+    }
+
+    private fun extractScreenImage(intent: Intent?): String? {
+        val bitmap = runCatching {
+            @Suppress("DEPRECATION")
+            intent?.getParcelableExtra<Bitmap>("android.intent.extra.ASSIST_SCREENSHOT")
+        }.getOrNull() ?: return null
+        return runCatching {
+            ru.outsideproarts.oassist.core.provider.ImageCodec.fromBitmap(bitmap).imageBase64
+        }.getOrNull()
     }
 
     private fun extractScreenContext(intent: Intent?): String? {

@@ -32,6 +32,7 @@ import ru.outsideproarts.oassist.core.model.ProviderProfile
 import ru.outsideproarts.oassist.core.provider.ChatChunk
 import ru.outsideproarts.oassist.core.provider.ChatMessage
 import ru.outsideproarts.oassist.core.provider.ChatRole
+import ru.outsideproarts.oassist.core.provider.ImageCodec
 import ru.outsideproarts.oassist.core.provider.ModelClient
 import ru.outsideproarts.oassist.core.provider.ProviderAuth
 import ru.outsideproarts.oassist.core.provider.ProviderJson
@@ -97,7 +98,7 @@ class OpenAiCompatibleClient private constructor(
         val zenSessionId = if (isZen) OpenCodeZen.sessionId(dialogHead(messages)) else null
         val requestDto = ChatRequestDto(
             model = modelId,
-            messages = messages.map { it.toDto() },
+            messages = messages.flatMap { it.toDtos() },
             stream = true,
             tools = tools.ifEmpty { null },
         )
@@ -223,24 +224,35 @@ class OpenAiCompatibleClient private constructor(
         internal fun ChatMessage.toDto(): ChatMessageDto = ChatMessageDto(
             role = role.toWire(),
             // Пустой assistant-текст с tool_calls — как null (строгость серверов различается).
-            // Голосовой ход — массивом parts (текст + input_audio), иначе строкой.
-            content = audio?.let { audioPart ->
-                buildJsonArray {
+            // Контент массивом parts (текст + input_audio + image_url), иначе строкой.
+            content = when {
+                audio != null || images.isNotEmpty() -> buildJsonArray {
                     if (content.isNotEmpty()) {
                         add(buildJsonObject {
                             put("type", "text")
                             put("text", content)
                         })
                     }
-                    add(buildJsonObject {
-                        put("type", "input_audio")
-                        put("input_audio", buildJsonObject {
-                            put("data", audioPart.wavBase64)
-                            put("format", "wav")
+                    audio?.let { audioPart ->
+                        add(buildJsonObject {
+                            put("type", "input_audio")
+                            put("input_audio", buildJsonObject {
+                                put("data", audioPart.wavBase64)
+                                put("format", "wav")
+                            })
                         })
-                    })
+                    }
+                    images.forEach { img ->
+                        add(buildJsonObject {
+                            put("type", "image_url")
+                            put("image_url", buildJsonObject {
+                                put("url", ImageCodec.dataUri(img))
+                            })
+                        })
+                    }
                 }
-            } ?: content.takeIf { it.isNotEmpty() }?.let { JsonPrimitive(it) },
+                else -> content.takeIf { it.isNotEmpty() }?.let { JsonPrimitive(it) }
+            },
             toolCallId = toolCallId,
             toolCalls = toolCalls?.map { call ->
                 ToolCallRequestDto(
@@ -252,5 +264,32 @@ class OpenAiCompatibleClient private constructor(
                 )
             },
         )
+
+        /**
+         * Tool-сообщение с образами в OpenAI не отправить (контент tool-роли — только текст),
+         * поэтому образы следом уходят отдельным user-сообщением.
+         */
+        internal fun ChatMessage.toDtos(): List<ChatMessageDto> {
+            if (role != ChatRole.TOOL || images.isEmpty()) return listOf(toDto())
+            val toolDto = copy(images = emptyList()).toDto()
+            val imageDto = ChatMessageDto(
+                role = "user",
+                content = buildJsonArray {
+                    add(buildJsonObject {
+                        put("type", "text")
+                        put("text", "Изображения от инструмента:")
+                    })
+                    images.forEach { img ->
+                        add(buildJsonObject {
+                            put("type", "image_url")
+                            put("image_url", buildJsonObject {
+                                put("url", ImageCodec.dataUri(img))
+                            })
+                        })
+                    }
+                },
+            )
+            return listOf(toolDto, imageDto)
+        }
     }
 }

@@ -2,15 +2,20 @@ package ru.outsideproarts.oassist.core.agent
 
 import android.accessibilityservice.AccessibilityService
 import android.accessibilityservice.GestureDescription
+import android.graphics.Bitmap
 import android.graphics.Path
 import android.graphics.Rect
+import android.os.Build
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
 import android.view.accessibility.AccessibilityNodeInfo
+import android.view.accessibility.AccessibilityWindowInfo
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.withTimeoutOrNull
 import ru.outsideproarts.oassist.core.device.NoopExecutor
+import ru.outsideproarts.oassist.core.provider.ImageCodec
+import ru.outsideproarts.oassist.core.provider.ImagePart
 import ru.outsideproarts.oassist.core.device.PrivExecutor
 import java.util.ArrayDeque
 
@@ -28,6 +33,8 @@ class UiActions(
     private val privProvider: suspend () -> PrivExecutor = { NoopExecutor() },
     private val overlayControl: () -> OverlayControl? = { null },
 ) {
+
+    private val curtain = ScreenCurtain(privProvider)
 
     private fun serviceOrError(): Result<AccessibilityService> {
         val service = serviceProvider()
@@ -338,6 +345,161 @@ class UiActions(
         return walk.refs[pos]
     }
 
+    /**
+     * Скриншот текущего окна (панель ассистента скрыта). При чёрном кадре — best-effort
+     * снятие шторки TalkBack на момент снимка (нужны Shizuku/root) с восстановлением;
+     * не вышло — честное предупреждение, не тихий пустой кадр.
+     */
+    suspend fun screenshot(): ToolResult = overlayHidden(settleMs = SNAPSHOT_SETTLE_MS) {
+        val first = captureShot()
+        val shot = first.getOrElse { return@overlayHidden screenshotError(it) }
+        if (!shot.black) return@overlayHidden shot.toResult()
+        val restore = curtain.suspendTalkbackForShot() ?: return@overlayHidden shot.toResult(blackNote = true)
+        try {
+            val second = captureShot().getOrNull()
+            return@overlayHidden if (second != null && !second.black) {
+                second.toResult(liftedCurtain = true)
+            } else {
+                shot.toResult(blackNote = true, liftedCurtain = true)
+            }
+        } finally {
+            restore()
+        }
+    }
+
+    private class Shot(
+        val part: ImagePart,
+        val title: String?,
+        val width: Int,
+        val height: Int,
+        val black: Boolean,
+    ) {
+        fun toResult(blackNote: Boolean = false, liftedCurtain: Boolean = false): ToolResult {
+            val name = title?.takeIf { it.isNotBlank() } ?: "экран"
+            val sb = StringBuilder("Снимок окна «$name» (${width}×$height) — изображение приложено.")
+            if (liftedCurtain) {
+                sb.append("\nШторка скринридера была временно снята для снимка и восстановлена.")
+            }
+            if (blackNote) {
+                sb.append("\nКадр почти чёрный: возможно, шторка скринридера или защищённое окно — снимок может быть пустым.")
+            }
+            return ToolResult(true, sb.toString(), images = listOf(part))
+        }
+    }
+
+    private class ScreenshotException(val code: Int) : Exception("screenshot error $code")
+
+    private suspend fun captureShot(): Result<Shot> {
+        val service = serviceOrError().getOrElse { return Result.failure(it) }
+        val window = targetWindow(service)
+        val bounds = Rect()
+        window?.getBoundsInScreen(bounds)
+        val raw = if (Build.VERSION.SDK_INT >= 34 && window != null) {
+            takeWindowShot(service, window.id)
+        } else {
+            takeDisplayShot(service)
+        }
+        val bitmap = raw.getOrElse { return Result.failure(it) }
+        val cropped = cropTo(bitmap, bounds.takeIf { window != null && it.width() > 0 && it.height() > 0 })
+        val black = probeBlack(cropped)
+        val part = runCatching { ImageCodec.fromBitmap(cropped) }
+            .getOrElse { return Result.failure(IllegalStateException("не удалось сжать снимок")) }
+        return Result.success(Shot(part, window?.title?.toString(), cropped.width, cropped.height, black))
+    }
+
+    @Suppress("DEPRECATION")
+    private fun targetWindow(service: AccessibilityService): AccessibilityWindowInfo? {
+        val own = service.packageName
+        val windows = service.windows
+        val index = pickWindowIndex(
+            windows.map { UiWindowState(it.root?.packageName?.toString(), it.type, it.isActive, it.isFocused) },
+            own,
+        )
+        return index?.let { windows[it] }
+    }
+
+    private suspend fun takeDisplayShot(service: AccessibilityService): Result<Bitmap> {
+        val deferred = CompletableDeferred<Result<Bitmap>>()
+        service.takeScreenshot(
+            android.view.Display.DEFAULT_DISPLAY,
+            service.mainExecutor,
+            object : AccessibilityService.TakeScreenshotCallback {
+                override fun onSuccess(screenshot: AccessibilityService.ScreenshotResult) {
+                    deferred.complete(bitmapFrom(screenshot))
+                }
+
+                override fun onFailure(errorCode: Int) {
+                    deferred.complete(Result.failure(ScreenshotException(errorCode)))
+                }
+            },
+        )
+        return withTimeoutOrNull(SCREENSHOT_TIMEOUT_MS) { deferred.await() }
+            ?: Result.failure(IllegalStateException("снимок не сделан за ${SCREENSHOT_TIMEOUT_MS}мс"))
+    }
+
+    @android.annotation.TargetApi(34)
+    private suspend fun takeWindowShot(service: AccessibilityService, windowId: Int): Result<Bitmap> {
+        val deferred = CompletableDeferred<Result<Bitmap>>()
+        service.takeScreenshotOfWindow(
+            windowId,
+            service.mainExecutor,
+            object : AccessibilityService.TakeScreenshotCallback {
+                override fun onSuccess(screenshot: AccessibilityService.ScreenshotResult) {
+                    deferred.complete(bitmapFrom(screenshot))
+                }
+
+                override fun onFailure(errorCode: Int) {
+                    deferred.complete(Result.failure(ScreenshotException(errorCode)))
+                }
+            },
+        )
+        return withTimeoutOrNull(SCREENSHOT_TIMEOUT_MS) { deferred.await() }
+            ?: Result.failure(IllegalStateException("снимок не сделан за ${SCREENSHOT_TIMEOUT_MS}мс"))
+    }
+
+    private fun bitmapFrom(screenshot: AccessibilityService.ScreenshotResult): Result<Bitmap> {
+        val hw = screenshot.hardwareBuffer
+            ?: return Result.failure(IllegalStateException("пустой буфер снимка"))
+        val wrapped = runCatching { Bitmap.wrapHardwareBuffer(hw, screenshot.colorSpace) }.getOrNull()
+        hw.close()
+        val bitmap = wrapped?.copy(Bitmap.Config.ARGB_8888, false)
+            ?: return Result.failure(IllegalStateException("не удалось декодировать снимок"))
+        return Result.success(bitmap)
+    }
+
+    private fun cropTo(bitmap: Bitmap, bounds: Rect?): Bitmap {
+        if (bounds == null) return bitmap
+        val left = bounds.left.coerceIn(0, bitmap.width - 1)
+        val top = bounds.top.coerceIn(0, bitmap.height - 1)
+        val width = bounds.width().coerceIn(1, bitmap.width - left)
+        val height = bounds.height().coerceIn(1, bitmap.height - top)
+        if (left == 0 && top == 0 && width == bitmap.width && height == bitmap.height) return bitmap
+        val cropped = Bitmap.createBitmap(bitmap, left, top, width, height)
+        if (cropped !== bitmap) bitmap.recycle()
+        return cropped
+    }
+
+    private fun probeBlack(bitmap: Bitmap): Boolean {
+        val pixels = runCatching {
+            val probe = Bitmap.createScaledBitmap(bitmap, PROBE_SIZE, PROBE_SIZE, true)
+            val out = IntArray(PROBE_SIZE * PROBE_SIZE)
+            probe.getPixels(out, 0, PROBE_SIZE, 0, 0, PROBE_SIZE, PROBE_SIZE)
+            if (probe !== bitmap) probe.recycle()
+            out
+        }.getOrNull() ?: return false
+        return isMostlyBlack(pixels)
+    }
+
+    private fun screenshotError(error: Throwable): ToolResult {
+        if (error is ScreenshotException) {
+            return if (error.code == AccessibilityService.ERROR_TAKE_SCREENSHOT_SECURE_WINDOW) {
+                ToolResult(false, "Окно защищено от скриншотов (FLAG_SECURE) — снимок невозможен")
+            } else {
+                ToolResult(false, "Не удалось сделать снимок (код ошибки ${error.code})")
+            }
+        }
+        return ToolResult(false, error.message ?: "Не удалось сделать снимок")
+    }
     companion object {
         const val SERVICE_DISABLED_MESSAGE =
             "Сервис доступности OAssist выключен — включите его в системных настройках"
@@ -345,6 +507,8 @@ class UiActions(
         private const val MAX_CANDIDATES = 1000
         private const val MAX_DEPTH = 32
         private const val SNAPSHOT_SETTLE_MS = 150L
+        private const val SCREENSHOT_TIMEOUT_MS = 5000L
+        private const val PROBE_SIZE = 64
         private const val GESTURE_TIMEOUT_MS = 5000L
         private const val MAX_WAIT_MS = 10000L
         private const val POLL_MS = 500L

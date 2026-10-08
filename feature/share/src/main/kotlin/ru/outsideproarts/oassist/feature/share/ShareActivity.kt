@@ -56,6 +56,8 @@ import ru.outsideproarts.oassist.core.ui.OAssistDimens
 import ru.outsideproarts.oassist.core.ui.components.OAssistPanel
 import ru.outsideproarts.oassist.core.ui.theme.OAssistTheme
 
+private const val SHARE_MAX_IMAGES = 4
+
 class ShareActivity : AppCompatActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -76,6 +78,13 @@ class ShareActivity : AppCompatActivity() {
 
                         val agent = agentFactory.agentFor(profile, ru.outsideproarts.oassist.core.model.AssistMode.SHARE)
 
+                        val images = payload.imageUris.take(SHARE_MAX_IMAGES).mapNotNull { uri ->
+                            runCatching {
+                                contentResolver.openInputStream(uri)?.use { it.readBytes() }
+                            }.getOrNull()?.let { bytes ->
+                                ru.outsideproarts.oassist.core.provider.ImageCodec.fromBytes(bytes)
+                            }
+                        }
                         val contentDesc = buildString {
                             payload.text?.let { append(getString(R.string.share_prompt_text, it)) }
                             payload.imageUris.forEach { append(getString(R.string.share_prompt_image, it)) }
@@ -92,6 +101,7 @@ class ShareActivity : AppCompatActivity() {
                                 ),
                                 history = emptyList(),
                                 userMessage = userMsg,
+                                images = images.ifEmpty { null },
                             ),
                             agent = agent,
                         )
@@ -213,6 +223,26 @@ private fun ShareScreen(
                         style = MaterialTheme.typography.bodyMedium,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
+                    val context = LocalContext.current
+                    val imageDesc = stringResource(R.string.share_image_attached)
+                    payload.imageUris.take(SHARE_MAX_IMAGES).forEach { uri ->
+                        var thumbBase64 by remember(uri) { mutableStateOf<String?>(null) }
+                        LaunchedEffect(uri) {
+                            thumbBase64 = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+                                runCatching {
+                                    context.contentResolver.openInputStream(uri)?.use { it.readBytes() }
+                                }.getOrNull()?.let { bytes ->
+                                    ru.outsideproarts.oassist.core.provider.ImageCodec.fromBytes(bytes)?.imageBase64
+                                }
+                            }
+                        }
+                        thumbBase64?.let { base64 ->
+                            ru.outsideproarts.oassist.core.ui.components.OAssistImageThumbnail(
+                                base64 = base64,
+                                contentDescription = imageDesc,
+                            )
+                        }
+                    }
                 }
             }
 

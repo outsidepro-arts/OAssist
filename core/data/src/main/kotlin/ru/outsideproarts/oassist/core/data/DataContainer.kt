@@ -43,6 +43,10 @@ class DataContainer(
         ToolConfigStore(deviceContext)
     }
 
+    val searchConfig: ru.outsideproarts.oassist.core.data.prefs.SearchConfigStore by lazy {
+        ru.outsideproarts.oassist.core.data.prefs.SearchConfigStore(deviceContext)
+    }
+
     val approvals: ApprovalStore by lazy {
         DataStoreApprovalStore(deviceContext)
     }

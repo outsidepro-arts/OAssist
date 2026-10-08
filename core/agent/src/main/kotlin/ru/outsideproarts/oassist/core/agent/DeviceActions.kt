@@ -1,7 +1,6 @@
 package ru.outsideproarts.oassist.core.agent
 
 import android.Manifest
-import android.app.SearchManager
 import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
@@ -47,26 +46,6 @@ class DeviceActions(
         }.getOrElse { ToolResult(false, "Не удалось открыть URL: ${it.message}") }
     }
 
-    fun webSearch(query: String): ToolResult {
-        if (query.isBlank()) {
-            return ToolResult(false, "Не указан query — передайте поисковый запрос в параметре query")
-        }
-        val intent = Intent(Intent.ACTION_WEB_SEARCH).apply {
-            putExtra(SearchManager.QUERY, query)
-            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-        }
-        val handled = intent.resolveActivity(context.packageManager) != null &&
-            runCatching { context.startActivity(intent) }.isSuccess
-        if (handled) return ToolResult(true, "Поиск в сети: '$query'")
-        // Фолбэк: системного поиска нет (AOSP без Google-приложения и т.п.) — ищем через браузер.
-        val url = "https://www.google.com/search?q=" + java.net.URLEncoder.encode(query, "UTF-8")
-        val fallback = openWeb(url)
-        return if (fallback.success) {
-            ToolResult(true, "Поиск в сети через браузер: '$query'")
-        } else {
-            ToolResult(false, "Не удалось выполнить поиск: нет обработчика и браузер недоступен")
-        }
-    }
 
     fun setAlarm(hour: Int, minute: Int, label: String?): ToolResult {
         val intent = Intent(AlarmClock.ACTION_SET_ALARM).apply {

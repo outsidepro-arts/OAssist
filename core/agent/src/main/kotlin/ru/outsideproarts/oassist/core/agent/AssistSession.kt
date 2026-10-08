@@ -2,6 +2,7 @@ package ru.outsideproarts.oassist.core.agent
 
 import ru.outsideproarts.oassist.core.provider.ChatMessage
 import ru.outsideproarts.oassist.core.provider.ChatRole
+import ru.outsideproarts.oassist.core.provider.ImagePart
 
 /**
  * Сессия оверлея ассистента: контекст живёт, пока окно открыто, и уничтожается при закрытии.
@@ -20,6 +21,10 @@ class AssistSession internal constructor() {
     /** Контекст текущего экрана; обновляется каждым assist-жестом. */
     @Volatile
     var screenContext: String? = null
+
+    /** Снимок экрана текущего жеста (если включён attachScreenshot); расходуется первым вопросом. */
+    @Volatile
+    var screenImage: ImagePart? = null
 
     /** Переключатель голосового ввода (play/pause): ON — авто-диалог разрешён. */
     @Volatile
@@ -40,6 +45,11 @@ class AssistSession internal constructor() {
             var cut = 1
             while (cut < messages.size && messages[cut].role != ChatRole.USER) cut++
             messages.subList(0, cut).clear()
+        }
+        // Бюджет образов: снимки в памяти сессии тоже не должны копиться без меры.
+        val budgeted = enforceImageBudget(messages.toList(), MAX_IMAGE_MESSAGES)
+        if (budgeted.size == messages.size) {
+            for (i in messages.indices) messages[i] = budgeted[i]
         }
     }
 

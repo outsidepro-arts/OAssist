@@ -2,6 +2,7 @@ package ru.outsideproarts.oassist.vis
 
 import android.Manifest
 import android.app.assist.AssistStructure
+import android.graphics.Bitmap
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.os.Bundle
@@ -11,6 +12,7 @@ import android.service.voice.VoiceInteractionSessionService
 import android.view.View
 import android.widget.FrameLayout
 import ru.outsideproarts.oassist.feature.assistant.AssistActivity
+import ru.outsideproarts.oassist.core.provider.ImageCodec
 import ru.outsideproarts.oassist.feature.assistant.AssistantOverlayService
 
 class OAssistVoiceInteractionSessionService : VoiceInteractionSessionService() {
@@ -38,10 +40,12 @@ class OAssistVoiceInteractionSession(
             null
         }
         val screenContext = extractScreenContext(structure)
-        if (!startOverlay(screenContext)) {
+        val screenImage = extractScreenImage(state)
+        if (!startOverlay(screenContext, screenImage)) {
             val intent = Intent(context, AssistActivity::class.java).apply {
                 addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
                 screenContext?.let { putExtra(AssistantOverlayService.EXTRA_SCREEN_CONTEXT, it) }
+                screenImage?.let { putExtra(AssistantOverlayService.EXTRA_SCREEN_IMAGE, it) }
             }
             runCatching { context.startActivity(intent) }
         }
@@ -53,7 +57,7 @@ class OAssistVoiceInteractionSession(
      * изолированный таск). При выданных разрешениях стартуем сервис напрямую — так таск
      * приложения вообще не трогается; исключение FGS-старта откатывает на трамплин.
      */
-    private fun startOverlay(screenContext: String?): Boolean {
+    private fun startOverlay(screenContext: String?, screenImage: String? = null): Boolean {
         val showOverlay = kotlinx.coroutines.runBlocking {
             runCatching {
                 ru.outsideproarts.oassist.core.agent.AgentFactory.get()
@@ -69,10 +73,33 @@ class OAssistVoiceInteractionSession(
         }
         val intent = Intent(context, AssistantOverlayService::class.java).apply {
             screenContext?.let { putExtra(AssistantOverlayService.EXTRA_SCREEN_CONTEXT, it) }
+            screenImage?.let { putExtra(AssistantOverlayService.EXTRA_SCREEN_IMAGE, it) }
         }
         return runCatching {
             context.startForegroundService(intent)
         }.isSuccess
+    }
+
+    /** Снимок экрана жеста (EXTRA_ASSIST_SCREENSHOT) — только при включённом attachScreenshot. */
+    private fun extractScreenImage(state: AssistState): String? {
+        val attachScreenshot = kotlinx.coroutines.runBlocking {
+            runCatching {
+                ru.outsideproarts.oassist.core.agent.AgentFactory.get()
+                    .modeConfig(ru.outsideproarts.oassist.core.model.AssistMode.ASSISTANT)
+                    .assistant?.attachScreenshot ?: true
+            }.getOrDefault(true)
+        }
+        if (!attachScreenshot) return null
+        val extras = try {
+            state::class.java.getMethod("getExtras").invoke(state) as? Bundle
+        } catch (e: Exception) {
+            null
+        } ?: return null
+        val bitmap = runCatching {
+            @Suppress("DEPRECATION")
+            extras.getParcelable<Bitmap>("android.intent.extra.ASSIST_SCREENSHOT")
+        }.getOrNull() ?: return null
+        return runCatching { ImageCodec.fromBitmap(bitmap).imageBase64 }.getOrNull()
     }
 
     private fun extractScreenContext(structure: AssistStructure?): String? {

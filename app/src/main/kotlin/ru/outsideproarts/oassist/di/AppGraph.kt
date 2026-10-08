@@ -123,6 +123,15 @@ class AppGraph private constructor(context: Context) {
     }
 
     /** Чтение веба: статика (Ktor) + дорендер (WebView). */
+    val searchActions: ru.outsideproarts.oassist.core.agent.SearchActions by lazy {
+        ru.outsideproarts.oassist.core.agent.SearchActions(
+            webContentActions,
+            object : ru.outsideproarts.oassist.core.agent.SearchConfigSource {
+                override suspend fun engine() = data.searchConfig.snapshot()
+            },
+        )
+    }
+
     val webContentActions: ru.outsideproarts.oassist.core.agent.WebContentActions by lazy {
         ru.outsideproarts.oassist.core.agent.WebContentActions(httpClient)
     }
@@ -171,13 +180,20 @@ class AppGraph private constructor(context: Context) {
                 data.skills,
                 prefs,
                 privilegeExecutor(),
+                searchActions,
                 resolveMcpTools(),
             )
+            val modeModelId = data.providers.modeConfig(mode).modelId
+            val visionEnabled = data.providers.observeModelCatalog(profile.id).first()
+                ?.models?.find { it.id == modeModelId }
+                ?.capabilities
+                ?.contains(ru.outsideproarts.oassist.core.model.ModelCapability.VISION) == true
             return ru.outsideproarts.oassist.core.agent.AgentLoop(
                 client,
                 tools,
                 approvalPolicy = approvalPolicy,
                 events = narratorEvents,
+                visionEnabled = visionEnabled,
                 maxToolRounds = prefs.maxToolRounds,
             )
         }

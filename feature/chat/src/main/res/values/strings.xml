@@ -30,5 +30,6 @@
     <string name="chat_action_collapse">Свернуть</string>
     <string name="chat_timeline_tool_call">Выполняю: %1$s</string>
     <string name="chat_timeline_tool_result">Готово: %1$s</string>
+    <string name="chat_image_attached">Изображение</string>
     <string name="chat_work_title">Ход работы</string>
 </resources>

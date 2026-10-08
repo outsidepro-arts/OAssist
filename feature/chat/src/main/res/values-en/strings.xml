@@ -30,5 +30,6 @@
     <string name="chat_action_collapse">Collapse</string>
     <string name="chat_timeline_tool_call">Running: %1$s</string>
     <string name="chat_timeline_tool_result">Done: %1$s</string>
+    <string name="chat_image_attached">Image</string>
     <string name="chat_work_title">Progress</string>
 </resources>

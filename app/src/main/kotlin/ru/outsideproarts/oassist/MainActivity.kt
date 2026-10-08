@@ -210,6 +210,8 @@ private fun OAssistApp(
                 }
                 val chatAudioIn = chatModels.find { it.id == chatConfig?.modelId }
                     ?.capabilities?.contains(ru.outsideproarts.oassist.core.model.ModelCapability.AUDIO_IN) == true
+                val chatVision = chatModels.find { it.id == chatConfig?.modelId }
+                    ?.capabilities?.contains(ru.outsideproarts.oassist.core.model.ModelCapability.VISION) == true
                 ChatScreen(
                     sendMessage = { userMsg, history, audio ->
                         val profile = chatProvider
@@ -239,12 +241,14 @@ private fun OAssistApp(
                             graph.data.skills,
                             prefs,
                             graph.privilegeExecutor(),
+                            graph.searchActions,
                         )
                         val agent = ru.outsideproarts.oassist.core.agent.AgentLoop(
                             client,
                             toolRegistry,
                             approvalPolicy = graph.approvalPolicy,
                             events = graph.narratorEvents,
+                            visionEnabled = chatVision,
                         )
                         ru.outsideproarts.oassist.core.agent.AgentSession(
                             chunks = agent.stream(
@@ -370,6 +374,7 @@ private fun OAssistApp(
                     onNavigateToProviders = { navController.navigate("provider_list") },
                     onNavigateToModeConfig = { mode -> navController.navigate("mode_config/$mode") },
                     onNavigateToTools = { navController.navigate("tools_settings") },
+                    onNavigateToSearch = { navController.navigate("search_settings") },
                     onNavigateToMcp = { navController.navigate("mcp_servers") },
                     onNavigateToSkills = { navController.navigate("skills") },
                     onNavigateToMemory = { navController.navigate("memory") },
@@ -464,6 +469,19 @@ private fun OAssistApp(
                     onBack = { navController.popBackStack() },
                 )
             }
+            composable("search_settings") {
+                val searchEngine by graph.data.searchConfig.engine
+                    .collectAsStateWithLifecycle(
+                        initialValue = ru.outsideproarts.oassist.core.model.SearchEngine.DEFAULT,
+                    )
+                ru.outsideproarts.oassist.feature.settings.SearchSettingsScreen(
+                    engine = searchEngine,
+                    onEngineChange = { engine ->
+                        scope.launch { graph.data.searchConfig.setEngine(engine) }
+                    },
+                    onBack = { navController.popBackStack() },
+                )
+            }
             composable("tools_settings") {
                 val prefs by graph.data.toolConfigs.preferences
                     .collectAsStateWithLifecycle(
@@ -487,6 +505,7 @@ private fun OAssistApp(
                         // Экран настроек использует только метаданные (разрешения);
                         // исполнение здесь не нужно — достаточно Noop.
                         graph.noopExecutor,
+                        graph.searchActions,
                     )
                 }
                 val toolPermissions = remember(tools) {

@@ -23,6 +23,7 @@
     <string name="assistant_access_off">Disabled</string>
     <string name="assistant_speak_answer">Speak answer</string>
     <string name="assistant_work_title">Progress</string>
+    <string name="assistant_image_attached">Image</string>
     <string name="assistant_work_expanded">Expanded</string>
     <string name="assistant_work_collapsed">Collapsed</string>
     <string name="assistant_action_expand">Expand</string>

@@ -37,6 +37,7 @@ object ToolCatalog {
         ToolDescriptor("device_info", ActionRisk.AUTO),
         ToolDescriptor("clipboard_copy", ActionRisk.AUTO),
         ToolDescriptor("ui_get_screen", ActionRisk.AUTO),
+        ToolDescriptor("ui_screenshot", ActionRisk.AUTO),
         ToolDescriptor("ui_click", ActionRisk.ASK),
         ToolDescriptor("ui_long_click", ActionRisk.ASK),
         ToolDescriptor("ui_set_text", ActionRisk.ASK),
@@ -81,10 +82,11 @@ object ToolCatalog {
         memory: MemoryStore,
         skills: SkillStore,
         priv: PrivExecutor,
+        search: SearchActions,
     ): List<Tool> = listOf(
         AppLaunchTool(actions),
         WebOpenTool(actions),
-        WebSearchTool(actions),
+        WebSearchTool(search),
         AlarmSetTool(actions),
         OpenSettingsTool(actions),
         CallPlaceTool(actions),
@@ -95,6 +97,7 @@ object ToolCatalog {
         DeviceInfoTool(actions),
         ClipboardCopyTool(actions),
         UiGetScreenTool(ui),
+        UiScreenshotTool(ui),
         UiClickTool(ui),
         UiLongClickTool(ui),
         UiSetTextTool(ui),
@@ -140,9 +143,10 @@ object ToolCatalog {
         skills: SkillStore,
         prefs: ToolPreferences,
         priv: PrivExecutor,
+        search: SearchActions,
         externalTools: List<Tool> = emptyList(),
     ): ToolRegistry {
-        val builtIn = createTools(actions, ui, notify, webContent, webRender, voiceCapture, memory, skills, priv)
+        val builtIn = createTools(actions, ui, notify, webContent, webRender, voiceCapture, memory, skills, priv, search)
         val builtInNames = builtIn.map { it.schema.name }.toSet()
         // Внешние имена с коллизией отбрасываются: встроенные в приоритете.
         val external = externalTools.filter { it.schema.name !in builtInNames }

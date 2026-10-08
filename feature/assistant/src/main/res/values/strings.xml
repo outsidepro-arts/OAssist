@@ -23,6 +23,7 @@
     <string name="assistant_access_off">Выключен</string>
     <string name="assistant_speak_answer">Озвучить ответ</string>
     <string name="assistant_work_title">Ход работы</string>
+    <string name="assistant_image_attached">Изображение</string>
     <string name="assistant_work_expanded">Развёрнут</string>
     <string name="assistant_work_collapsed">Свёрнут</string>
     <string name="assistant_action_expand">Развернуть</string>

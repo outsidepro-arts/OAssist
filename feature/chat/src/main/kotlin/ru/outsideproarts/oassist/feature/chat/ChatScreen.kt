@@ -706,6 +706,15 @@ private fun WorkBlock(thought: String, tools: List<AgentToolEvent>) {
                     style = MaterialTheme.typography.bodyMedium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
+                if (tool.images.isNotEmpty()) {
+                    val imageDesc = stringResource(R.string.chat_image_attached)
+                    tool.images.forEach { img ->
+                        ru.outsideproarts.oassist.core.ui.components.OAssistImageThumbnail(
+                            base64 = img.imageBase64,
+                            contentDescription = imageDesc,
+                        )
+                    }
+                }
             }
         }
     }

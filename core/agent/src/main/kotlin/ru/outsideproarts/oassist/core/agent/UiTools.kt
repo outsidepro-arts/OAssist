@@ -252,3 +252,16 @@ class UiWaitForTool(private val ui: UiActions) : Tool {
         return ui.waitForText(text, timeout)
     }
 }
+
+class UiScreenshotTool(private val ui: UiActions) : Tool {
+    override val schema = ToolSchema(
+        name = "ui_screenshot",
+        description = "Скриншот текущего окна: возвращает изображение экрана в модель (нужна модель с поддержкой изображений).",
+        parameters = buildJsonObject {
+            put("type", "object")
+            put("properties", buildJsonObject {})
+        },
+    )
+
+    override suspend fun execute(arguments: JsonObject): ToolResult = ui.screenshot()
+}

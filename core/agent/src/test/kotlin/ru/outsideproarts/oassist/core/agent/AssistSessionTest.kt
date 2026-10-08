@@ -6,6 +6,7 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 import ru.outsideproarts.oassist.core.provider.ChatMessage
 import ru.outsideproarts.oassist.core.provider.ChatRole
+import ru.outsideproarts.oassist.core.provider.ImagePart
 import ru.outsideproarts.oassist.core.provider.ToolCallRef
 
 class AssistSessionTest {
@@ -31,6 +32,7 @@ class AssistSessionTest {
 
     @Test
     fun appendTurn_keepsToolPairsIntact() {
+        AssistSessionStore.clear()
         val session = AssistSessionStore.getOrCreate()
 
         session.appendTurn(
@@ -57,6 +59,7 @@ class AssistSessionTest {
 
     @Test
     fun clear_destroysContext() {
+        AssistSessionStore.clear()
         val session = AssistSessionStore.getOrCreate()
         session.screenContext = "какой-то экран"
         session.appendTurn(
@@ -74,6 +77,7 @@ class AssistSessionTest {
 
     @Test
     fun trim_dropsOldestTurnsKeepingPairs() {
+        AssistSessionStore.clear()
         val session = AssistSessionStore.getOrCreate()
         repeat(30) { i ->
             session.appendTurn(
@@ -97,6 +101,7 @@ class AssistSessionTest {
 
     @Test
     fun trim_byChars_keepsPairs() {
+        AssistSessionStore.clear()
         val session = AssistSessionStore.getOrCreate()
         val big = "x".repeat(2_000)
         repeat(12) { i ->
@@ -117,5 +122,23 @@ class AssistSessionTest {
         val history = session.history
         assertTrue(history.sumOf { it.content.length } <= AssistSession.MAX_CHARS + 4_000)
         assertToolPairsIntact(history)
+    }
+
+    @Test
+    fun trim_stripsOldImagesKeepingRecent() {
+        AssistSessionStore.clear()
+        val session = AssistSessionStore.getOrCreate()
+        val img = ImagePart(imageBase64 = "QUJD")
+        repeat(6) { i ->
+            session.appendTurn(
+                user = ChatMessage(ChatRole.USER, "question $i"),
+                turn = listOf(ChatMessage(ChatRole.ASSISTANT, "answer $i", images = listOf(img))),
+            )
+        }
+
+        val history = session.history
+        val withImages = history.filter { it.images.isNotEmpty() }
+        assertEquals(MAX_IMAGE_MESSAGES, withImages.size)
+        assertEquals(listOf("answer 2", "answer 3", "answer 4", "answer 5"), withImages.map { it.content })
     }
 }

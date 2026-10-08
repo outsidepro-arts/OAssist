@@ -136,6 +136,18 @@
     <string name="approvals_reset_done">Tool permissions reset</string>
 
     <!-- Agent tools -->
+    <string name="settings_search_title">Search</string>
+    <string name="settings_search_subtitle">Search engine for the search tool</string>
+    <string name="search_engine_label">Search engine</string>
+    <string name="search_engine_hint">Google, Yandex and Mail.ru may block automated requests — pick another engine if search fails.</string>
+    <string name="search_engine_duckduckgo">DuckDuckGo</string>
+    <string name="search_engine_yandex">Yandex</string>
+    <string name="search_engine_google">Google</string>
+    <string name="search_engine_bing">Bing</string>
+    <string name="search_engine_mailru">Mail.ru</string>
+    <string name="search_engine_ecosia">Ecosia</string>
+    <string name="search_engine_brave">Brave</string>
+    <string name="search_engine_mojeek">Mojeek</string>
     <string name="tools_settings_title">Agent tools</string>
     <string name="tools_settings_subtitle">Agent access and action confirmations</string>
     <string name="tools_section_tools">Tools</string>
@@ -174,6 +186,8 @@
     <string name="tool_clipboard_copy_desc">Copy text to the clipboard</string>
     <string name="tool_ui_get_screen_title">Screen snapshot</string>
     <string name="tool_ui_get_screen_desc">Read on-screen elements for the agent</string>
+    <string name="tool_ui_screenshot_title">Window screenshot</string>
+    <string name="tool_ui_screenshot_desc">Screenshot of the current window to the model (vision-capable model required)</string>
     <string name="tool_ui_click_title">Taps</string>
     <string name="tool_ui_click_desc">Tap on-screen elements</string>
     <string name="tool_ui_long_click_title">Long presses</string>

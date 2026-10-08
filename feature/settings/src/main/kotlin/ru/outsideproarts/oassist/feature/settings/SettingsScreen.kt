@@ -47,6 +47,7 @@ fun SettingsScreen(
     onNavigateToProviders: () -> Unit,
     onNavigateToModeConfig: (String) -> Unit,
     onNavigateToTools: () -> Unit = {},
+    onNavigateToSearch: () -> Unit = {},
     onNavigateToMcp: () -> Unit = {},
     onNavigateToSkills: () -> Unit = {},
     onNavigateToMemory: () -> Unit = {},
@@ -152,6 +153,12 @@ fun SettingsScreen(
                 icon = Icons.Default.ChevronRight,
                 onClick = onNavigateToTools,
                 
+            )
+            OAssistSettingRow(
+                title = stringResource(R.string.settings_search_title),
+                subtitle = stringResource(R.string.settings_search_subtitle),
+                icon = Icons.Default.ChevronRight,
+                onClick = onNavigateToSearch,
             )
             OAssistSettingRow(
                 title = stringResource(R.string.mcp_settings_title),

@@ -34,6 +34,8 @@ data class ChatMessage(
     val toolCalls: List<ToolCallRef>? = null,
     /** Для [ChatRole.USER]: голосовое приложение (PTT). Null — обычное текстовое. */
     val audio: AudioPart? = null,
+    /** Образы к сообщению (только USER/TOOL): скриншоты, вложения Share. Сжатый JPEG, см. ImageCodec. */
+    val images: List<ImagePart> = emptyList(),
 )
 
 /**
@@ -45,6 +47,17 @@ data class AudioPart(
     val wavBase64: String,
     val mimeType: String = "audio/wav",
     val durationSec: Int = 0,
+)
+
+/**
+ * Изображение в user-/tool-сообщении: сжатый JPEG в base64 (см. ImageCodec).
+ * Строкой, не ByteArray — цел equals истории и тестов (как у [AudioPart]).
+ */
+data class ImagePart(
+    val imageBase64: String,
+    val mimeType: String = "image/jpeg",
+    val width: Int = 0,
+    val height: Int = 0,
 )
 
 /** Ссылка на вызов инструмента в истории (пара к tool-результатам). */
@@ -86,6 +99,8 @@ sealed interface ChatChunk {
         val name: String,
         val output: String,
         val isError: Boolean = false,
+        /** Образы из результата тула (скриншоты) — для UI и для модели при vision. */
+        val images: List<ImagePart> = emptyList(),
     ) : ChatChunk
     /** Агент просит подтвердить выполнение инструмента; стрим приостановлен до решения. */
     data class ApprovalNeeded(val request: ApprovalRequest) : ChatChunk

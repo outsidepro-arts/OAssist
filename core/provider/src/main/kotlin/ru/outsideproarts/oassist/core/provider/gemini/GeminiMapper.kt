@@ -30,10 +30,10 @@ internal fun mapGeminiContents(messages: List<ChatMessage>): Pair<GeminiContentD
         .joinToString("\n\n") { it.content }
         .takeIf { it.isNotBlank() }
         ?.let { GeminiContentDto(parts = listOf(GeminiPartDto(text = it))) }
-    val contents = messages.mapNotNull { msg ->
+    val contents = messages.flatMap { msg ->
         when (msg.role) {
-            ChatRole.SYSTEM -> null
-            ChatRole.USER -> GeminiContentDto(
+            ChatRole.SYSTEM -> emptyList()
+            ChatRole.USER -> listOf(GeminiContentDto(
                 role = "user",
                 parts = buildList {
                     if (msg.content.isNotEmpty()) add(GeminiPartDto(text = msg.content))
@@ -43,10 +43,16 @@ internal fun mapGeminiContents(messages: List<ChatMessage>): Pair<GeminiContentD
                             data = audio.wavBase64,
                         )))
                     }
+                    msg.images.forEach { img ->
+                        add(GeminiPartDto(inlineData = GeminiBlobDto(
+                            mimeType = img.mimeType,
+                            data = img.imageBase64,
+                        )))
+                    }
                     // Пустой ход без аудио — как раньше: один пустой текстовый парт.
                     if (isEmpty()) add(GeminiPartDto(text = ""))
                 },
-            )
+            ))
             ChatRole.ASSISTANT -> {
                 val parts = buildList {
                     if (msg.content.isNotEmpty()) add(GeminiPartDto(text = msg.content))
@@ -57,15 +63,28 @@ internal fun mapGeminiContents(messages: List<ChatMessage>): Pair<GeminiContentD
                         )))
                     }
                 }
-                if (parts.isEmpty()) null else GeminiContentDto(role = "model", parts = parts)
+                if (parts.isEmpty()) emptyList() else listOf(GeminiContentDto(role = "model", parts = parts))
             }
-            ChatRole.TOOL -> GeminiContentDto(
-                role = "user",
-                parts = listOf(GeminiPartDto(functionResponse = GeminiFunctionResponseDto(
-                    name = idToName[msg.toolCallId] ?: msg.toolCallId.orEmpty(),
-                    response = buildJsonObject { put("result", msg.content) },
-                ))),
-            )
+            ChatRole.TOOL -> buildList {
+                add(GeminiContentDto(
+                    role = "user",
+                    parts = listOf(GeminiPartDto(functionResponse = GeminiFunctionResponseDto(
+                        name = idToName[msg.toolCallId] ?: msg.toolCallId.orEmpty(),
+                        response = buildJsonObject { put("result", msg.content) },
+                    ))),
+                ))
+                if (msg.images.isNotEmpty()) {
+                    add(GeminiContentDto(
+                        role = "user",
+                        parts = msg.images.map { img ->
+                            GeminiPartDto(inlineData = GeminiBlobDto(
+                                mimeType = img.mimeType,
+                                data = img.imageBase64,
+                            ))
+                        },
+                    ))
+                }
+            }
         }
     }
     return system to contents

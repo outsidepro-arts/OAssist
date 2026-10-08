@@ -8,6 +8,7 @@ import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.put
 import ru.outsideproarts.oassist.core.provider.ChatMessage
 import ru.outsideproarts.oassist.core.provider.ChatRole
+import ru.outsideproarts.oassist.core.provider.ImagePart
 import ru.outsideproarts.oassist.core.provider.ProviderError
 import ru.outsideproarts.oassist.core.provider.ProviderJson
 import ru.outsideproarts.oassist.core.provider.openai.ToolSchemaDto
@@ -31,7 +32,7 @@ internal fun mapAnthropicMessages(messages: List<ChatMessage>): Pair<String?, Li
     val out = messages.mapNotNull { msg ->
         when (msg.role) {
             ChatRole.SYSTEM -> null
-            ChatRole.USER -> AnthropicMessageDto("user", JsonPrimitive(msg.content))
+            ChatRole.USER -> userContentDto(msg)
             ChatRole.ASSISTANT -> {
                 val calls = msg.toolCalls.orEmpty()
                 if (calls.isEmpty()) {
@@ -61,7 +62,11 @@ internal fun mapAnthropicMessages(messages: List<ChatMessage>): Pair<String?, Li
                 content = JsonArray(listOf(buildJsonObject {
                     put("type", "tool_result")
                     put("tool_use_id", msg.toolCallId.orEmpty())
-                    put("content", msg.content)
+                    if (msg.images.isEmpty()) {
+                        put("content", msg.content)
+                    } else {
+                        put("content", contentBlocks(msg.content, msg.images))
+                    }
                 })),
             )
         }
@@ -84,3 +89,31 @@ internal fun mapAnthropicTools(tools: List<ToolSchemaDto>): List<AnthropicToolDt
 private fun parseAnthropicInput(argumentsJson: String) =
     runCatching { ProviderJson.parseToJsonElement(argumentsJson).jsonObject }
         .getOrElse { JsonObject(emptyMap()) }
+
+/** User-сообщение: строкой без образов, блоками (text + image) с образами. */
+private fun userContentDto(msg: ChatMessage): AnthropicMessageDto =
+    if (msg.images.isEmpty()) {
+        AnthropicMessageDto("user", JsonPrimitive(msg.content))
+    } else {
+        AnthropicMessageDto("user", contentBlocks(msg.content, msg.images))
+    }
+
+private fun contentBlocks(text: String, images: List<ImagePart>): JsonArray =
+    JsonArray(buildList {
+        if (text.isNotEmpty()) {
+            add(buildJsonObject {
+                put("type", "text")
+                put("text", text)
+            })
+        }
+        images.forEach { img ->
+            add(buildJsonObject {
+                put("type", "image")
+                put("source", buildJsonObject {
+                    put("type", "base64")
+                    put("media_type", img.mimeType)
+                    put("data", img.imageBase64)
+                })
+            })
+        }
+    })

@@ -33,7 +33,7 @@ class AppLaunchTool(private val actions: DeviceActions) : Tool {
 class WebOpenTool(private val actions: DeviceActions) : Tool {
     override val schema = ToolSchema(
         name = "web_open",
-        description = "Открыть URL в браузере пользователю. Содержимое страницы в модель НЕ возвращается — для чтения используй web_fetch.",
+        description = "Открыть URL в браузере пользователю (показать страницу человеку). Содержимое в модель НЕ возвращается — для чтения используй web_fetch, для поиска web_search.",
         parameters = buildJsonObject {
             put("type", "object")
             put("properties", buildJsonObject {
@@ -53,10 +53,10 @@ class WebOpenTool(private val actions: DeviceActions) : Tool {
     }
 }
 
-class WebSearchTool(private val actions: DeviceActions) : Tool {
+class WebSearchTool(private val search: SearchActions) : Tool {
     override val schema = ToolSchema(
         name = "web_search",
-        description = "Поиск в интернете для пользователя (открывает поиск/браузер). Содержимое в модель НЕ возвращается — для чтения используй web_fetch.",
+        description = "Поиск в интернете: возвращает список результатов (заголовок/URL/сниппет) через настроенную поисковую систему. Для чтения страницы используй web_fetch; открыть браузер человеку — web_open.",
         parameters = buildJsonObject {
             put("type", "object")
             put("properties", buildJsonObject {
@@ -72,7 +72,7 @@ class WebSearchTool(private val actions: DeviceActions) : Tool {
     override suspend fun execute(arguments: JsonObject): ToolResult {
         val query = arguments["query"]?.jsonPrimitive?.content
             ?: return ToolResult(false, "Не указан query")
-        return actions.webSearch(query)
+        return search.search(query)
     }
 }
 

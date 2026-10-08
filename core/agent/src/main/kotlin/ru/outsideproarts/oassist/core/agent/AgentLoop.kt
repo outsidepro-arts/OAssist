@@ -31,6 +31,8 @@ class AgentLoop(
     val approvalController: ApprovalController = ApprovalController(),
     private val approvalPolicy: ApprovalPolicy = InMemoryApprovalPolicy(),
     private val events: AgentEvents? = null,
+    /** У модели флаг VISION — иначе образы вырезаются с пометкой (провайдеры без vision их отвергают). */
+    private val visionEnabled: Boolean = true,
     private val maxToolRounds: Int = ru.outsideproarts.oassist.core.model.ToolPreferences.DEFAULT_MAX_TOOL_ROUNDS,
 ) {
 
@@ -45,13 +47,21 @@ class AgentLoop(
         userMessage: String,
         /** Голосовое приложение PTT к user-ходу (null — текстовый вопрос). */
         audio: ru.outsideproarts.oassist.core.provider.AudioPart? = null,
+        /** Образы к user-сообщению (Share-вложения, скриншоты). Null — без образов. */
+        images: List<ru.outsideproarts.oassist.core.provider.ImagePart>? = null,
         /** Сообщения завершённого хода (assistant с toolCalls → TOOL → финальный assistant), без system/user. */
         onTurnMessages: ((List<ChatMessage>) -> Unit)? = null,
     ): Flow<ChatChunk> = flow {
+        val userImages = if (visionEnabled) images.orEmpty() else emptyList()
+        val userText = if (!visionEnabled && !images.isNullOrEmpty()) {
+            userMessage + IMAGE_DISABLED_NOTE
+        } else {
+            userMessage
+        }
         val messages = buildList {
             systemPrompt?.let { add(ChatMessage(ChatRole.SYSTEM, it)) }
             addAll(history)
-            add(ChatMessage(ChatRole.USER, userMessage, audio = audio))
+            add(ChatMessage(ChatRole.USER, userText, audio = audio, images = userImages))
         }.toMutableList()
         val turnStart = messages.size
 
@@ -73,7 +83,7 @@ class AgentLoop(
 
             modelClient.chatCompletionStream(
                 modelId = modelId,
-                messages = messages,
+                messages = enforceImageBudget(messages),
                 tools = tools,
             ).collect { chunk ->
                 when (chunk) {
@@ -139,15 +149,23 @@ class AgentLoop(
                         name = tc.name,
                         output = result.output,
                         isError = !result.success,
+                        images = result.images,
                     ),
                 )
                 // Результат — отдельным tool-сообщением с tool_call_id,
                 // а не текстом от ассистента: иначе модель не узнаёт свой вызов и идёт по кругу.
+                val toolImages = if (visionEnabled) result.images else emptyList()
+                val toolOutput = if (!visionEnabled && result.images.isNotEmpty()) {
+                    result.output + IMAGE_DISABLED_NOTE
+                } else {
+                    result.output
+                }
                 messages.add(
                     ChatMessage(
                         role = ChatRole.TOOL,
-                        content = result.output,
+                        content = toolOutput,
                         toolCallId = tc.id,
+                        images = toolImages,
                     ),
                 )
             }

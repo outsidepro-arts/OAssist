@@ -34,7 +34,7 @@ data class RawFetch(
  */
 class WebContentActions(private val httpClient: HttpClient) {
 
-    suspend fun fetchStatic(rawUrl: String): Result<RawFetch> {
+    suspend fun fetchStatic(rawUrl: String, userAgent: String? = null): Result<RawFetch> {
         val url = normalizeUrl(rawUrl)
             ?: return Result.failure(IllegalArgumentException("Некорректный URL: $rawUrl"))
         val host = runCatching { URI(url).host }.getOrNull()
@@ -46,6 +46,7 @@ class WebContentActions(private val httpClient: HttpClient) {
             val response = withTimeoutOrNull(STATIC_TIMEOUT_MS) {
                 httpClient.get(url) {
                     accept(ContentType.parse("text/markdown, text/html;q=0.9, text/plain;q=0.8"))
+                    userAgent?.let { headers.append(io.ktor.http.HttpHeaders.UserAgent, it) }
                 }
             } ?: throw java.util.concurrent.TimeoutException("Таймаут $STATIC_TIMEOUT_MS мс: $url")
             val contentLength = response.headers["Content-Length"]?.toLongOrNull()

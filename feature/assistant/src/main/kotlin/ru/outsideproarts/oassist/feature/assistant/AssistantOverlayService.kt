@@ -162,6 +162,9 @@ class AssistantOverlayService : LifecycleService(), SavedStateRegistryOwner {
         }
         val session = AssistSessionStore.getOrCreate()
         intent?.getStringExtra(EXTRA_SCREEN_CONTEXT)?.let { session.screenContext = it }
+        intent?.getStringExtra(EXTRA_SCREEN_IMAGE)?.let {
+            session.screenImage = ru.outsideproarts.oassist.core.provider.ImagePart(imageBase64 = it)
+        }
         val effects = if (!sessionActive) {
             if (showOverlay && !Settings.canDrawOverlays(this)) {
                 hintText = getString(R.string.assistant_no_overlay)
@@ -443,6 +446,8 @@ class AssistantOverlayService : LifecycleService(), SavedStateRegistryOwner {
                     speak = { if (autoSpeak) speech?.speak(it) },
                     speakToolCalls = true,
                 )
+                val screenImage = session.screenImage
+                session.screenImage = null
                 val agent = factory.agentFor(profile, AssistMode.ASSISTANT)
                 val thoughtSb = StringBuilder()
                 val answerSb = StringBuilder()
@@ -455,6 +460,7 @@ class AssistantOverlayService : LifecycleService(), SavedStateRegistryOwner {
                         ),
                         history = session.history,
                         userMessage = text,
+                        images = screenImage?.let { listOf(it) },
                         onTurnMessages = { turn ->
                             session.appendTurn(ChatMessage(ChatRole.USER, text), turn)
                         },
@@ -604,6 +610,7 @@ class AssistantOverlayService : LifecycleService(), SavedStateRegistryOwner {
 
     companion object {
         const val EXTRA_SCREEN_CONTEXT = "screen_context"
+        const val EXTRA_SCREEN_IMAGE = "screen_image"
         private const val CHANNEL_ID = "oassist_overlay"
         private const val SESSION_CHANNEL_ID = "oassist_session"
         private const val NOTIFICATION_ID = 0x0A52
