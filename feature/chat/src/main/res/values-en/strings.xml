@@ -8,10 +8,6 @@
     <string name="chat_stop">Stop</string>
     <string name="chat_role_user">You</string>
     <string name="chat_role_assistant">Assistant</string>
-    <string name="chat_approval_title">Allow action “%1$s”?</string>
-    <string name="chat_approval_allow_once">Allow</string>
-    <string name="chat_approval_always">Always</string>
-    <string name="chat_approval_deny">Deny</string>
     <string name="chat_speak_answer">Speak answer</string>
     <string name="chat_mic">Voice input</string>
     <string name="chat_no_recognizer">Speech recognition is unavailable on this device</string>

@@ -7,7 +7,6 @@ import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.put
 import ru.outsideproarts.oassist.core.data.memory.MemoryStore
-import ru.outsideproarts.oassist.core.model.ActionRisk
 
 /**
  * Память агента (`MEMORY.md`): чтение — свободно, запись и стирание —
@@ -53,8 +52,6 @@ class MemoryPutTool(private val memory: MemoryStore) : Tool {
         },
     )
 
-    override val risk = ActionRisk.ASK
-
     override fun describeForConfirmation(arguments: JsonObject): String {
         val text = runCatching { arguments["text"]?.jsonPrimitive?.content }.getOrNull().orEmpty()
         val mode = runCatching { arguments["mode"]?.jsonPrimitive?.content }.getOrNull()
@@ -95,8 +92,6 @@ class MemoryForgetTool(private val memory: MemoryStore) : Tool {
             put("required", buildJsonArray { add(kotlinx.serialization.json.JsonPrimitive("query")) })
         },
     )
-
-    override val risk = ActionRisk.ASK
 
     override fun describeForConfirmation(arguments: JsonObject): String {
         val query = runCatching { arguments["query"]?.jsonPrimitive?.content }.getOrNull().orEmpty()

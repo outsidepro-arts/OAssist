@@ -8,8 +8,10 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 import ru.outsideproarts.oassist.core.data.memory.MemoryStore
 import ru.outsideproarts.oassist.core.data.skill.SkillStore
-import ru.outsideproarts.oassist.core.model.ActionRisk
 import ru.outsideproarts.oassist.core.model.SkillInfo
+import ru.outsideproarts.oassist.core.model.ToolAccess
+import ru.outsideproarts.oassist.core.model.ToolCategory
+import ru.outsideproarts.oassist.core.model.ToolGroups
 
 private class FakeMemory(var text: String = "") : MemoryStore {
     override suspend fun read(): String = text
@@ -102,11 +104,13 @@ class MemoryToolsTest {
     }
 
     @Test
-    fun risks_getAuto_putForgetAsk() {
+    fun groups_getRead_putForgetWrite() {
         val memory = FakeMemory()
-        assertEquals(ActionRisk.AUTO, MemoryGetTool(memory).risk)
-        assertEquals(ActionRisk.ASK, MemoryPutTool(memory).risk)
-        assertEquals(ActionRisk.ASK, MemoryForgetTool(memory).risk)
+        val readGroup = ToolGroups.key(ToolCategory.APP_DATA, ToolAccess.READ)
+        val writeGroup = ToolGroups.key(ToolCategory.APP_DATA, ToolAccess.WRITE)
+        assertEquals(readGroup, MemoryGetTool(memory).groupKey)
+        assertEquals(writeGroup, MemoryPutTool(memory).groupKey)
+        assertEquals(writeGroup, MemoryForgetTool(memory).groupKey)
     }
 }
 

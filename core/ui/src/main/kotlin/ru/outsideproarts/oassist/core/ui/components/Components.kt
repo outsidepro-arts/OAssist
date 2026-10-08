@@ -13,6 +13,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.Checkbox
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
@@ -33,6 +34,7 @@ import androidx.compose.ui.semantics.paneTitle
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.material3.Icon
+import ru.outsideproarts.oassist.core.a11y.oassistCheckboxRow
 import ru.outsideproarts.oassist.core.a11y.oassistHeading
 import ru.outsideproarts.oassist.core.a11y.oassistMergedContent
 import ru.outsideproarts.oassist.core.a11y.oassistSwitchRow
@@ -206,6 +208,45 @@ fun OAssistSwitchRow(
             modifier = Modifier.weight(1f),
         )
         Switch(
+            checked = checked,
+            onCheckedChange = null,
+            enabled = enabled,
+            modifier = Modifier.minimumInteractiveComponentSize(),
+        )
+    }
+}
+
+/**
+ * Канонический Checkbox-ряд (по образцу [OAssistSwitchRow], Role.Checkbox):
+ * `Row` целиком фокусируем, TalkBack читает лейбл + состояние одним блоком.
+ */
+@Composable
+fun OAssistCheckboxRow(
+    checked: Boolean,
+    onCheckedChange: (Boolean) -> Unit,
+    label: String,
+    stateLabelOn: String,
+    stateLabelOff: String,
+    modifier: Modifier = Modifier,
+    enabled: Boolean = true,
+) {
+    val state = if (checked) stateLabelOn else stateLabelOff
+    Row(
+        modifier = modifier
+            .fillMaxWidth()
+            .oassistTouchTarget()
+            .oassistCheckboxRow(checked = checked, enabled = enabled, onValueChange = onCheckedChange)
+            .semantics { stateDescription = state },
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(OAssistDimens.DenseSpacing),
+    ) {
+        Text(
+            text = label,
+            style = MaterialTheme.typography.bodyLarge,
+            color = MaterialTheme.colorScheme.onSurface,
+            modifier = Modifier.weight(1f),
+        )
+        Checkbox(
             checked = checked,
             onCheckedChange = null,
             enabled = enabled,

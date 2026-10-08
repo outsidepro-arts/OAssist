@@ -1,0 +1,36 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="approval_title">Разрешить действие категории «%1$s»?</string>
+    <string name="approval_announce">Требуется подтверждение: %1$s</string>
+    <string name="approval_group_scope">Решение применится ко всем действиям этой категории.</string>
+    <string name="approval_allow_once">Разрешить однократно</string>
+    <string name="approval_allow_session">Разрешить на текущую сессию</string>
+    <string name="approval_allow_forever">Разрешить</string>
+    <string name="approval_deny">Отклонить</string>
+    <string name="approval_remember">Запомнить навсегда</string>
+    <string name="approval_remember_hint">Решение сохранится и применится автоматически.</string>
+    <string name="approval_locked_hint">Экран заблокирован — разблокируйте экран и подтвердите действие.</string>
+    <string name="state_checked">Отмечено</string>
+    <string name="state_unchecked">Не отмечено</string>
+
+    <string name="group_communication_write">Связь — запись</string>
+    <string name="group_phone_data_read">Данные телефона — чтение</string>
+    <string name="group_phone_data_write">Данные телефона — запись</string>
+    <string name="group_app_data_read">Данные приложения — чтение</string>
+    <string name="group_app_data_write">Данные приложения — запись</string>
+    <string name="group_notifications_read">Уведомления — чтение</string>
+    <string name="group_notifications_write">Уведомления — запись</string>
+    <string name="group_screen_ui_read">Экран — чтение</string>
+    <string name="group_screen_ui_write">Экран — запись</string>
+    <string name="group_microphone_read">Микрофон — чтение</string>
+    <string name="group_geolocation_read">Геолокация — чтение</string>
+    <string name="group_device_read">Устройство — чтение</string>
+    <string name="group_device_write">Устройство — запись</string>
+    <string name="group_web_read">Веб — чтение</string>
+    <string name="group_apps_navigation_write">Приложения и навигация — запись</string>
+    <string name="group_privileged_read">Привилегированные — чтение</string>
+    <string name="group_privileged_write">Привилегированные — запись</string>
+    <string name="group_mcp">MCP-инструменты</string>
+    <string name="group_service">Служебные</string>
+    <string name="group_unknown">Неизвестная категория</string>
+</resources>

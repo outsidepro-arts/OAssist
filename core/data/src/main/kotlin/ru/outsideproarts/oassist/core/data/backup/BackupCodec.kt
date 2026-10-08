@@ -27,6 +27,11 @@ data class BackupV1(
     val mcpServers: List<McpServerConfig> = emptyList(),
     val skills: List<SkillBackup> = emptyList(),
     val memory: String = "",
+
+    /** Запомненные состояния групп разрешений: `groupKey -> "ALLOW"/"DENY"`. */
+    val approvals: Map<String, String> = emptyMap(),
+
+    /** Легаси v1 (тулы, не группы): имена с «всегда разрешать» — мигрируются при импорте. */
     val alwaysAllowed: List<String> = emptyList(),
 ) {
     companion object {
@@ -37,7 +42,6 @@ data class BackupV1(
 @Serializable
 data class ToolPrefsBackup(
     val disabled: List<String> = emptyList(),
-    val askOverrides: Map<String, Boolean> = emptyMap(),
 )
 
 @Serializable

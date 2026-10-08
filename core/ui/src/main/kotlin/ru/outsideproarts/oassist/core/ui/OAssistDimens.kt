@@ -42,6 +42,11 @@ object OAssistDimens {
         @ReadOnlyComposable
         get() = dimensionResource(R.dimen.oassist_space_xxsmall)
 
+    val PanelElevation: Dp
+        @Composable
+        @ReadOnlyComposable
+        get() = dimensionResource(R.dimen.oassist_panel_elevation)
+
     val ScreenContentPadding: PaddingValues
         @Composable
         get() = PaddingValues(

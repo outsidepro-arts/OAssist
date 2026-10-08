@@ -5,7 +5,6 @@ import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
-import ru.outsideproarts.oassist.core.model.ActionRisk
 
 class AppLaunchTool(private val actions: DeviceActions) : Tool {
     override val schema = ToolSchema(
@@ -135,7 +134,6 @@ class OpenSettingsTool(private val actions: DeviceActions) : Tool {
 }
 
 class CallPlaceTool(private val actions: DeviceActions) : Tool {
-    override val risk = ActionRisk.ASK
     override val requiredPermissions = listOf(Manifest.permission.CALL_PHONE)
     override val schema = ToolSchema(
         name = "call_place",
@@ -165,7 +163,6 @@ class CallPlaceTool(private val actions: DeviceActions) : Tool {
 }
 
 class SmsSendTool(private val actions: DeviceActions) : Tool {
-    override val risk = ActionRisk.ASK
     override val requiredPermissions = listOf(Manifest.permission.SEND_SMS)
     override val schema = ToolSchema(
         name = "sms_send",
@@ -229,7 +226,6 @@ class ContactFindTool(private val actions: DeviceActions) : Tool {
 }
 
 class CalendarAddTool(private val actions: DeviceActions) : Tool {
-    override val risk = ActionRisk.ASK
     override val requiredPermissions = listOf(Manifest.permission.WRITE_CALENDAR)
     override val schema = ToolSchema(
         name = "calendar_add",
@@ -445,7 +441,6 @@ class MediaButtonTool(private val actions: DeviceActions) : Tool {
 }
 
 class LocationGetTool(private val actions: DeviceActions) : Tool {
-    override val risk = ActionRisk.ASK
     override val requiredPermissions = listOf(Manifest.permission.ACCESS_FINE_LOCATION)
     override val schema = ToolSchema(
         name = "location_get",

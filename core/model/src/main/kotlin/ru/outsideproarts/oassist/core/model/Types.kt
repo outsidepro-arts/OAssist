@@ -74,9 +74,4 @@ enum class SpeechOutputChannel {
     SCREEN_READER,
 }
 
-/** Уровень риска действия — управляет подтверждением. */
-enum class ActionRisk {
-    AUTO,
-    ASK,
-    ALWAYS_ASK,
-}
+

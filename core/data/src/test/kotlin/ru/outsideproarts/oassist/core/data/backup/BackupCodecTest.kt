@@ -23,10 +23,11 @@ class BackupCodecTest {
         ),
         modes = listOf(ModeConfig(mode = AssistMode.CHAT, providerId = "p1", modelId = "m")),
         catalogs = listOf(ModelCatalog(providerId = "p1", updatedAtEpochMs = 1L, models = listOf(ModelInfo("m")))),
-        toolPrefs = ToolPrefsBackup(disabled = listOf("sms_send"), askOverrides = mapOf("ui_click" to true)),
+        toolPrefs = ToolPrefsBackup(disabled = listOf("sms_send")),
         mcpServers = listOf(McpServerConfig(id = "s", name = "S", url = "https://mcp")),
         skills = listOf(SkillBackup(name = "tea", title = "Tea", body = "love tea", enabled = true)),
         memory = "люблю чай",
+        approvals = mapOf("COMMUNICATION.WRITE" to "DENY"),
         alwaysAllowed = listOf("sms_send"),
     )
 
@@ -36,6 +37,27 @@ class BackupCodecTest {
         assertEquals(sample().copy(exportedAtEpochMs = decoded.exportedAtEpochMs), decoded)
         assertEquals(listOf("sms_send"), decoded.toolPrefs.disabled)
         assertEquals("люблю чай", decoded.memory)
+    }
+
+    @Test
+    fun `миграция легаси alwaysAllowed даёт ALLOW группы тула`() {
+        val decoded = decodeBackup(encodeBackup(sample())).getOrThrow()
+        val states = decoded.toApprovalStates()
+        // sms_send → COMMUNICATION.WRITE: и легаси-ALLOW, и новый DENY — DENY главнее.
+        assertEquals(
+            ru.outsideproarts.oassist.core.model.ApprovalState.DENY,
+            states["COMMUNICATION.WRITE"],
+        )
+    }
+
+    @Test
+    fun `миграция без нового поля работает только по легаси`() {
+        val legacy = sample().copy(approvals = emptyMap())
+        val states = decodeBackup(encodeBackup(legacy)).getOrThrow().toApprovalStates()
+        assertEquals(
+            ru.outsideproarts.oassist.core.model.ApprovalState.ALLOW,
+            states["COMMUNICATION.WRITE"],
+        )
     }
 
     @Test

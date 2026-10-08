@@ -66,7 +66,6 @@
     <string name="skills_enabled_label">Enable skill “%1$s”</string>
     <string name="state_enabled">enabled</string>
     <string name="state_disabled">disabled</string>
-    <string name="state_missing">Permission not granted</string>
     <string name="action_save">Save</string>
     <string name="action_delete">Delete</string>
     <string name="action_back">Back</string>
@@ -131,9 +130,13 @@
 
     <!-- Approvals -->
     <string name="approvals_title">Confirmations</string>
-    <string name="approvals_reset">Reset “always allow”</string>
-    <string name="approvals_reset_subtitle">Ask again before every risky action</string>
-    <string name="approvals_reset_done">Tool permissions reset</string>
+    <string name="approvals_reset">Reset remembered decisions</string>
+    <string name="approvals_reset_subtitle">Ask again for all action categories</string>
+    <string name="approvals_reset_done">Remembered decisions reset</string>
+    <string name="approvals_remembered_title">Remembered permissions</string>
+    <string name="approval_state_ask">Ask</string>
+    <string name="approval_state_allow">Allowed</string>
+    <string name="approval_state_deny">Denied</string>
 
     <!-- Agent tools -->
     <string name="settings_search_title">Search</string>
@@ -152,9 +155,16 @@
     <string name="tools_settings_subtitle">Agent access and action confirmations</string>
     <string name="tools_section_tools">Tools</string>
     <string name="tool_enabled">Enabled</string>
-    <string name="tool_ask">Ask before executing</string>
+    <string name="tools_ask_preset">What to ask</string>
+    <string name="tools_ask_preset_subtitle">The preset rewrites remembered decisions for read and write categories</string>
+    <string name="tools_ask_preset_read">Ask for read</string>
+    <string name="tools_ask_preset_write">Ask for write</string>
+    <string name="tools_ask_preset_both">Ask for both read and write</string>
+    <string name="tools_ask_preset_allow_all">Allow all</string>
+    <string name="tools_ask_preset_deny_all">Deny all</string>
+    <string name="tools_ask_preset_manual">Customized manually</string>
     <string name="tools_reset">Reset tool settings</string>
-    <string name="tools_reset_subtitle">Restore default enablement and confirmations</string>
+    <string name="tools_reset_subtitle">Restore default enablement and action limit</string>
     <string name="tools_max_rounds">Agent action limit</string>
     <string name="tools_max_rounds_subtitle">How many tool-call rounds the agent may run per turn. With no limit, only the agent itself ends the turn</string>
     <string name="tools_max_rounds_none">No limit</string>
@@ -242,15 +252,6 @@
     <string name="tool_bye_desc">The agent ends the assistant session when the user says goodbye, thanks it or clearly signals the dialog is over</string>
     <string name="tool_brightness_set_title">Screen brightness</string>
     <string name="tool_brightness_set_desc">Brightness in manual mode (needs special access)</string>
-    <string name="perm_microphone">Microphone</string>
-    <string name="perm_camera">Camera (torch)</string>
-    <string name="perm_location">Location</string>
-    <string name="tools_perm_note">Some tools need system permissions — grant them below.</string>
-    <string name="tools_perm_grant">Grant permission</string>
-    <string name="perm_call_phone">Phone (calls)</string>
-    <string name="perm_send_sms">SMS (sending)</string>
-    <string name="perm_read_contacts">Contacts (read)</string>
-    <string name="perm_calendar">Calendar (read and write)</string>
 
     <!-- MCP servers -->
     <string name="mcp_settings_title">MCP servers</string>

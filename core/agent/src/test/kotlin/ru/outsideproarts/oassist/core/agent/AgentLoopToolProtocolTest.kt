@@ -11,7 +11,6 @@ import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
-import ru.outsideproarts.oassist.core.model.ActionRisk
 import ru.outsideproarts.oassist.core.model.ModelInfo
 import ru.outsideproarts.oassist.core.provider.ChatChunk
 import ru.outsideproarts.oassist.core.provider.ChatMessage
@@ -41,9 +40,10 @@ class AgentLoopToolProtocolTest {
 
     private class PingTool : Tool {
         var executions = 0
+        override val groupKey = ru.outsideproarts.oassist.core.model.ToolGroups.SERVICE
         override val schema = ToolSchema(
             name = "ping",
-            description = "Тест",
+            description = "Пинг",
             parameters = buildJsonObject { put("type", "object") },
         )
         override suspend fun execute(arguments: JsonObject): ToolResult {
@@ -84,8 +84,7 @@ class AgentLoopToolProtocolTest {
 
         // Старого текстового маркера в истории нет.
         assertFalse(secondRound.any { it.content.contains("[tool:") })
-        // Риск дефолтный: AUTO-тул не должен требовать подтверждения.
-        assertEquals(ActionRisk.AUTO, tool.risk)
+        assertEquals(ru.outsideproarts.oassist.core.model.ToolGroups.SERVICE, tool.groupKey)
     }
 
     @Test

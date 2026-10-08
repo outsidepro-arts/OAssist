@@ -249,6 +249,9 @@ private fun OAssistApp(
                             approvalPolicy = graph.approvalPolicy,
                             events = graph.narratorEvents,
                             visionEnabled = chatVision,
+                            sessionScope = ru.outsideproarts.oassist.core.model.AssistMode.CHAT.name,
+                            permissionRequester = graph.permissionRequester,
+                            screenLocked = { graph.keyguardLockState.isLocked() },
                         )
                         ru.outsideproarts.oassist.core.agent.AgentSession(
                             chunks = agent.stream(
@@ -488,59 +491,39 @@ private fun OAssistApp(
                         initialValue = ru.outsideproarts.oassist.core.model.ToolPreferences(),
                     )
                 val context = LocalContext.current
-                var permVersion by remember { mutableStateOf(0) }
-                val tools = remember(context) {
-                    ru.outsideproarts.oassist.core.agent.ToolCatalog.createTools(
-                        ru.outsideproarts.oassist.core.agent.DeviceActions(
-                            context.applicationContext,
-                            graph.torchTracker,
-                        ),
-                        graph.uiActions,
-                        graph.notifyActions,
-                        graph.webContentActions,
-                        graph.webRenderActions,
-                        graph.voiceCapture,
-                        graph.data.memory,
-                        graph.data.skills,
-                        // Экран настроек использует только метаданные (разрешения);
-                        // исполнение здесь не нужно — достаточно Noop.
-                        graph.noopExecutor,
-                        graph.searchActions,
-                    )
+                val approvalVersion = remember { mutableStateOf(0) }
+                val rememberedApprovals = remember(approvalVersion.value) {
+                    graph.approvalPolicy.remembered()
                 }
-                val toolPermissions = remember(tools) {
-                    tools.associate { it.schema.name to it.requiredPermissions }
+                val matchedPreset = remember(approvalVersion.value) {
+                    graph.approvalPolicy.matchesPreset()
                 }
-                val missingPermissions = remember(permVersion) {
-                    toolPermissions.values.flatten().toSet().filter { permission ->
-                        context.checkSelfPermission(permission) !=
-                            android.content.pm.PackageManager.PERMISSION_GRANTED
-                    }.toSet()
-                }
-                val permLauncher = rememberLauncherForActivityResult(
-                    ActivityResultContracts.RequestMultiplePermissions(),
-                ) { permVersion++ }
                 ru.outsideproarts.oassist.feature.settings.ToolsSettingsScreen(
                     tools = ru.outsideproarts.oassist.core.agent.ToolCatalog.descriptors(),
                     disabled = prefs.disabled,
-                    askOverrides = prefs.askOverrides,
+                    rememberedApprovals = rememberedApprovals,
+                    matchedPreset = matchedPreset,
                     maxToolRounds = prefs.maxToolRounds,
-                    toolPermissions = toolPermissions,
-                    missingPermissions = missingPermissions,
                     onToggleEnabled = { name, enabled ->
                         scope.launch { graph.data.toolConfigs.setToolEnabled(name, enabled) }
                     },
-                    onToggleAsk = { name, ask ->
-                        scope.launch { graph.data.toolConfigs.setAskBefore(name, ask) }
+                    onApplyPreset = { preset ->
+                        graph.approvalPolicy.applyPreset(preset)
+                        approvalVersion.value++
+                    },
+                    onResetGroup = { groupKey ->
+                        graph.approvalPolicy.setRemembered(
+                            groupKey,
+                            ru.outsideproarts.oassist.core.model.ApprovalState.ASK,
+                        )
+                        approvalVersion.value++
                     },
                     onMaxToolRoundsChange = { rounds ->
                         scope.launch { graph.data.toolConfigs.setMaxToolRounds(rounds) }
                     },
-                    onGrantPermission = { permission ->
-                        permLauncher.launch(arrayOf(permission))
-                    },
                     onResetApprovals = {
-                        graph.approvalPolicy.clearAlwaysAllowed()
+                        graph.approvalPolicy.clearRemembered()
+                        approvalVersion.value++
                         showToast(context, R.string.approvals_reset_done)
                     },
                     onResetTools = {

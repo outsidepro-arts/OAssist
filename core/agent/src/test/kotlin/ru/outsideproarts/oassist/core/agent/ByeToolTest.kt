@@ -16,10 +16,10 @@ class ByeToolTest {
     }
 
     @Test
-    fun schema_isAutoRiskWithoutParameters() {
+    fun schema_isServiceGroupWithoutParameters() {
         val tool = ByeTool()
         assertEquals("bye", tool.schema.name)
-        assertEquals(ru.outsideproarts.oassist.core.model.ActionRisk.AUTO, tool.risk)
+        assertEquals(ru.outsideproarts.oassist.core.model.ToolGroups.SERVICE, tool.groupKey)
     }
 
     @Test

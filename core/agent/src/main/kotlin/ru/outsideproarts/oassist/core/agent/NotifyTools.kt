@@ -4,7 +4,6 @@ import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.put
-import ru.outsideproarts.oassist.core.model.ActionRisk
 
 /** Инструменты чтения уведомлений через пассивный NotificationListenerService. */
 class NotifyListTool(private val notify: NotifyActions) : Tool {
@@ -21,7 +20,6 @@ class NotifyListTool(private val notify: NotifyActions) : Tool {
 }
 
 class NotifyOpenTool(private val notify: NotifyActions) : Tool {
-    override val risk = ActionRisk.ASK
     override val schema = ToolSchema(
         name = "notify_open",
         description = "Открыть уведомление по ключу из notify_list (запускает приложение).",
@@ -48,7 +46,6 @@ class NotifyOpenTool(private val notify: NotifyActions) : Tool {
 }
 
 class NotifyClearTool(private val notify: NotifyActions) : Tool {
-    override val risk = ActionRisk.ASK
     override val schema = ToolSchema(
         name = "notify_clear",
         description = "Скрыть уведомление по ключу из notify_list.",
@@ -75,7 +72,6 @@ class NotifyClearTool(private val notify: NotifyActions) : Tool {
 }
 
 class NotifyReplyTool(private val notify: NotifyActions) : Tool {
-    override val risk = ActionRisk.ASK
     override val schema = ToolSchema(
         name = "notify_reply",
         description = "Ответить текстом на уведомление по ключу из notify_list (только если у него есть действие ответа).",

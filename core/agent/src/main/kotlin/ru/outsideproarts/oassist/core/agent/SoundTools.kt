@@ -4,11 +4,9 @@ import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.put
-import ru.outsideproarts.oassist.core.model.ActionRisk
 
 /** Громкость, «Не беспокоить», яркость (M5.2). Спецдоступы — явные подсказки, не молча. */
 class VolumeSetTool(private val actions: DeviceActions) : Tool {
-    override val risk = ActionRisk.ASK
     override val schema = ToolSchema(
         name = "volume_set",
         description = "Задать громкость потока процентами: music/ring/alarm/notification.",
@@ -47,7 +45,6 @@ class VolumeSetTool(private val actions: DeviceActions) : Tool {
 }
 
 class DndSetTool(private val actions: DeviceActions) : Tool {
-    override val risk = ActionRisk.ASK
     override val schema = ToolSchema(
         name = "dnd_set",
         description = "Включить/выключить «Не беспокоить». Требует спецдоступ (подсказка — в ответе).",
@@ -83,7 +80,6 @@ class DndSetTool(private val actions: DeviceActions) : Tool {
 }
 
 class BrightnessSetTool(private val actions: DeviceActions) : Tool {
-    override val risk = ActionRisk.ASK
     override val schema = ToolSchema(
         name = "brightness_set",
         description = "Задать яркость экрана процентами (переводит в ручной режим). Требует спецдоступ.",

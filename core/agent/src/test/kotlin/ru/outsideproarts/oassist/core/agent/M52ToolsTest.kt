@@ -7,7 +7,9 @@ import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
-import ru.outsideproarts.oassist.core.model.ActionRisk
+import ru.outsideproarts.oassist.core.model.ToolAccess
+import ru.outsideproarts.oassist.core.model.ToolCategory
+import ru.outsideproarts.oassist.core.model.ToolGroups
 
 class M52ToolsTest {
 
@@ -28,18 +30,18 @@ class M52ToolsTest {
     }
 
     @Test
-    fun `каталог содержит тулы M5_2 с риском ASK`() {
-        val descriptors = ToolCatalog.descriptors().associate { it.name to it.defaultRisk }
-        assertEquals(ActionRisk.ASK, descriptors["notify_reply"])
-        assertEquals(ActionRisk.ASK, descriptors["volume_set"])
-        assertEquals(ActionRisk.ASK, descriptors["dnd_set"])
-        assertEquals(ActionRisk.ASK, descriptors["brightness_set"])
+    fun `тулы M5_2 входят в группы записи и спрашиваются`() {
+        val descriptors = ToolCatalog.descriptors().associate { it.name to it.groupKey }
+        assertEquals(ToolGroups.key(ToolCategory.COMMUNICATION, ToolAccess.WRITE), descriptors["notify_reply"])
+        assertEquals(ToolGroups.key(ToolCategory.DEVICE, ToolAccess.WRITE), descriptors["volume_set"])
+        assertEquals(ToolGroups.key(ToolCategory.DEVICE, ToolAccess.WRITE), descriptors["dnd_set"])
+        assertEquals(ToolGroups.key(ToolCategory.DEVICE, ToolAccess.WRITE), descriptors["brightness_set"])
     }
 
     @Test
-    fun `notify_reply без провайдера fail-closed`() {
+    fun `notify_reply при пустом listener честно падает fail-closed`() {
         val tool = NotifyReplyTool(NotifyActions { null })
-        assertEquals(ActionRisk.ASK, tool.risk)
+        assertEquals(ToolGroups.key(ToolCategory.COMMUNICATION, ToolAccess.WRITE), tool.groupKey)
         val args = buildJsonObject {
             put("key", "k")
             put("text", "привет")

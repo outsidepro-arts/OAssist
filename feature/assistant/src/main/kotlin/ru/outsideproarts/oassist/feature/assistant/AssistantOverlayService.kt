@@ -36,6 +36,7 @@ import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import ru.outsideproarts.oassist.core.agent.AgentFactory
+import ru.outsideproarts.oassist.core.agent.AgentLoop
 import ru.outsideproarts.oassist.core.agent.AgentSession
 import ru.outsideproarts.oassist.core.agent.AgentToolEvent
 import ru.outsideproarts.oassist.core.agent.AssistSessionStore
@@ -57,6 +58,7 @@ import ru.outsideproarts.oassist.core.speech.SttError
 import ru.outsideproarts.oassist.core.speech.SttListener
 import ru.outsideproarts.oassist.core.speech.StreamSpeaker
 import ru.outsideproarts.oassist.core.speech.VoiceHandle
+import ru.outsideproarts.oassist.core.ui.components.ApprovalPanel
 import ru.outsideproarts.oassist.core.ui.theme.OAssistTheme
 
 /**
@@ -84,6 +86,9 @@ class AssistantOverlayService : LifecycleService(), SavedStateRegistryOwner {
     private var isStreaming by mutableStateOf(false)
     private var expanded by mutableStateOf(false)
     private var hintText by mutableStateOf<String?>(null)
+
+    /** Пауза на подтверждение действия: диалог живёт в композиции оверлея (showOverlay-режим). */
+    private var pendingApproval by mutableStateOf<Pair<ApprovalRequest, AgentLoop>?>(null)
     private var listening = false
 
     private var sttLanguage: String = "ru-RU"
@@ -188,6 +193,7 @@ class AssistantOverlayService : LifecycleService(), SavedStateRegistryOwner {
         mediaRouter?.release()
         mediaRouter = null
         AssistSessionStore.clear()
+        runCatching { AgentFactory.get().clearSessionApprovals(AssistMode.ASSISTANT) }
         turnJob?.cancel()
         speech?.stop()
         removeOverlay()
@@ -411,6 +417,8 @@ class AssistantOverlayService : LifecycleService(), SavedStateRegistryOwner {
         val session = AssistSessionStore.getOrCreate()
         isStreaming = true
         pendingBye = false
+        pendingApproval = null
+        setInputFocusable(false)
         answer = ""
         thought = ""
         toolEvents.clear()
@@ -499,7 +507,30 @@ class AssistantOverlayService : LifecycleService(), SavedStateRegistryOwner {
                             else toolEvents.add(event)
                         }
                         is ChatChunk.ApprovalNeeded -> {
-                            agent.resolveApproval(chunk.request.callId, ApprovalDecision.DENY)
+                            if (chunk.request.screenLocked) {
+                                speech?.speak(getString(ru.outsideproarts.oassist.core.ui.R.string.approval_locked_hint))
+                            }
+                            if (showOverlay) {
+                                pendingApproval = chunk.request to agent
+                                // Окно нефокусируемо (панель поверх приложения) — пока запрос
+                                // висит, фокус нужен, чтобы accessibility-фокус сел в диалог.
+                                setInputFocusable(true)
+                            } else {
+                                // Notification-режим: диалог отдельным окном (ConsentActivity),
+                                // резолвер держим на время паузы цикла.
+                                ru.outsideproarts.oassist.core.agent.ApprovalUiBridge.register(
+                                    chunk.request.callId,
+                                ) { decision -> agent.resolveApproval(chunk.request.callId, decision) }
+                                runCatching {
+                                    startActivity(
+                                        ConsentActivity.approvalIntent(this@AssistantOverlayService, chunk.request)
+                                            .addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK),
+                                    )
+                                }.onFailure {
+                                    ru.outsideproarts.oassist.core.agent.ApprovalUiBridge.clear(chunk.request.callId)
+                                    agent.resolveApproval(chunk.request.callId, ApprovalDecision.DENY)
+                                }
+                            }
                         }
                         is ChatChunk.Finish -> {
                             thoughtSpeaker.onFinish(thoughtSb.toString())
@@ -553,23 +584,35 @@ class AssistantOverlayService : LifecycleService(), SavedStateRegistryOwner {
             setContent {
                 OAssistTheme {
                     val voiceState by voiceFlow.state.collectAsState()
-                    AssistPill(
-                        answer = answer,
-                        thought = thought,
-                        tools = toolEvents.toList(),
-                        statusHint = hintText,
-                        listening = voiceState is AssistVoiceState.Listening && listening,
-                        sttPreview = sttPreview,
-                        isStreaming = isStreaming,
-                        expanded = expanded,
-                        announcer = speech?.announcer,
-                        onExpandedChange = { expanded = it },
-                        onSend = { execute(voiceFlow.onUserSubmit(it)) },
-                        onMicToggle = { execute(voiceFlow.onPlayPause()) },
-                        onClose = { stopSelf() },
-                        onSpeakAnswer = ::onSpeakAnswer,
-                        onInputFocusChanged = { focused -> setInputFocusable(focused) },
-                    )
+                    androidx.compose.foundation.layout.Column {
+                    pendingApproval?.let { (request, agent) ->
+                        ApprovalPanel(
+                            request = request,
+                            onDecision = { decision ->
+                                agent.resolveApproval(request.callId, decision)
+                                pendingApproval = null
+                                setInputFocusable(false)
+                            },
+                        )
+                    }
+                        AssistPill(
+                            answer = answer,
+                            thought = thought,
+                            tools = toolEvents.toList(),
+                            statusHint = hintText,
+                            listening = voiceState is AssistVoiceState.Listening && listening,
+                            sttPreview = sttPreview,
+                            isStreaming = isStreaming,
+                            expanded = expanded,
+                            announcer = speech?.announcer,
+                            onExpandedChange = { expanded = it },
+                            onSend = { execute(voiceFlow.onUserSubmit(it)) },
+                            onMicToggle = { execute(voiceFlow.onPlayPause()) },
+                            onClose = { stopSelf() },
+                            onSpeakAnswer = ::onSpeakAnswer,
+                            onInputFocusChanged = { focused -> setInputFocusable(focused) },
+                        )
+                    }
                 }
             }
             wrapper.addView(

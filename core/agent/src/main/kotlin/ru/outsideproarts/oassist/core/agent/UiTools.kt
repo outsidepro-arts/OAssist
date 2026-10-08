@@ -4,7 +4,6 @@ import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.put
-import ru.outsideproarts.oassist.core.model.ActionRisk
 
 /**
  * Инструменты управления экраном через пассивный AccessibilityService.
@@ -30,7 +29,6 @@ class UiGetScreenTool(private val ui: UiActions) : Tool {
 }
 
 class UiClickTool(private val ui: UiActions) : Tool {
-    override val risk = ActionRisk.ASK
     override val schema = ToolSchema(
         name = "ui_click",
         description = "Нажать на элемент экрана по индексу из ui_get_screen.",
@@ -59,7 +57,6 @@ class UiClickTool(private val ui: UiActions) : Tool {
 }
 
 class UiLongClickTool(private val ui: UiActions) : Tool {
-    override val risk = ActionRisk.ASK
     override val schema = ToolSchema(
         name = "ui_long_click",
         description = "Долгое нажатие на элемент экрана по индексу из ui_get_screen.",
@@ -88,7 +85,6 @@ class UiLongClickTool(private val ui: UiActions) : Tool {
 }
 
 class UiSetTextTool(private val ui: UiActions) : Tool {
-    override val risk = ActionRisk.ASK
     override val schema = ToolSchema(
         name = "ui_set_text",
         description = "Ввести текст в поле ввода по индексу из ui_get_screen.",
@@ -127,7 +123,6 @@ class UiSetTextTool(private val ui: UiActions) : Tool {
 }
 
 class UiScrollTool(private val ui: UiActions) : Tool {
-    override val risk = ActionRisk.ASK
     override val schema = ToolSchema(
         name = "ui_scroll",
         description = "Прокрутить список на экране. Без index — первый прокручиваемый узел.",
@@ -161,7 +156,6 @@ class UiScrollTool(private val ui: UiActions) : Tool {
 }
 
 class UiSwipeTool(private val ui: UiActions) : Tool {
-    override val risk = ActionRisk.ASK
     override val schema = ToolSchema(
         name = "ui_swipe",
         description = "Свайп по координатам экрана (из снимка ui_get_screen).",

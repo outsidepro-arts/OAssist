@@ -1,8 +1,8 @@
 package ru.outsideproarts.oassist.core.agent
 
 import kotlinx.serialization.json.JsonObject
-import ru.outsideproarts.oassist.core.model.ActionRisk
 import ru.outsideproarts.oassist.core.model.PrivilegeLevel
+import ru.outsideproarts.oassist.core.model.ToolGroups
 import ru.outsideproarts.oassist.core.provider.ImagePart
 
 /** Описание инструмента для передачи в LLM (OpenAI function calling). */
@@ -24,9 +24,12 @@ data class ToolResult(
 interface Tool {
     val schema: ToolSchema
 
-    /** Уровень риска: управляет паузой на подтверждение в [AgentLoop]. */
-    val risk: ActionRisk
-        get() = ActionRisk.AUTO
+    /**
+     * Ключ группы разрешений: решение пользователя (разрешить/запретить) действует
+     * на всю группу. Дефолт — по имени тула; MCP-тулы переопределяют на `mcp:<id>`.
+     */
+    val groupKey: String
+        get() = ToolGroups.groupOf(schema.name)
 
     /** Минимальный уровень привилегий для выполнения. */
     val privilege: PrivilegeLevel
@@ -38,20 +41,25 @@ interface Tool {
 
     /**
      * Человекочитаемое описание вызова для диалога подтверждения.
-     * Дефолт — имя + сырые аргументы; инструменты с [ActionRisk.ASK] и выше
-     * переопределяют на понятный текст без секретов.
+     * Дефолт — имя тула с аргументами `ключ=значение`; инструменты с осмысленным
+     * действием переопределяют на понятный текст без секретов.
      */
-    fun describeForConfirmation(arguments: JsonObject): String =
-        "${schema.name}: $arguments"
+    fun describeForConfirmation(arguments: JsonObject): String {
+        if (arguments.isEmpty()) return schema.name
+        val rendered = arguments.entries.joinToString(", ") { (key, value) ->
+            val text = value.toString().trim('"')
+            "$key=${text.take(ARG_VALUE_LIMIT)}"
+        }
+        return "${schema.name}($rendered)"
+    }
 
     suspend fun execute(arguments: JsonObject): ToolResult
 }
 
-/** Реестр инструментов с учётом пользовательских настроек (вкл/выкл, «спрашивать»). */
+/** Реестр инструментов с учётом пользовательских настроек (вкл/выкл). */
 class ToolRegistry(
     private val tools: List<Tool>,
     private val disabled: Set<String> = emptySet(),
-    private val askOverrides: Map<String, Boolean> = emptyMap(),
 ) {
 
     /** Схемы для модели: только включённые — выключенные модель не должна вызывать. */
@@ -62,20 +70,8 @@ class ToolRegistry(
 
     fun isEnabled(name: String): Boolean = name !in disabled
 
-    /**
-     * Эффективный риск с учётом переопределения пользователя:
-     * `true` — минимум ASK (понизить дефолт нельзя),
-     * `false` — всегда AUTO, нет записи — дефолт инструмента.
-     * Неизвестный инструмент — ASK (fail-closed).
-     */
-    fun effectiveRisk(name: String): ActionRisk {
-        val base = find(name)?.risk ?: return ActionRisk.ASK
-        return when (askOverrides[name]) {
-            true -> if (base == ActionRisk.AUTO) ActionRisk.ASK else base
-            false -> ActionRisk.AUTO
-            null -> base
-        }
-    }
+    /** Группа разрешений тула; неизвестный — [ToolGroups.UNKNOWN] (fail-closed). */
+    fun groupKey(name: String): String = find(name)?.groupKey ?: ToolGroups.UNKNOWN
 
     suspend fun execute(name: String, arguments: JsonObject): ToolResult {
         val tool = find(name) ?: return ToolResult(false, "Инструмент '$name' не найден")
@@ -84,3 +80,5 @@ class ToolRegistry(
             .getOrElse { ToolResult(false, "Ошибка: ${it.message}") }
     }
 }
+
+private const val ARG_VALUE_LIMIT = 80

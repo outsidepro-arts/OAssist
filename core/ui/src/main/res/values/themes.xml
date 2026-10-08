@@ -11,4 +11,5 @@
         <item name="android:windowNoTitle">true</item>
         <item name="android:backgroundDimEnabled">true</item>
     </style>
+    <style name="Theme.OAssist.Consent" parent="Theme.OAssist.Assist" />
 </resources>

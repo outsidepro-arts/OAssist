@@ -13,7 +13,7 @@ import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
-import ru.outsideproarts.oassist.core.model.ActionRisk
+import ru.outsideproarts.oassist.core.model.ToolGroups
 
 class McpClientTest {
 
@@ -66,6 +66,7 @@ class McpClientTest {
         val mcp = client(scriptedEngine())
         val info = mcp.listTools().single()
         val tool = McpTool(
+            serverId = "srv-1",
             serverName = "Домашний",
             toolName = info.name,
             displayName = McpTool.displayName("srv-1", info.name),
@@ -73,7 +74,7 @@ class McpClientTest {
             parameters = info.inputSchema,
             client = mcp,
         )
-        assertEquals(ActionRisk.ASK, tool.risk)
+        assertEquals(ToolGroups.mcp("srv-1"), tool.groupKey)
         assertTrue(tool.schema.description!!.contains("Домашний"))
         val out = tool.execute(JsonObject(emptyMap()))
         assertTrue(out.success)
@@ -99,7 +100,7 @@ class McpClientTest {
         }
         val mcp = client(engine)
         val info = mcp.listTools().single()
-        val tool = McpTool("S", info.name, McpTool.displayName("s", info.name), null, info.inputSchema, mcp)
+        val tool = McpTool("s", "S", info.name, McpTool.displayName("s", info.name), null, info.inputSchema, mcp)
         val out = tool.execute(JsonObject(emptyMap()))
         assertFalse(out.success)
         assertEquals("denied", out.output)

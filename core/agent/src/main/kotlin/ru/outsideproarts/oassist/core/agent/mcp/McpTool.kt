@@ -4,14 +4,15 @@ import kotlinx.serialization.json.JsonObject
 import ru.outsideproarts.oassist.core.agent.Tool
 import ru.outsideproarts.oassist.core.agent.ToolResult
 import ru.outsideproarts.oassist.core.agent.ToolSchema
-import ru.outsideproarts.oassist.core.model.ActionRisk
+import ru.outsideproarts.oassist.core.model.ToolGroups
 
 /**
  * Адаптер внешнего MCP-инструмента под интерфейс [Tool].
- * Риск — ASK по умолчанию (внешний код, fail-closed): понижается только
- * явным «не спрашивать» в настройках. Повысить до ALWAYS_ASK — там же.
+ * Группа разрешений — per-сервер (`mcp:<id>`): разрешение одного сервера
+ * не разрешает остальные. Вне записи группа спрашивает (fail-closed).
  */
 class McpTool(
+    private val serverId: String,
     private val serverName: String,
     private val toolName: String,
     private val displayName: String,
@@ -26,7 +27,7 @@ class McpTool(
         parameters = parameters,
     )
 
-    override val risk: ActionRisk = ActionRisk.ASK
+    override val groupKey: String = ToolGroups.mcp(serverId)
 
     override fun describeForConfirmation(arguments: JsonObject): String =
         "MCP «$serverName» → $toolName: $arguments"

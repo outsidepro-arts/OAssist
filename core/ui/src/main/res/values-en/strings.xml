@@ -1,0 +1,36 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="approval_title">Allow action in category “%1$s”?</string>
+    <string name="approval_announce">Confirmation required: %1$s</string>
+    <string name="approval_group_scope">The decision will apply to all actions in this category.</string>
+    <string name="approval_allow_once">Allow once</string>
+    <string name="approval_allow_session">Allow for this session</string>
+    <string name="approval_allow_forever">Allow</string>
+    <string name="approval_deny">Deny</string>
+    <string name="approval_remember">Remember forever</string>
+    <string name="approval_remember_hint">The decision is saved and applied automatically.</string>
+    <string name="approval_locked_hint">Screen is locked — unlock the device and confirm the action.</string>
+    <string name="state_checked">Checked</string>
+    <string name="state_unchecked">Not checked</string>
+
+    <string name="group_communication_write">Communication — write</string>
+    <string name="group_phone_data_read">Phone data — read</string>
+    <string name="group_phone_data_write">Phone data — write</string>
+    <string name="group_app_data_read">App data — read</string>
+    <string name="group_app_data_write">App data — write</string>
+    <string name="group_notifications_read">Notifications — read</string>
+    <string name="group_notifications_write">Notifications — write</string>
+    <string name="group_screen_ui_read">Screen — read</string>
+    <string name="group_screen_ui_write">Screen — write</string>
+    <string name="group_microphone_read">Microphone — read</string>
+    <string name="group_geolocation_read">Location — read</string>
+    <string name="group_device_read">Device — read</string>
+    <string name="group_device_write">Device — write</string>
+    <string name="group_web_read">Web — read</string>
+    <string name="group_apps_navigation_write">Apps and navigation — write</string>
+    <string name="group_privileged_read">Privileged — read</string>
+    <string name="group_privileged_write">Privileged — write</string>
+    <string name="group_mcp">MCP tools</string>
+    <string name="group_service">Service</string>
+    <string name="group_unknown">Unknown category</string>
+</resources>

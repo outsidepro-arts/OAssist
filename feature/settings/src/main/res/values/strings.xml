@@ -66,7 +66,6 @@
     <string name="skills_enabled_label">Включить навык «%1$s»</string>
     <string name="state_enabled">включён</string>
     <string name="state_disabled">выключен</string>
-    <string name="state_missing">Разрешение не выдано</string>
     <string name="action_save">Сохранить</string>
     <string name="action_delete">Удалить</string>
     <string name="action_back">Назад</string>
@@ -131,9 +130,13 @@
 
     <!-- Подтверждения -->
     <string name="approvals_title">Подтверждения</string>
-    <string name="approvals_reset">Сбросить «всегда разрешать»</string>
-    <string name="approvals_reset_subtitle">Снова спрашивать перед каждым опасным действием</string>
-    <string name="approvals_reset_done">Разрешения тулов сброшены</string>
+    <string name="approvals_reset">Сбросить запомненные решения</string>
+    <string name="approvals_reset_subtitle">Снова спрашивать по всем категориям действий</string>
+    <string name="approvals_reset_done">Запомненные решения сброшены</string>
+    <string name="approvals_remembered_title">Запомненные разрешения</string>
+    <string name="approval_state_ask">Спрашивать</string>
+    <string name="approval_state_allow">Разрешено</string>
+    <string name="approval_state_deny">Запрещено</string>
 
     <!-- Инструменты агента -->
     <string name="settings_search_title">Поиск</string>
@@ -151,9 +154,16 @@
     <string name="tools_settings_title">Инструменты агента</string>    <string name="tools_settings_subtitle">Доступ агенту и подтверждения действий</string>
     <string name="tools_section_tools">Инструменты</string>
     <string name="tool_enabled">Включён</string>
-    <string name="tool_ask">Спрашивать перед выполнением</string>
+    <string name="tools_ask_preset">Что спрашивать</string>
+    <string name="tools_ask_preset_subtitle">Пресет переписывает запомненные решения по категориям чтения и записи</string>
+    <string name="tools_ask_preset_read">Спрашивать на чтение</string>
+    <string name="tools_ask_preset_write">Спрашивать на запись</string>
+    <string name="tools_ask_preset_both">Спрашивать и на чтение, и на запись</string>
+    <string name="tools_ask_preset_allow_all">Разрешить все</string>
+    <string name="tools_ask_preset_deny_all">Запретить все</string>
+    <string name="tools_ask_preset_manual">Настраивается вручную</string>
     <string name="tools_reset">Сбросить настройки инструментов</string>
-    <string name="tools_reset_subtitle">Вернуть включение и вопросы к значениям по умолчанию</string>
+    <string name="tools_reset_subtitle">Вернуть включение инструментов и лимит действий к значениям по умолчанию</string>
     <string name="tools_max_rounds">Лимит действий агента</string>
     <string name="tools_max_rounds_subtitle">Сколько раундов вызова инструментов может выполнить агент за один ход. Без лимита: ход завершит только сам агент</string>
     <string name="tools_max_rounds_none">Без лимита</string>
@@ -241,15 +251,6 @@
     <string name="tool_bye_desc">Агент завершает сессию ассистента, когда пользователь прощается, благодарит или ясно даёт понять, что диалог окончен</string>
     <string name="tool_brightness_set_title">Яркость экрана</string>
     <string name="tool_brightness_set_desc">Яркость в ручном режиме (нужен спецдоступ)</string>
-    <string name="perm_microphone">Микрофон</string>
-    <string name="perm_camera">Камера (фонарик)</string>
-    <string name="perm_location">Местоположение</string>
-    <string name="tools_perm_note">Для части инструментов нужны системные разрешения — выдайте их ниже.</string>
-    <string name="tools_perm_grant">Выдать разрешение</string>
-    <string name="perm_call_phone">Телефон (звонки)</string>
-    <string name="perm_send_sms">SMS (отправка)</string>
-    <string name="perm_read_contacts">Контакты (чтение)</string>
-    <string name="perm_calendar">Календарь (чтение и запись)</string>
 
     <!-- MCP-серверы -->
     <string name="mcp_settings_title">MCP-серверы</string>    <string name="mcp_settings_subtitle">Внешние инструменты агента</string>

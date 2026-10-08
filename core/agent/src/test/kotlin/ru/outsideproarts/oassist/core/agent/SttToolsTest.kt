@@ -6,7 +6,9 @@ import kotlinx.serialization.json.put
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
-import ru.outsideproarts.oassist.core.model.ActionRisk
+import ru.outsideproarts.oassist.core.model.ToolAccess
+import ru.outsideproarts.oassist.core.model.ToolCategory
+import ru.outsideproarts.oassist.core.model.ToolGroups
 import ru.outsideproarts.oassist.core.speech.VoiceCaptureController
 
 /**
@@ -68,10 +70,11 @@ class SttToolsTest {
     }
 
     @Test
-    fun risks_startAsks_stopAuto() {
+    fun groups_microphoneRead_startNeedsPermission() {
         val capture = FakeCapture()
-        assertEquals(ActionRisk.ASK, VoiceListenStartTool(capture).risk)
-        assertEquals(ActionRisk.AUTO, VoiceListenStopTool(capture).risk)
+        val group = ToolGroups.key(ToolCategory.MICROPHONE, ToolAccess.READ)
+        assertEquals(group, VoiceListenStartTool(capture).groupKey)
+        assertEquals(group, VoiceListenStopTool(capture).groupKey)
         assertTrue(VoiceListenStartTool(capture).requiredPermissions.isNotEmpty())
     }
 

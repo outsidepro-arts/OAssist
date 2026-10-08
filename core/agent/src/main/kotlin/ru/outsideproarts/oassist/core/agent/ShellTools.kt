@@ -6,7 +6,6 @@ import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.put
 import ru.outsideproarts.oassist.core.device.PrivExecutor
 import ru.outsideproarts.oassist.core.device.ShellPolicy
-import ru.outsideproarts.oassist.core.model.ActionRisk
 import ru.outsideproarts.oassist.core.model.PrivilegeLevel
 
 /**
@@ -42,7 +41,6 @@ class ShellExecTool(private val exec: PrivExecutor) : Tool {
             })
         },
     )
-    override val risk: ActionRisk = ActionRisk.ASK
     override val privilege: PrivilegeLevel = PrivilegeLevel.SHIZUKU
 
     override fun describeForConfirmation(arguments: JsonObject): String =
@@ -130,7 +128,6 @@ class ShellPutSettingTool(private val exec: PrivExecutor) : Tool {
             })
         },
     )
-    override val risk: ActionRisk = ActionRisk.ASK
     override val privilege: PrivilegeLevel = PrivilegeLevel.SHIZUKU
 
     override fun describeForConfirmation(arguments: JsonObject): String {

@@ -9,8 +9,10 @@ import org.junit.Test
 import ru.outsideproarts.oassist.core.device.ExecResult
 import ru.outsideproarts.oassist.core.device.NoopExecutor
 import ru.outsideproarts.oassist.core.device.PrivExecutor
-import ru.outsideproarts.oassist.core.model.ActionRisk
 import ru.outsideproarts.oassist.core.model.PrivilegeLevel
+import ru.outsideproarts.oassist.core.model.ToolAccess
+import ru.outsideproarts.oassist.core.model.ToolCategory
+import ru.outsideproarts.oassist.core.model.ToolGroups
 
 private class FakePrivExecutor(
     override val level: PrivilegeLevel = PrivilegeLevel.SHIZUKU,
@@ -43,7 +45,7 @@ class ShellToolsTest {
     fun `exec без привилегий fail-closed`() {
         val tool = ShellExecTool(NoopExecutor())
         assertEquals(PrivilegeLevel.SHIZUKU, tool.privilege)
-        assertEquals(ActionRisk.ASK, tool.risk)
+        assertEquals(ToolGroups.key(ToolCategory.PRIVILEGED, ToolAccess.WRITE), tool.groupKey)
     }
 
     @Test
@@ -79,7 +81,7 @@ class ShellToolsTest {
     fun `put_setting пишет через исполнителя`() {
         val fake = FakePrivExecutor()
         val tool = ShellPutSettingTool(fake)
-        assertEquals(ActionRisk.ASK, tool.risk)
+        assertEquals(ToolGroups.key(ToolCategory.PRIVILEGED, ToolAccess.WRITE), tool.groupKey)
         val args = buildJsonObject {
             put("namespace", "system")
             put("key", "screen_off_timeout")

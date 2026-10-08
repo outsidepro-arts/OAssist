@@ -3,7 +3,6 @@ package ru.outsideproarts.oassist.core.agent
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
-import ru.outsideproarts.oassist.core.model.ActionRisk
 
 /**
  * Завершение сессии ассистента, когда пользователь попрощался или ясно дал понять,
@@ -12,8 +11,6 @@ import ru.outsideproarts.oassist.core.model.ActionRisk
  * прощальный ответ должен прозвучать.
  */
 class ByeTool : Tool {
-    override val risk = ActionRisk.AUTO
-
     override val schema = ToolSchema(
         name = "bye",
         description = "Завершить работу ассистента. Вызывать, когда пользователь попрощался, " +

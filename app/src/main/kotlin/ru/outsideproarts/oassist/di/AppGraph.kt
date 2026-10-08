@@ -57,8 +57,18 @@ class AppGraph private constructor(context: Context) {
 
     val httpClient by lazy { HttpClientFactory.create() }
 
+    /** Экран блокировки: модель и диалог получают пометку, пользователю — «разблокируйте». */
+    val keyguardLockState: ru.outsideproarts.oassist.permission.KeyguardLockState by lazy {
+        ru.outsideproarts.oassist.permission.KeyguardLockState(appContext)
+    }
+
+    /** Запрос runtime-разрешений тулов в момент действия (ConsentActivity). */
+    val permissionRequester: ru.outsideproarts.oassist.core.agent.PermissionRequester by lazy {
+        ru.outsideproarts.oassist.permission.AppPermissionRequester(appContext)
+    }
+
     /**
-     * Общая на процесс политика подтверждений: записи «всегда разрешать»
+     * Общая на процесс политика подтверждений: запомненные решения групп
      * переживают отдельный [ru.outsideproarts.oassist.core.agent.AgentLoop]
      * (тот создаётся заново на каждое сообщение) и перезапуск приложения
      * (персист в device-protected DataStore, M5.3).
@@ -195,7 +205,14 @@ class AppGraph private constructor(context: Context) {
                 events = narratorEvents,
                 visionEnabled = visionEnabled,
                 maxToolRounds = prefs.maxToolRounds,
+                sessionScope = mode.name,
+                permissionRequester = permissionRequester,
+                screenLocked = { keyguardLockState.isLocked() },
             )
+        }
+
+        override fun clearSessionApprovals(mode: ru.outsideproarts.oassist.core.model.AssistMode) {
+            approvalPolicy.clearSession(mode.name)
         }
 
         override suspend fun systemPromptFor(
@@ -276,6 +293,7 @@ class AppGraph private constructor(context: Context) {
                     val client = ru.outsideproarts.oassist.core.agent.mcp.McpClient(httpClient, config.url, headers)
                     client.listTools().map { info ->
                         ru.outsideproarts.oassist.core.agent.mcp.McpTool(
+                            serverId = config.id,
                             serverName = config.name,
                             toolName = info.name,
                             displayName = ru.outsideproarts.oassist.core.agent.mcp.McpTool.displayName(config.id, info.name),

@@ -7,4 +7,5 @@
     <dimen name="oassist_space_large">16dp</dimen>
     <dimen name="oassist_space_xlarge">24dp</dimen>
     <dimen name="oassist_icon">24dp</dimen>
+    <dimen name="oassist_panel_elevation">6dp</dimen>
 </resources>

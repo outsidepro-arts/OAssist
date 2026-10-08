@@ -8,13 +8,13 @@ import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
-import ru.outsideproarts.oassist.core.model.ActionRisk
+import ru.outsideproarts.oassist.core.model.ToolGroups
 
 class ToolRegistryConfigTest {
 
     private class FakeTool(
         private val name: String,
-        override val risk: ActionRisk = ActionRisk.AUTO,
+        override val groupKey: String = ToolGroups.groupOf(name),
     ) : Tool {
         var executions = 0
         override val schema = ToolSchema(
@@ -48,25 +48,10 @@ class ToolRegistryConfigTest {
     }
 
     @Test
-    fun effectiveRisk_appliesOverrides() {
-        val registry = ToolRegistry(
-            tools = listOf(FakeTool("auto_tool"), FakeTool("ask_tool", ActionRisk.ASK)),
-            askOverrides = mapOf("auto_tool" to true, "ask_tool" to false),
-        )
-        // true поднимает AUTO до ASK, но не понижает ASK.
-        assertEquals(ActionRisk.ASK, registry.effectiveRisk("auto_tool"))
-        // false опускает всё до AUTO.
-        assertEquals(ActionRisk.AUTO, registry.effectiveRisk("ask_tool"))
-    }
-
-    @Test
-    fun effectiveRisk_defaultsAndUnknown() {
-        val registry = ToolRegistry(
-            tools = listOf(FakeTool("auto_tool"), FakeTool("ask_tool", ActionRisk.ASK)),
-        )
-        assertEquals(ActionRisk.AUTO, registry.effectiveRisk("auto_tool"))
-        assertEquals(ActionRisk.ASK, registry.effectiveRisk("ask_tool"))
-        // Неизвестный инструмент — fail-closed.
-        assertEquals(ActionRisk.ASK, registry.effectiveRisk("no_such_tool"))
+    fun groupKey_resolvesFromToolOrUnknown() {
+        val registry = ToolRegistry(tools = listOf(FakeTool("sms_send")))
+        assertEquals(ToolGroups.groupOf("sms_send"), registry.groupKey("sms_send"))
+        // Неизвестный — fail-closed группа UNKNOWN.
+        assertEquals(ToolGroups.UNKNOWN, registry.groupKey("no_such_tool"))
     }
 }

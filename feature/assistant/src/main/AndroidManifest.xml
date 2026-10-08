@@ -28,5 +28,15 @@
                 android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
                 android:value="assistant_overlay" />
         </service>
+
+        <activity
+            android:name=".ConsentActivity"
+            android:exported="false"
+            android:taskAffinity=""
+            android:launchMode="singleInstance"
+            android:excludeFromRecents="true"
+            android:noHistory="true"
+            android:showWhenLocked="true"
+            android:theme="@style/Theme.OAssist.Consent" />
     </application>
 </manifest>

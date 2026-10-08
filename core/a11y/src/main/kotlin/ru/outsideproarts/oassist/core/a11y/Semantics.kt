@@ -101,6 +101,22 @@ fun Modifier.oassistSwitchRow(
 )
 
 /**
+ * Канонический Checkbox-ряд (по образцу [oassistSwitchRow], Role.Checkbox).
+ * `Row` целиком — единый фокусируемый узел: TalkBack читает лейбл + состояние
+ * («Отмечено»/«Не отмечено») одним блоком. Внутри Checkbox `onCheckedChange` обнуляется.
+ */
+fun Modifier.oassistCheckboxRow(
+    checked: Boolean,
+    enabled: Boolean = true,
+    onValueChange: (Boolean) -> Unit,
+): Modifier = this.toggleable(
+    value = checked,
+    enabled = enabled,
+    role = Role.Checkbox,
+    onValueChange = onValueChange,
+)
+
+/**
  * Группировка содержимого карточки для TalkBack (CVS Health ContentGrouping.md).
  * `mergeDescendants = true` — TalkBack читает всю карточку одним блоком;
  * один свайп = переход к следующей карточке. Визуально не меняется.

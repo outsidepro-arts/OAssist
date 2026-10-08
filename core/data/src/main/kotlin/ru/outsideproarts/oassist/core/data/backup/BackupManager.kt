@@ -3,8 +3,10 @@ package ru.outsideproarts.oassist.core.data.backup
 import kotlinx.coroutines.flow.first
 import ru.outsideproarts.oassist.core.data.DataContainer
 import ru.outsideproarts.oassist.core.model.AppLanguage
+import ru.outsideproarts.oassist.core.model.ApprovalState
 import ru.outsideproarts.oassist.core.model.AssistMode
 import ru.outsideproarts.oassist.core.model.ModeConfig
+import ru.outsideproarts.oassist.core.model.ToolGroups
 import ru.outsideproarts.oassist.core.model.ToolPreferences
 
 /**
@@ -28,7 +30,10 @@ class BackupManager(private val data: DataContainer) {
             mcpServers = data.mcpServers.snapshot().map { it.scrubbed() },
             skills = data.skills.list().map { it.toBackup() },
             memory = data.memory.read(),
-            alwaysAllowed = data.approvals.snapshot().sorted(),
+            approvals = data.approvals.snapshot()
+                .filterValues { it != ApprovalState.ASK }
+                .mapValues { it.value.name }
+                .toSortedMap(),
         ),
     )
 
@@ -61,7 +66,7 @@ class BackupManager(private val data: DataContainer) {
                 .forEach { data.skills.delete(it) }
             data.memory.write(backup.memory)
             runCatching { data.settings.setLanguage(AppLanguage.valueOf(backup.language)) }
-            data.approvals.replaceAll(backup.alwaysAllowed.toSet())
+            data.approvals.replaceAll(backup.toApprovalStates())
         }
     }
 
@@ -82,7 +87,24 @@ class BackupManager(private val data: DataContainer) {
 }
 
 private fun ToolPreferences.toBackup(): ToolPrefsBackup =
-    ToolPrefsBackup(disabled.sorted(), askOverrides.toSortedMap())
+    ToolPrefsBackup(disabled.sorted())
 
 private fun ToolPrefsBackup.toDomain(): ToolPreferences =
-    ToolPreferences(disabled.toSet(), askOverrides)
+    ToolPreferences(disabled.toSet())
+
+/**
+ * Запомненные состояния из бэкапа: новые `approvals` (groupKey → состояние)
+ * + миграция легаси-списка имён тулов (`alwaysAllowed`) в их группы.
+ */
+internal fun BackupV1.toApprovalStates(): Map<String, ApprovalState> {
+    val states = mutableMapOf<String, ApprovalState>()
+    alwaysAllowed.forEach { name ->
+        val group = ToolGroups.groupOf(name)
+        if (group != ToolGroups.UNKNOWN) states[group] = ApprovalState.ALLOW
+    }
+    approvals.forEach { (groupKey, raw) ->
+        val state = ApprovalState.entries.firstOrNull { it.name == raw } ?: return@forEach
+        if (state == ApprovalState.ASK) states.remove(groupKey) else states[groupKey] = state
+    }
+    return states
+}

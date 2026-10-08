@@ -2,7 +2,6 @@ package ru.outsideproarts.oassist.feature.settings
 
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
@@ -16,7 +15,6 @@ import androidx.compose.material3.ExposedDropdownMenuDefaults
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
-import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -24,40 +22,37 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
-import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.res.stringResource
-import androidx.compose.ui.semantics.Role
-import androidx.compose.ui.semantics.semantics
-import androidx.compose.ui.semantics.stateDescription
 import ru.outsideproarts.oassist.core.a11y.oassistDropdownClassName
 import ru.outsideproarts.oassist.core.a11y.oassistHeading
-import ru.outsideproarts.oassist.core.a11y.oassistRole
 import ru.outsideproarts.oassist.core.a11y.oassistTouchTarget
 import ru.outsideproarts.oassist.core.agent.ToolDescriptor
-import ru.outsideproarts.oassist.core.model.ActionRisk
+import ru.outsideproarts.oassist.core.model.ApprovalState
+import ru.outsideproarts.oassist.core.model.AskPreset
 import ru.outsideproarts.oassist.core.ui.OAssistDimens
 import ru.outsideproarts.oassist.core.ui.components.OAssistPanel
 import ru.outsideproarts.oassist.core.ui.components.OAssistSwitchRow
 import ru.outsideproarts.oassist.core.ui.components.OAssistSectionHeading
 import ru.outsideproarts.oassist.core.ui.components.OAssistSettingRow
+import ru.outsideproarts.oassist.core.ui.toolGroupLabel
 
 /**
- * «Инструменты агента»: какие инструменты доступны агенту и когда спрашивать.
- * Безопасность (сброс «всегда разрешать», сброс к дефолтам) — в этом же разделе.
+ * «Инструменты агента»: какие инструменты включены (группами по категориям)
+ * и когда спрашивать (пресет + запомненные решения по категориям).
+ * Подтверждения per-tool не настраиваются — всё решают группы разрешений.
  */
 @Composable
 fun ToolsSettingsScreen(
     tools: List<ToolDescriptor>,
     disabled: Set<String>,
-    askOverrides: Map<String, Boolean>,
+    rememberedApprovals: Map<String, ApprovalState>,
+    matchedPreset: AskPreset?,
     maxToolRounds: Int = ru.outsideproarts.oassist.core.model.ToolPreferences.DEFAULT_MAX_TOOL_ROUNDS,
-    toolPermissions: Map<String, List<String>> = emptyMap(),
-    missingPermissions: Set<String> = emptySet(),
     onToggleEnabled: (String, Boolean) -> Unit,
-    onToggleAsk: (String, Boolean) -> Unit,
+    onApplyPreset: (AskPreset) -> Unit,
+    onResetGroup: (String) -> Unit,
     onMaxToolRoundsChange: (Int) -> Unit = {},
-    onGrantPermission: (String) -> Unit = {},
     onResetApprovals: () -> Unit,
     onResetTools: () -> Unit,
     onBack: () -> Unit,
@@ -86,34 +81,57 @@ fun ToolsSettingsScreen(
 
         Column(verticalArrangement = Arrangement.spacedBy(OAssistDimens.ItemSpacing)) {
             OAssistSectionHeading(text = toolsSection)
-            Text(
-                text = stringResource(R.string.tools_perm_note),
-                style = MaterialTheme.typography.bodyMedium,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-            tools.forEach { descriptor ->
-                val enabled = descriptor.name !in disabled
-                val askDefault = descriptor.defaultRisk != ActionRisk.AUTO
-                ToolRow(
-                    descriptor = descriptor,
-                    enabled = enabled,
-                    ask = askOverrides[descriptor.name] ?: askDefault,
-                    missingPermissions = (toolPermissions[descriptor.name] ?: emptyList())
-                        .filter { it in missingPermissions },
-                    onToggleEnabled = { onToggleEnabled(descriptor.name, it) },
-                    onToggleAsk = { onToggleAsk(descriptor.name, it) },
-                    onGrantPermission = onGrantPermission,
+            val grouped = remember(tools) {
+                tools.groupBy { it.groupKey }.toList()
+            }
+            grouped.forEach { (groupKey, groupTools) ->
+                Text(
+                    text = toolGroupLabel(groupKey),
+                    style = MaterialTheme.typography.titleSmall,
+                    color = MaterialTheme.colorScheme.primary,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .oassistHeading(),
                 )
+                groupTools.forEach { descriptor ->
+                    val enabled = descriptor.name !in disabled
+                    ToolRow(
+                        descriptor = descriptor,
+                        enabled = enabled,
+                        onToggleEnabled = { onToggleEnabled(descriptor.name, it) },
+                    )
+                }
             }
         }
 
         Column(verticalArrangement = Arrangement.spacedBy(OAssistDimens.ItemSpacing)) {
             OAssistSectionHeading(text = securitySection)
             OAssistPanel(title = securitySection) {
+                PresetRow(
+                    matchedPreset = matchedPreset,
+                    onApplyPreset = onApplyPreset,
+                )
                 MaxToolRoundsRow(
                     maxToolRounds = maxToolRounds,
                     onChange = onMaxToolRoundsChange,
                 )
+                if (rememberedApprovals.isNotEmpty()) {
+                    Text(
+                        text = stringResource(R.string.approvals_remembered_title),
+                        style = MaterialTheme.typography.titleSmall,
+                        color = MaterialTheme.colorScheme.onSurface,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .oassistHeading(),
+                    )
+                    rememberedApprovals.toSortedMap().forEach { (groupKey, state) ->
+                        RememberedGroupRow(
+                            groupKey = groupKey,
+                            state = state,
+                            onReset = { onResetGroup(groupKey) },
+                        )
+                    }
+                }
                 OAssistSettingRow(
                     title = stringResource(R.string.approvals_reset),
                     subtitle = stringResource(R.string.approvals_reset_subtitle),
@@ -142,17 +160,11 @@ fun ToolsSettingsScreen(
 private fun ToolRow(
     descriptor: ToolDescriptor,
     enabled: Boolean,
-    ask: Boolean,
-    missingPermissions: List<String>,
     onToggleEnabled: (Boolean) -> Unit,
-    onToggleAsk: (Boolean) -> Unit,
-    onGrantPermission: (String) -> Unit,
 ) {
     val title = toolTitle(descriptor.name)
     val description = toolDescription(descriptor.name)
     val enabledLabel = stringResource(R.string.tool_enabled)
-    val askLabel = stringResource(R.string.tool_ask)
-    val grantLabel = stringResource(R.string.tools_perm_grant)
     val onState = stringResource(R.string.state_enabled)
     val offState = stringResource(R.string.state_disabled)
 
@@ -162,42 +174,75 @@ private fun ToolRow(
             style = MaterialTheme.typography.bodyMedium,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
-        SwitchRow(
-            label = enabledLabel,
+        OAssistSwitchRow(
             checked = enabled,
-            onState = onState,
-            offState = offState,
             onCheckedChange = onToggleEnabled,
+            label = enabledLabel,
+            stateLabelOn = onState,
+            stateLabelOff = offState,
         )
-        if (enabled) {
-            SwitchRow(
-                label = askLabel,
-                checked = ask,
-                onState = onState,
-                offState = offState,
-                onCheckedChange = onToggleAsk,
+    }
+}
+
+@Composable
+private fun RememberedGroupRow(
+    groupKey: String,
+    state: ApprovalState,
+    onReset: () -> Unit,
+) {
+    val stateLabel = when (state) {
+        ApprovalState.ASK -> stringResource(R.string.approval_state_ask)
+        ApprovalState.ALLOW -> stringResource(R.string.approval_state_allow)
+        ApprovalState.DENY -> stringResource(R.string.approval_state_deny)
+    }
+    OAssistSettingRow(
+        title = toolGroupLabel(groupKey),
+        subtitle = stateLabel,
+        onClick = onReset,
+    )
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun PresetRow(
+    matchedPreset: AskPreset?,
+    onApplyPreset: (AskPreset) -> Unit,
+) {
+    var expanded by remember { mutableStateOf(false) }
+    val currentLabel = presetLabel(matchedPreset)
+    Column(verticalArrangement = Arrangement.spacedBy(OAssistDimens.HairlineSpacing)) {
+        Text(
+            text = stringResource(R.string.tools_ask_preset_subtitle),
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        ExposedDropdownMenuBox(
+            expanded = expanded,
+            onExpandedChange = { expanded = it },
+        ) {
+            OutlinedTextField(
+                value = currentLabel,
+                onValueChange = {},
+                readOnly = true,
+                label = { Text(stringResource(R.string.tools_ask_preset)) },
+                trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = expanded) },
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .menuAnchor(ExposedDropdownMenuAnchorType.PrimaryNotEditable)
+                    .oassistDropdownClassName(),
             )
-        }
-        missingPermissions.forEach { permission ->
-            val stateMissingLabel = stringResource(R.string.state_missing)
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(OAssistDimens.DenseSpacing),
+            ExposedDropdownMenu(
+                expanded = expanded,
+                onDismissRequest = { expanded = false },
             ) {
-                Text(
-                    text = permissionLabel(permission),
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.error,
-                    modifier = Modifier
-                        .weight(1f)
-                        .semantics { stateDescription = stateMissingLabel },
-                )
-                TextButton(
-                    onClick = { onGrantPermission(permission) },
-                    modifier = Modifier.oassistTouchTarget(),
-                ) {
-                    Text(grantLabel)
+                AskPreset.entries.forEach { preset ->
+                    DropdownMenuItem(
+                        text = { Text(presetLabel(preset)) },
+                        onClick = {
+                            expanded = false
+                            onApplyPreset(preset)
+                        },
+                    )
                 }
             }
         }
@@ -205,20 +250,13 @@ private fun ToolRow(
 }
 
 @Composable
-private fun SwitchRow(
-    label: String,
-    checked: Boolean,
-    onState: String,
-    offState: String,
-    onCheckedChange: (Boolean) -> Unit,
-) {
-    OAssistSwitchRow(
-        checked = checked,
-        onCheckedChange = onCheckedChange,
-        label = label,
-        stateLabelOn = onState,
-        stateLabelOff = offState,
-    )
+private fun presetLabel(preset: AskPreset?): String = when (preset) {
+    AskPreset.ASK_READ -> stringResource(R.string.tools_ask_preset_read)
+    AskPreset.ASK_WRITE -> stringResource(R.string.tools_ask_preset_write)
+    AskPreset.ASK_BOTH -> stringResource(R.string.tools_ask_preset_both)
+    AskPreset.ALLOW_ALL -> stringResource(R.string.tools_ask_preset_allow_all)
+    AskPreset.DENY_ALL -> stringResource(R.string.tools_ask_preset_deny_all)
+    null -> stringResource(R.string.tools_ask_preset_manual)
 }
 
 @Composable
@@ -321,20 +359,6 @@ private fun toolDescription(name: String): String = when (name) {
     "brightness_set" -> stringResource(R.string.tool_brightness_set_desc)
     "bye" -> stringResource(R.string.tool_bye_desc)
     else -> stringResource(R.string.tool_unknown_desc)
-}
-
-@Composable
-private fun permissionLabel(permission: String): String = when (permission) {
-    android.Manifest.permission.CALL_PHONE -> stringResource(R.string.perm_call_phone)
-    android.Manifest.permission.SEND_SMS -> stringResource(R.string.perm_send_sms)
-    android.Manifest.permission.READ_CONTACTS -> stringResource(R.string.perm_read_contacts)
-    android.Manifest.permission.READ_CALENDAR,
-    android.Manifest.permission.WRITE_CALENDAR -> stringResource(R.string.perm_calendar)
-    android.Manifest.permission.CAMERA -> stringResource(R.string.perm_camera)
-    android.Manifest.permission.RECORD_AUDIO -> stringResource(R.string.perm_microphone)
-    android.Manifest.permission.ACCESS_FINE_LOCATION,
-    android.Manifest.permission.ACCESS_COARSE_LOCATION -> stringResource(R.string.perm_location)
-    else -> permission
 }
 
 private val MAX_TOOL_ROUND_OPTIONS = listOf(0, 5, 10, 15, 20, 30)

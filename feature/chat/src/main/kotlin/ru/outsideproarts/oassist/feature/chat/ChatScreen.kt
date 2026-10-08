@@ -78,6 +78,7 @@ import ru.outsideproarts.oassist.core.speech.VoiceHandle
 import ru.outsideproarts.oassist.core.model.SttConfig
 import ru.outsideproarts.oassist.core.model.SttEngine
 import ru.outsideproarts.oassist.core.ui.OAssistDimens
+import ru.outsideproarts.oassist.core.ui.components.ApprovalDialog
 import ru.outsideproarts.oassist.core.ui.components.OAssistPanel
 
 /**
@@ -129,6 +130,16 @@ fun ChatScreen(
 
     LaunchedEffect(timeline) {
         timeline?.collect { timelineEntries.add(it) }
+    }
+
+    // Конец диалога (уход с экрана) — забыть «разрешено на текущую сессию».
+    androidx.compose.runtime.DisposableEffect(Unit) {
+        onDispose {
+            runCatching {
+                ru.outsideproarts.oassist.core.agent.AgentFactory.get()
+                    .clearSessionApprovals(ru.outsideproarts.oassist.core.model.AssistMode.CHAT)
+            }
+        }
     }
 
     val title = stringResource(R.string.chat_title)

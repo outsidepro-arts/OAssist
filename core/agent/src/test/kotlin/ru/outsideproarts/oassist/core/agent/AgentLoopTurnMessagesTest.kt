@@ -34,6 +34,7 @@ class AgentLoopTurnMessagesTest {
     }
 
     private class PingTool : Tool {
+        override val groupKey = ru.outsideproarts.oassist.core.model.ToolGroups.SERVICE
         override val schema = ToolSchema(
             name = "ping",
             description = "тест",

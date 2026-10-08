@@ -16,6 +16,9 @@ interface AgentFactory {
     /** Suspend: читает снапшот настроек инструментов из DataStore. */
     suspend fun agentFor(profile: ProviderProfile, mode: AssistMode): AgentLoop
 
+    /** Закончилась сессия режима (диалог/панель) — забыть «разрешено на текущую сессию». */
+    fun clearSessionApprovals(mode: AssistMode)
+
     /**
      * Готовый системный промпт режима: шаблон (свой или дефолт из assets)
      * + память + включённые навыки + контекст экрана/шаринга.

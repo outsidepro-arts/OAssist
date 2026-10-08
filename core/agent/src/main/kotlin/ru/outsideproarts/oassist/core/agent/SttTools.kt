@@ -7,7 +7,6 @@ import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.intOrNull
 import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.put
-import ru.outsideproarts.oassist.core.model.ActionRisk
 import ru.outsideproarts.oassist.core.speech.AgentVoiceCapture
 import ru.outsideproarts.oassist.core.speech.VoiceCaptureController
 
@@ -41,7 +40,6 @@ class VoiceListenStartTool(private val capture: VoiceCaptureController) : Tool {
     )
 
     /** Включение микрофона по воле агента — прайваси-чувствительно, спрашиваем. */
-    override val risk = ActionRisk.ASK
     override val requiredPermissions = listOf(Manifest.permission.RECORD_AUDIO)
 
     override fun describeForConfirmation(arguments: JsonObject): String =
@@ -68,7 +66,6 @@ class VoiceListenStopTool(private val capture: VoiceCaptureController) : Tool {
     )
 
     /** Выключение микрофона безопасно — без подтверждения. */
-    override val risk = ActionRisk.AUTO
     override val requiredPermissions = listOf(Manifest.permission.RECORD_AUDIO)
 
     override suspend fun execute(arguments: JsonObject): ToolResult =

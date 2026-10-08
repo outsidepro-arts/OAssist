@@ -15,26 +15,22 @@ import ru.outsideproarts.oassist.core.model.ToolPreferences
 private val Context.toolConfigDataStore: DataStore<Preferences> by preferencesDataStore(name = "tool_config")
 
 /**
- * Включение/выключение инструментов и пер-тул «спрашивать перед выполнением».
+ * Включение/выключение инструментов и лимит действий агента.
  * Не секреты — обычное device-protected хранилище, как остальные настройки.
+ * Подтверждениями заправляет `ApprovalStore` (группы разрешений).
  */
 class ToolConfigStore(private val context: Context) {
 
     val preferences: Flow<ToolPreferences> = context.toolConfigDataStore.data.map { prefs ->
         val disabled = mutableSetOf<String>()
-        val askOverrides = mutableMapOf<String, Boolean>()
         prefs.asMap().forEach { (key, value) ->
             val name = key.name
-            when {
-                name.startsWith(PREFIX_ENABLED) && value == false ->
-                    disabled.add(name.removePrefix(PREFIX_ENABLED))
-                name.startsWith(PREFIX_ASK) && value is Boolean ->
-                    askOverrides[name.removePrefix(PREFIX_ASK)] = value
+            if (name.startsWith(PREFIX_ENABLED) && value == false) {
+                disabled.add(name.removePrefix(PREFIX_ENABLED))
             }
         }
         ToolPreferences(
             disabled = disabled,
-            askOverrides = askOverrides,
             maxToolRounds = prefs[KEY_MAX_TOOL_ROUNDS] ?: ToolPreferences.DEFAULT_MAX_TOOL_ROUNDS,
         )
     }
@@ -44,12 +40,6 @@ class ToolConfigStore(private val context: Context) {
     suspend fun setToolEnabled(name: String, enabled: Boolean) {
         context.toolConfigDataStore.edit { prefs ->
             prefs[booleanPreferencesKey(PREFIX_ENABLED + name)] = enabled
-        }
-    }
-
-    suspend fun setAskBefore(name: String, ask: Boolean) {
-        context.toolConfigDataStore.edit { prefs ->
-            prefs[booleanPreferencesKey(PREFIX_ASK + name)] = ask
         }
     }
 
@@ -67,13 +57,13 @@ class ToolConfigStore(private val context: Context) {
             rounds.coerceIn(MIN_MAX_TOOL_ROUNDS, MAX_MAX_TOOL_ROUNDS)
         }
 
-    /** Сбросить всё к дефолтам: убрать записи включения и переопределения «спрашивать». */
+    /** Сбросить всё к дефолтам (включая легаси-ключи «спрашивать»). */
     suspend fun resetAll() {
         context.toolConfigDataStore.edit { prefs ->
             prefs.asMap().keys
                 .filter {
                     it.name.startsWith(PREFIX_ENABLED) ||
-                        it.name.startsWith(PREFIX_ASK) ||
+                        it.name.startsWith(PREFIX_LEGACY_ASK) ||
                         it == KEY_MAX_TOOL_ROUNDS
                 }
                 .forEach { prefs.remove(it) }
@@ -85,16 +75,13 @@ class ToolConfigStore(private val context: Context) {
         resetAll()
         context.toolConfigDataStore.edit { store ->
             prefs.disabled.forEach { store[booleanPreferencesKey(PREFIX_ENABLED + it)] = false }
-            prefs.askOverrides.forEach { (name, ask) ->
-                store[booleanPreferencesKey(PREFIX_ASK + name)] = ask
-            }
             store[KEY_MAX_TOOL_ROUNDS] = normalizeMaxToolRounds(prefs.maxToolRounds)
         }
     }
 
     companion object {
         private const val PREFIX_ENABLED = "tool.enabled."
-        private const val PREFIX_ASK = "tool.ask."
+        private const val PREFIX_LEGACY_ASK = "tool.ask."
         private val KEY_MAX_TOOL_ROUNDS = intPreferencesKey("tool.max_rounds")
         const val MIN_MAX_TOOL_ROUNDS = 1
         const val MAX_MAX_TOOL_ROUNDS = 100

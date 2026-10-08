@@ -34,6 +34,7 @@ class AgentLoopImagesTest {
     }
 
     private class ShotTool : Tool {
+        override val groupKey = ru.outsideproarts.oassist.core.model.ToolGroups.SERVICE
         override val schema = ToolSchema(
             name = "shot",
             description = "shot",

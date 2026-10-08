@@ -8,10 +8,6 @@
     <string name="chat_stop">Остановить</string>
     <string name="chat_role_user">Вы</string>
     <string name="chat_role_assistant">Ассистент</string>
-    <string name="chat_approval_title">Разрешить действие «%1$s»?</string>
-    <string name="chat_approval_allow_once">Разрешить</string>
-    <string name="chat_approval_always">Всегда</string>
-    <string name="chat_approval_deny">Отклонить</string>
     <string name="chat_speak_answer">Озвучить ответ</string>
     <string name="chat_mic">Голосовой ввод</string>
     <string name="chat_no_recognizer">Распознавание речи недоступно на этом устройстве</string>

@@ -5,9 +5,9 @@ import kotlinx.coroutines.flow.flow
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.jsonObject
-import ru.outsideproarts.oassist.core.model.ActionRisk
 import ru.outsideproarts.oassist.core.model.ApprovalDecision
 import ru.outsideproarts.oassist.core.model.ApprovalRequest
+import ru.outsideproarts.oassist.core.model.ApprovalState
 import ru.outsideproarts.oassist.core.provider.ChatChunk
 import ru.outsideproarts.oassist.core.provider.ChatMessage
 import ru.outsideproarts.oassist.core.provider.ChatRole
@@ -19,11 +19,13 @@ import ru.outsideproarts.oassist.core.provider.openai.ToolSchemaDto
  * Агентный цикл: отправляет сообщения в модель, выполняет вызовы инструментов,
  * передаёт результаты обратно и стримит итоговый ответ.
  *
- * Инструменты с риском выше [ActionRisk.AUTO] без записи «всегда разрешать»
- * приостанавливают стрим: эмитится [ChatChunk.ApprovalNeeded] и цикл ждёт
- * решения в [approvalController] (UI отвечает через [resolveApproval]).
- * Headless-вызывающие ([complete], VIS, Share) без UI-резолвера зависнут
- * на ASK-инструментах — им нужен [approvalPolicy] с автоправилом.
+ * Подтверждения идут по группам разрешений: группа в состоянии ASK приостанавливает
+ * стрим — эмитится [ChatChunk.ApprovalNeeded], цикл ждёт решения в [approvalController]
+ * (UI отвечает через [resolveApproval]); ALLOW — без вопросов, DENY — молчаливый отказ.
+ *
+ * Системные runtime-разрешения запрашиваются раньше подтверждения: выдача возвращает
+ * модели «попробуйте ещё раз» (повтор не даёт второй диалог подтверждения), отказ —
+ * «действие отклонено».
  */
 class AgentLoop(
     private val modelClient: ModelClient,
@@ -34,6 +36,12 @@ class AgentLoop(
     /** У модели флаг VISION — иначе образы вырезаются с пометкой (провайдеры без vision их отвергают). */
     private val visionEnabled: Boolean = true,
     private val maxToolRounds: Int = ru.outsideproarts.oassist.core.model.ToolPreferences.DEFAULT_MAX_TOOL_ROUNDS,
+    /** Ключ сессии для «разрешено на текущую сессию» (режим: CHAT/ASSISTANT/SHARE). */
+    private val sessionScope: String = "CHAT",
+    /** Запрос runtime-разрешений в момент действия; null — тулы проверяют сами. */
+    private val permissionRequester: PermissionRequester? = null,
+    /** Заблокирован ли экран в момент запроса (пометка модели и подписи диалога). */
+    private val screenLocked: () -> Boolean = { false },
 ) {
 
     /** Ответить на запрос подтверждения; `false` — такого ожидания нет. */
@@ -190,11 +198,9 @@ class AgentLoop(
     }
 
     /**
-     * Выполнить один тул-чонк с учётом политики подтверждений.
-     * Риск — эффективный из реестра (дефолт инструмента + переопределение
-     * пользователя); неизвестный инструмент — ASK, fail-closed.
-     * Выключенный в настройках тул не выполняется: явная ошибка в ленту,
-     * а не молчаливый пропуск.
+     * Выполнить один тул-чонк: сначала системные runtime-разрешения, потом
+     * подтверждение по группе разрешений тула. Выключенный в настройках тул не
+     * выполняется: явная ошибка в ленту, а не молчаливый пропуск.
      * При паузе эмитит [ChatChunk.ApprovalNeeded] через [emitChunk] и ждёт
      * решения в [approvalController] (отмена коллектора снимает ожидание).
      */
@@ -208,11 +214,55 @@ class AgentLoop(
         if (tool != null && !toolRegistry.isEnabled(tc.name)) {
             return ToolResult(false, "Инструмент '${tc.name}' отключён в настройках")
         }
-        val risk = toolRegistry.effectiveRisk(tc.name)
-        if (approvalPolicy.shouldAutoApprove(tc.name, risk)) {
-            return toolRegistry.execute(tc.name, args)
+
+        val permResult = gateRuntimePermissions(tool)
+        if (permResult != null) return permResult
+
+        val groupKey = toolRegistry.groupKey(tc.name)
+        return when (approvalPolicy.state(groupKey, sessionScope)) {
+            ApprovalState.ALLOW -> toolRegistry.execute(tc.name, args)
+            ApprovalState.DENY -> ToolResult(false, DENIED_MESSAGE)
+            ApprovalState.ASK -> askAndExecute(toolRegistry, tc, args, tool, groupKey, emitChunk)
         }
+    }
+
+    /**
+     * Запрос системных разрешений тула в момент действия. `null` — всё выдано
+     * (или нечего запрашивать), иначе — результат вместо выполнения: выдача
+     * просит модель повторить, отказ — честное «действие отклонено».
+     */
+    private suspend fun gateRuntimePermissions(tool: Tool?): ToolResult? {
+        val requester = permissionRequester ?: return null
+        val missing = tool?.requiredPermissions.orEmpty().filterNot(requester::isGranted)
+        if (missing.isEmpty()) return null
+        return when (requester.request(missing)) {
+            PermissionRequestOutcome.GRANTED -> ToolResult(
+                false,
+                "Разрешение «${missing.joinToString()}» выдано пользователем. " +
+                    "Попробуйте выполнить действие ещё раз.",
+            )
+            PermissionRequestOutcome.DENIED -> ToolResult(
+                false,
+                "Пользователь отклонил разрешение «${missing.joinToString()}» — действие отклонено.",
+            )
+            PermissionRequestOutcome.UNAVAILABLE -> ToolResult(
+                false,
+                "Не удалось запросить разрешение «${missing.joinToString()}» — " +
+                    "откройте приложение и выдайте его вручную.",
+            )
+        }
+    }
+
+    private suspend fun askAndExecute(
+        registry: ToolRegistry,
+        tc: ChatChunk.ToolCall,
+        args: JsonObject,
+        tool: Tool?,
+        groupKey: String,
+        emitChunk: suspend (ChatChunk) -> Unit,
+    ): ToolResult {
         val summary = tool?.describeForConfirmation(args) ?: "${tc.name}: ${tc.argumentsJson}"
+        val locked = screenLocked()
         approvalController.prepare(tc.id)
         emitChunk(
             ChatChunk.ApprovalNeeded(
@@ -221,17 +271,44 @@ class AgentLoop(
                     toolName = tc.name,
                     argumentsJson = tc.argumentsJson,
                     summary = summary,
-                    risk = risk,
+                    groupKey = groupKey,
+                    screenLocked = locked,
                 ),
             ),
         )
-        return when (approvalController.awaitDecision(tc.id)) {
-            ApprovalDecision.ALLOW_ONCE -> toolRegistry.execute(tc.name, args)
-            ApprovalDecision.ALWAYS_ALLOW -> {
-                approvalPolicy.setAlwaysAllow(tc.name, true)
-                toolRegistry.execute(tc.name, args)
-            }
-            ApprovalDecision.DENY -> ToolResult(false, "Отклонено пользователем")
+        val decision = approvalController.awaitDecision(tc.id)
+        when (decision) {
+            ApprovalDecision.ALLOW_SESSION -> approvalPolicy.setSessionAllow(groupKey, sessionScope)
+            ApprovalDecision.ALWAYS_ALLOW -> approvalPolicy.setRemembered(groupKey, ApprovalState.ALLOW)
+            ApprovalDecision.ALWAYS_DENY -> approvalPolicy.setRemembered(groupKey, ApprovalState.DENY)
+            ApprovalDecision.ALLOW_ONCE, ApprovalDecision.DENY -> Unit
         }
+        val note = buildNote(decision, locked)
+        return if (decision == ApprovalDecision.DENY || decision == ApprovalDecision.ALWAYS_DENY) {
+            ToolResult(false, DENIED_MESSAGE + note)
+        } else {
+            val result = registry.execute(tc.name, args)
+            ToolResult(result.success, note + result.output, result.images)
+        }
+    }
+
+    /** Пометка модели о решении (и о блокировке экрана — чтобы попросила разблокировать). */
+    private fun buildNote(decision: ApprovalDecision, locked: Boolean): String {
+        val sb = StringBuilder()
+        when (decision) {
+            ApprovalDecision.ALLOW_ONCE -> sb.append("Пользователь разрешил действие. ")
+            ApprovalDecision.ALLOW_SESSION -> sb.append("Пользователь разрешил действие на текущую сессию. ")
+            ApprovalDecision.ALWAYS_ALLOW -> sb.append("Пользователь разрешил действие навсегда. ")
+            ApprovalDecision.DENY -> sb.append("Действие отклонено пользователем. ")
+            ApprovalDecision.ALWAYS_DENY -> sb.append("Пользователь запретил это действие. ")
+        }
+        if (locked) {
+            sb.append("Внимание: экран был заблокирован — попросите пользователя разблокировать экран. ")
+        }
+        return sb.toString()
+    }
+
+    companion object {
+        private const val DENIED_MESSAGE = "Отклонено пользователем. "
     }
 }
