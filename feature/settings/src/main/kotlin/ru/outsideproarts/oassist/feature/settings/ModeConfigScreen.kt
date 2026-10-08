@@ -31,6 +31,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -42,6 +43,7 @@ import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.ui.text.input.KeyboardCapitalization
+import kotlinx.coroutines.launch
 import ru.outsideproarts.oassist.core.a11y.oassistDropdownClassName
 import ru.outsideproarts.oassist.core.a11y.oassistHeading
 import ru.outsideproarts.oassist.core.a11y.oassistRole
@@ -87,10 +89,16 @@ fun ModeConfigScreen(
     loadEngines: suspend () -> List<TtsEngineInfo> = { emptyList() },
     /** Голоса движка (`null` — привязанный/дефолт); пусто — только голос по умолчанию. */
     loadVoices: suspend (enginePackage: String?) -> List<VoiceInfo> = { emptyList() },
+    /** Дефолтный промпт режима из assets в языке приложения; пусто — недоступен. */
+    loadDefaultPrompt: suspend () -> String = { "" },
 ) {
     var providerId by remember { mutableStateOf(config.providerId ?: "") }
     var modelId by remember { mutableStateOf(config.modelId ?: "") }
     var initialPrompt by remember { mutableStateOf(config.initialPrompt ?: "") }
+    // Дефолтный текст для предзаполнения поля, кнопки «Восстановить»
+    // и подстановки при сохранении пустого поля. null — ещё не загружен.
+    var defaultPromptText by remember(mode) { mutableStateOf<String?>(null) }
+    val scope = rememberCoroutineScope()
     var providerExpanded by remember { mutableStateOf(false) }
     // ID модели — обычное поле ввода (ручной ввод); выбор из списка —
     // отдельной кнопкой «Выбрать модель» с диалогом-пикером ниже.
@@ -124,10 +132,17 @@ fun ModeConfigScreen(
     // Синхронизация с сохранённым конфигом: modeConfigs прилетает асинхронно
     // (сначала default с пустыми id, потом реальный), поэтому ключ — весь config,
     // а не только mode. Локальные правки config не меняют и ресинк не триггерят.
-    LaunchedEffect(config) {
+    // defaultPromptText в ключе — чтобы legacy-null (пустое поле) заполнился
+    // дефолтом, когда тот догрузится; набранный пользователем текст не затираем.
+    LaunchedEffect(config, defaultPromptText) {
         providerId = config.providerId ?: ""
         modelId = config.modelId ?: ""
-        initialPrompt = config.initialPrompt ?: ""
+        val stored = config.initialPrompt
+        initialPrompt = when {
+            stored != null -> stored
+            initialPrompt.isBlank() -> defaultPromptText ?: ""
+            else -> initialPrompt
+        }
         autoSpeak = config.assistant?.autoSpeak ?: true
         autoClose = config.assistant?.autoClose ?: true
         attachScreenshot = config.assistant?.attachScreenshot ?: true
@@ -150,6 +165,10 @@ fun ModeConfigScreen(
     }
     LaunchedEffect(Unit) {
         engines = runCatching { loadEngines() }.getOrElse { emptyList() }
+    }
+    // Дефолтный промпт — из assets в языке приложения (см. AppGraph.defaultPromptText).
+    LaunchedEffect(mode) {
+        defaultPromptText = runCatching { loadDefaultPrompt() }.getOrElse { "" }
     }
     // Голоса — лениво по выбранному движку ("": привязанный/дефолт).
     // После загрузки язык подтягиваем из сохранённого голоса, иначе первый.
@@ -324,7 +343,28 @@ fun ModeConfigScreen(
                 )
             }
 
-            OAssistSectionHeading(text = stringResource(R.string.mode_prompt))
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                OAssistSectionHeading(
+                    text = stringResource(R.string.mode_prompt),
+                    modifier = Modifier.weight(1f),
+                )
+                OutlinedButton(
+                    onClick = {
+                        scope.launch {
+                            val fresh = runCatching { loadDefaultPrompt() }.getOrElse { "" }
+                            defaultPromptText = fresh
+                            initialPrompt = fresh
+                        }
+                    },
+                    modifier = Modifier.oassistTouchTarget(),
+                ) {
+                    Text(stringResource(R.string.mode_prompt_restore))
+                }
+            }
             OutlinedTextField(
                 value = initialPrompt,
                 onValueChange = { initialPrompt = it },
@@ -444,7 +484,10 @@ fun ModeConfigScreen(
                         config.copy(
                             providerId = providerId.ifBlank { null },
                             modelId = modelId.ifBlank { null },
-                            initialPrompt = initialPrompt.ifBlank { null },
+                            // Пустое поле при сохранении заполняется промптом
+                            // по умолчанию (null — только если дефолт недоступен).
+                            initialPrompt = initialPrompt.ifBlank { defaultPromptText.orEmpty() }
+                                .ifBlank { null },
                             assistant = if (mode == AssistMode.ASSISTANT) {
                                 (config.assistant ?: AssistantExtras()).copy(
                                     autoSpeak = autoSpeak,

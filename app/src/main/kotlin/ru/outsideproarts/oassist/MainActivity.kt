@@ -679,6 +679,7 @@ private fun OAssistApp(
                     providers = providers,
                     models = models,
                     isLoadingModels = isLoadingModels,
+                    loadDefaultPrompt = { graph.defaultPromptText(mode) },
                     onSave = { updated ->
                         scope.launch {
                             graph.providers.setModeConfig(updated)

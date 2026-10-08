@@ -102,7 +102,8 @@
     <string name="cap_audio_in">Audio input</string>
     <string name="cap_reasoning">Reasoning</string>
     <string name="mode_prompt">Initial prompt</string>
-    <string name="mode_prompt_hint">Leave empty for default prompt</string>
+    <string name="mode_prompt_hint">Mode system prompt text</string>
+    <string name="mode_prompt_restore">Restore default</string>
     <string name="mode_tts_title">Speech output</string>
     <string name="mode_tts_channel">Channel</string>
     <string name="mode_tts_off">Off</string>
@@ -314,7 +315,7 @@
     <string name="tool_skill_get_desc">Full skill text by name</string>
 
     <!-- Mode prompt -->
-    <string name="mode_prompt_placeholders">Placeholders: {locale} {time} {device} {memory} {skills} {screen_context} {shared_content}. Empty — default prompt.</string>
+    <string name="mode_prompt_placeholders">Placeholders: {locale} {time} {device} {memory} {skills} {screen_context} {shared_content}. An empty field is filled with the default prompt on save.</string>
     <string name="mode_assistant_extras">Assistant behavior</string>
     <string name="mode_assistant_autospeak">Speak answers aloud</string>
     <string name="mode_assistant_autoclose">Close panel after answer</string>

@@ -223,8 +223,11 @@ class AppGraph private constructor(context: Context) {
     }
 
     /**
-     * Системный промпт режима: свой шаблон или дефолт из assets/prompts,
-     * память, включённые навыки, контекст экрана/шаринга.
+     * Системный промпт режима: сохранённый шаблон initialPrompt как есть,
+     * память, включённые навыки, контекст экрана/шаринга. Фолбэка
+     * «пусто — промпт по умолчанию» нет: поле всегда хранит текст
+     * (legacy-null трактуется как пусто и материализуется в дефолт
+     * при первом открытии/сохранении экрана режима).
      */
     suspend fun buildSystemPrompt(
         mode: ru.outsideproarts.oassist.core.model.AssistMode,
@@ -233,8 +236,7 @@ class AppGraph private constructor(context: Context) {
     ): String {
         val config = data.providers.modeConfig(mode)
         val language = promptLanguage()
-        val template = config.initialPrompt?.takeIf { it.isNotBlank() }
-            ?: defaultPrompt(mode, language)
+        val template = config.initialPrompt.orEmpty()
         return ru.outsideproarts.oassist.core.agent.PromptRenderer.render(
             template,
             ru.outsideproarts.oassist.core.agent.PromptInputs(
@@ -259,6 +261,15 @@ class AppGraph private constructor(context: Context) {
                 if (java.util.Locale.getDefault().language == "ru") "ru" else "en"
         }
     }
+
+    /**
+     * Дефолтный промпт режима из assets/prompts в языке приложения.
+     * Источник истины для предзаполнения поля и кнопки «Восстановить
+     * по умолчанию» в экране режима.
+     */
+    suspend fun defaultPromptText(
+        mode: ru.outsideproarts.oassist.core.model.AssistMode,
+    ): String = defaultPrompt(mode, promptLanguage())
 
     private fun defaultPrompt(
         mode: ru.outsideproarts.oassist.core.model.AssistMode,

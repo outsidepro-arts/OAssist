@@ -102,7 +102,8 @@
     <string name="cap_audio_in">Аудиовход</string>
     <string name="cap_reasoning">Рассуждения</string>
     <string name="mode_prompt">Начальный промпт</string>
-    <string name="mode_prompt_hint">Оставьте пустым для промпта по умолчанию</string>
+    <string name="mode_prompt_hint">Текст системного промпта режима</string>
+    <string name="mode_prompt_restore">Восстановить по умолчанию</string>
     <string name="mode_tts_title">Озвучка</string>
     <string name="mode_tts_channel">Канал</string>
     <string name="mode_tts_off">Выключена</string>
@@ -312,7 +313,7 @@
     <string name="tool_skill_get_desc">Полный текст навыка по имени</string>
 
     <!-- Промпт режима -->
-    <string name="mode_prompt_placeholders">Плейсхолдеры: {locale} {time} {device} {memory} {skills} {screen_context} {shared_content}. Пусто — промпт по умолчанию.</string>
+    <string name="mode_prompt_placeholders">Плейсхолдеры: {locale} {time} {device} {memory} {skills} {screen_context} {shared_content}. Пустое поле при сохранении заполняется промптом по умолчанию.</string>
     <string name="mode_assistant_extras">Поведение ассистента</string>
     <string name="mode_assistant_autospeak">Озвучивать ответы</string>
     <string name="mode_assistant_autoclose">Закрывать панель после ответа</string>
