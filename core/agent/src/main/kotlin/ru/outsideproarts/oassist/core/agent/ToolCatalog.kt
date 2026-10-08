@@ -38,6 +38,7 @@ object ToolCatalog {
         priv: PrivExecutor,
         search: SearchActions,
     ): List<Tool> = listOf(
+        AppListTool(actions),
         AppLaunchTool(actions),
         WebOpenTool(actions),
         WebSearchTool(search),

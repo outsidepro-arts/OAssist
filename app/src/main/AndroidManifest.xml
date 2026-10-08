@@ -26,6 +26,12 @@
         <intent>
             <action android:name="android.intent.action.TTS_SERVICE" />
         </intent>
+        <!-- app_list: видимость приложений с launcher-ярлыками (паттерн лаунчеров,
+             QUERY_ALL_PACKAGES не требуется); попутно чинит app_launch для этих пакетов -->
+        <intent>
+            <action android:name="android.intent.action.MAIN" />
+            <category android:name="android.intent.category.LAUNCHER" />
+        </intent>
         <!-- M5.1: видимость приложения Shizuku для запроса разрешения -->
         <package android:name="moe.shizuku.privileged.api" />
     </queries>

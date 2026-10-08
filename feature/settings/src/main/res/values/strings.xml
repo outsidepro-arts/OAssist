@@ -170,6 +170,8 @@
     <string name="tools_max_rounds_none">Без лимита</string>
     <string name="tools_reset_done">Настройки инструментов сброшены</string>
     <string name="tool_unknown_desc">Действие агента</string>
+    <string name="tool_app_list_title">Список приложений</string>
+    <string name="tool_app_list_desc">Перечень установленных приложений с ярлыками (название и имя пакета)</string>
     <string name="tool_app_launch_title">Запуск приложений</string>
     <string name="tool_app_launch_desc">Открытие приложений по имени пакета</string>
     <string name="tool_web_open_title">Открытие ссылок</string>

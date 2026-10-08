@@ -5,6 +5,7 @@ import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
 import android.content.Intent
+import android.content.pm.ApplicationInfo
 import android.content.pm.PackageManager
 import android.net.Uri
 import android.os.Build
@@ -16,6 +17,8 @@ import android.provider.Settings
 import java.util.Locale
 import java.util.TimeZone
 import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 
 /**
  * Обёртка над Android-интентами для инструментов агента.
@@ -33,6 +36,48 @@ class DeviceActions(
         intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
         context.startActivity(intent)
         return ToolResult(true, "Приложение '$packageName' запущено")
+    }
+
+    /**
+     * Приложения с launcher-ярлыками (паттерн лаунчеров через `<queries>` MAIN/LAUNCHER,
+     * QUERY_ALL_PACKAGES не требуется). Иконки не грузим — модель работает с текстом.
+     */
+    suspend fun listApps(
+        query: String?,
+        includeSystem: Boolean,
+        limit: Int,
+    ): ToolResult = withContext(Dispatchers.IO) {
+        runCatching {
+            val pm = context.packageManager
+            @Suppress("DEPRECATION")
+            val resolved = pm.queryIntentActivities(
+                Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_LAUNCHER),
+                0,
+            )
+            val byPackage = LinkedHashMap<String, AppEntry>()
+            for (info in resolved) {
+                val activity = info.activityInfo ?: continue
+                val appInfo = activity.applicationInfo ?: continue
+                if (!activity.enabled || !appInfo.enabled) continue
+                val packageName = activity.packageName
+                val existing = byPackage[packageName]
+                if (existing != null) {
+                    byPackage[packageName] = existing.copy(entries = existing.entries + 1)
+                    continue
+                }
+                val label = runCatching { info.loadLabel(pm)?.toString() }.getOrNull()
+                    ?.takeIf { it.isNotBlank() } ?: packageName
+                byPackage[packageName] = AppEntry(
+                    packageName = packageName,
+                    label = label,
+                    isSystem = appInfo.flags and ApplicationInfo.FLAG_SYSTEM != 0,
+                )
+            }
+            ToolResult(
+                true,
+                formatAppList(byPackage.values.toList(), query, includeSystem, limit),
+            )
+        }.getOrElse { ToolResult(false, "Не удалось получить список приложений: ${it.message}") }
     }
 
     fun openWeb(url: String): ToolResult {

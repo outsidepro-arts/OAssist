@@ -171,6 +171,8 @@
     <string name="tools_max_rounds_none">No limit</string>
     <string name="tools_reset_done">Tool settings reset</string>
     <string name="tool_unknown_desc">Agent action</string>
+    <string name="tool_app_list_title">App list</string>
+    <string name="tool_app_list_desc">Installed apps with launcher icons (name and package name)</string>
     <string name="tool_app_launch_title">Launch apps</string>
     <string name="tool_app_launch_desc">Open apps by package name</string>
     <string name="tool_web_open_title">Open links</string>

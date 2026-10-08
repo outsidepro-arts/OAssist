@@ -29,6 +29,52 @@ class AppLaunchTool(private val actions: DeviceActions) : Tool {
     }
 }
 
+class AppListTool(private val actions: DeviceActions) : Tool {
+    override val schema = ToolSchema(
+        name = "app_list",
+        description = "Список установленных приложений с ярлыками на рабочем столе: название и имя пакета. " +
+            "Приложения без иконки не перечисляются. Используй чтобы узнать что установлено или найти пакет " +
+            "по названию перед app_launch.",
+        parameters = buildJsonObject {
+            put("type", "object")
+            put("properties", buildJsonObject {
+                put("query", buildJsonObject {
+                    put("type", "string")
+                    put("description", "Необязательный фильтр: подстрока названия или имени пакета")
+                })
+                put("include_system", buildJsonObject {
+                    put("type", "boolean")
+                    put("description", "Включать системные приложения, по умолчанию true")
+                })
+                put("limit", buildJsonObject {
+                    put("type", "integer")
+                    put("description", "Максимум записей, по умолчанию 100")
+                })
+            })
+        },
+    )
+
+    override fun describeForConfirmation(arguments: JsonObject): String {
+        val query = runCatching { arguments["query"]?.jsonPrimitive?.content }.getOrNull()
+        return if (query.isNullOrBlank()) {
+            "Показать список установленных приложений"
+        } else {
+            "Показать установленные приложения по запросу '$query'"
+        }
+    }
+
+    override suspend fun execute(arguments: JsonObject): ToolResult {
+        val query = runCatching { arguments["query"]?.jsonPrimitive?.content }.getOrNull()
+        val includeSystem = runCatching {
+            arguments["include_system"]?.jsonPrimitive?.content?.toBooleanStrictOrNull()
+        }.getOrNull() ?: true
+        val limit = runCatching {
+            arguments["limit"]?.jsonPrimitive?.content?.toIntOrNull()
+        }.getOrNull() ?: DEFAULT_APP_LIST_LIMIT
+        return actions.listApps(query, includeSystem, limit)
+    }
+}
+
 class WebOpenTool(private val actions: DeviceActions) : Tool {
     override val schema = ToolSchema(
         name = "web_open",

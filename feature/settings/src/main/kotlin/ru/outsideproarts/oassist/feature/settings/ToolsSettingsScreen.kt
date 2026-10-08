@@ -261,6 +261,7 @@ private fun presetLabel(preset: AskPreset?): String = when (preset) {
 
 @Composable
 private fun toolTitle(name: String): String = when (name) {
+    "app_list" -> stringResource(R.string.tool_app_list_title)
     "app_launch" -> stringResource(R.string.tool_app_launch_title)
     "web_open" -> stringResource(R.string.tool_web_open_title)
     "web_search" -> stringResource(R.string.tool_web_search_title)
@@ -312,6 +313,7 @@ private fun toolTitle(name: String): String = when (name) {
 
 @Composable
 private fun toolDescription(name: String): String = when (name) {
+    "app_list" -> stringResource(R.string.tool_app_list_desc)
     "app_launch" -> stringResource(R.string.tool_app_launch_desc)
     "web_open" -> stringResource(R.string.tool_web_open_desc)
     "web_search" -> stringResource(R.string.tool_web_search_desc)
