@@ -27,6 +27,7 @@
     <string name="group_device_read">Устройство — чтение</string>
     <string name="group_device_write">Устройство — запись</string>
     <string name="group_web_read">Веб — чтение</string>
+    <string name="group_apps_navigation_read">Приложения и навигация — чтение</string>
     <string name="group_apps_navigation_write">Приложения и навигация — запись</string>
     <string name="group_privileged_read">Привилегированные — чтение</string>
     <string name="group_privileged_write">Привилегированные — запись</string>

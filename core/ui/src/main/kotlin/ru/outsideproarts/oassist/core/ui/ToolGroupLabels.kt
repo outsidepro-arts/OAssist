@@ -58,7 +58,7 @@ private fun groupLabelRes(category: ToolCategory, access: ToolAccess): Int? = wh
     ToolCategory.APPS_NAVIGATION -> if (access == ToolAccess.WRITE) {
         R.string.group_apps_navigation_write
     } else {
-        null
+        R.string.group_apps_navigation_read
     }
     ToolCategory.PRIVILEGED -> if (access == ToolAccess.READ) {
         R.string.group_privileged_read

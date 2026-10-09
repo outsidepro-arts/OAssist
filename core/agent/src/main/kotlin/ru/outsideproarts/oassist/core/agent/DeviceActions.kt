@@ -3,10 +3,12 @@ package ru.outsideproarts.oassist.core.agent
 import android.Manifest
 import android.content.ClipData
 import android.content.ClipboardManager
+import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
 import android.content.pm.ApplicationInfo
 import android.content.pm.PackageManager
+import android.content.pm.PackageManager.NameNotFoundException
 import android.net.Uri
 import android.os.Build
 import android.provider.AlarmClock
@@ -36,6 +38,128 @@ class DeviceActions(
         intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
         context.startActivity(intent)
         return ToolResult(true, "Приложение '$packageName' запущено")
+    }
+
+    /**
+     * Activity пакета по имени: только включённые; экспорт фильтруется форматтером.
+     * Пакет должен быть видим системе (launcher-приложения видимы через `<queries>`
+     * MAIN/LAUNCHER); невидимый — честная ошибка, а не пустота.
+     * Intent-filter'ы платформа не отдаёт (GET_INTENT_FILTERS deprecated),
+     * поэтому возвращаем activity как запускаемые цели для `app_start_activity`.
+     */
+    suspend fun listAppActivities(
+        packageName: String,
+        query: String?,
+        includeNonExported: Boolean,
+        limit: Int,
+    ): ToolResult = withContext(Dispatchers.IO) {
+        if (packageName.isBlank()) {
+            return@withContext ToolResult(false, "Не указан package_name")
+        }
+        try {
+            val pm = context.packageManager
+            val info = getPackageInfoWithActivities(pm, packageName.trim())
+            val activities = info.activities?.toList().orEmpty()
+            if (activities.isEmpty()) {
+                return@withContext ToolResult(true, "У приложения '$packageName' нет activity")
+            }
+            val entries = activities.mapNotNull { activity ->
+                if (!activity.enabled) return@mapNotNull null
+                val label = runCatching { activity.loadLabel(pm)?.toString() }
+                    .getOrNull()?.takeIf { it.isNotBlank() } ?: activity.name
+                ActivityEntry(
+                    className = activity.name,
+                    label = label,
+                    exported = activity.exported,
+                )
+            }
+            ToolResult(
+                true,
+                formatActivityList(entries, query, includeNonExported, limit),
+            )
+        } catch (e: NameNotFoundException) {
+            ToolResult(false, "Приложение '$packageName' не найдено или не видимо системе")
+        } catch (e: Exception) {
+            ToolResult(false, "Не удалось получить activity: ${e.message}")
+        }
+    }
+
+    /**
+     * Явный запуск activity через `ComponentName` с данными:
+     * action/data(uri)/mime/categories/extras. Из не-Activity контекста —
+     * всегда `FLAG_ACTIVITY_NEW_TASK`. Неэкспортированная цель заранее
+     * отклоняется с явной причиной (система кинула бы `SecurityException`).
+     */
+    fun startAppActivity(
+        packageName: String,
+        activity: String,
+        action: String?,
+        data: String?,
+        mimeType: String?,
+        categories: List<String>,
+        extrasJson: String?,
+    ): ToolResult {
+        if (packageName.isBlank()) return ToolResult(false, "Не указан package_name")
+        if (activity.isBlank()) return ToolResult(false, "Не указан activity")
+        val pkg = packageName.trim()
+        val className = resolveActivityClassName(pkg, activity)
+        val component = ComponentName(pkg, className)
+        val extras = if (extrasJson.isNullOrBlank()) {
+            emptyMap()
+        } else {
+            try {
+                parseExtrasJson(extrasJson)
+            } catch (e: IllegalArgumentException) {
+                return ToolResult(false, e.message ?: "Некорректный extras_json")
+            }
+        }
+        val pm = context.packageManager
+        try {
+            val activityInfo = getActivityInfo(pm, component)
+            if (!activityInfo.exported) {
+                return ToolResult(
+                    false,
+                    "Activity '$className' не экспортирована — запуск из другого приложения запрещён системой",
+                )
+            }
+        } catch (e: NameNotFoundException) {
+            return ToolResult(false, "Activity '$className' не найдена в пакете '$pkg'")
+        } catch (e: Exception) {
+            return ToolResult(false, "Не удалось проверить activity: ${e.message}")
+        }
+        return runCatching {
+            val intent = Intent().apply {
+                setComponent(component)
+                action?.trim()?.takeIf { it.isNotEmpty() }?.let { setAction(it) }
+                categories.map { it.trim() }.filter { it.isNotEmpty() }.forEach { addCategory(it) }
+                val dataUri = data?.trim()?.takeIf { it.isNotEmpty() }?.let { Uri.parse(it) }
+                val type = mimeType?.trim()?.takeIf { it.isNotEmpty() }
+                when {
+                    dataUri != null && type != null -> setDataAndType(dataUri, type)
+                    dataUri != null -> setData(dataUri)
+                    type != null -> setType(type)
+                }
+                extras.forEach { (key, value) ->
+                    when (value) {
+                        is ExtraValue.Str -> putExtra(key, value.value)
+                        is ExtraValue.Bool -> putExtra(key, value.value)
+                        is ExtraValue.Long -> putExtra(key, value.value)
+                        is ExtraValue.Double -> putExtra(key, value.value)
+                    }
+                }
+                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            }
+            context.startActivity(intent)
+            ToolResult(true, "Activity '$className' запущена")
+        }.getOrElse { e ->
+            when (e) {
+                is android.content.ActivityNotFoundException ->
+                    ToolResult(false, "Activity '$className' не найдена системой")
+                is SecurityException ->
+                    ToolResult(false, "Запуск '$className' запрещён системой: ${e.message}")
+                else -> ToolResult(false, "Не удалось запустить activity: ${e.message}")
+            }
+        }
     }
 
     /**
@@ -421,6 +545,35 @@ class DeviceActions(
             runCatching { locationManager.removeUpdates(listener) }
         }
         return finalResult?.takeIf { it.accuracy <= MAX_ACCEPTABLE_ACCURACY_M }
+    }
+
+    /** PackageInfo с activities: на API 33+ — через `PackageInfoFlags`, ниже — deprecated int. */
+    private fun getPackageInfoWithActivities(
+        pm: PackageManager,
+        packageName: String,
+    ): android.content.pm.PackageInfo {
+        return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            pm.getPackageInfo(
+                packageName,
+                PackageManager.PackageInfoFlags.of(PackageManager.GET_ACTIVITIES.toLong()),
+            )
+        } else {
+            @Suppress("DEPRECATION")
+            pm.getPackageInfo(packageName, PackageManager.GET_ACTIVITIES)
+        }
+    }
+
+    /** ActivityInfo цели: на API 33+ — через `ComponentInfoFlags`, ниже — deprecated int. */
+    private fun getActivityInfo(
+        pm: PackageManager,
+        component: ComponentName,
+    ): android.content.pm.ActivityInfo {
+        return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            pm.getActivityInfo(component, PackageManager.ComponentInfoFlags.of(0L))
+        } else {
+            @Suppress("DEPRECATION")
+            pm.getActivityInfo(component, 0)
+        }
     }
 
     companion object {

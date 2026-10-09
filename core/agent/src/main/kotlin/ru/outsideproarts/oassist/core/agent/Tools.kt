@@ -75,6 +75,132 @@ class AppListTool(private val actions: DeviceActions) : Tool {
     }
 }
 
+class AppActivitiesTool(private val actions: DeviceActions) : Tool {
+    override val schema = ToolSchema(
+        name = "app_activities",
+        description = "Список activity приложения по имени пакета: класс, название, признак экспорта. " +
+            "Платформа не отдаёт intent-filter'ы, поэтому это запускаемые цели для app_start_activity. " +
+            "Пакет сначала найди через app_list.",
+        parameters = buildJsonObject {
+            put("type", "object")
+            put("properties", buildJsonObject {
+                put("package_name", buildJsonObject {
+                    put("type", "string")
+                    put("description", "Имя пакета Android, например com.android.settings")
+                })
+                put("query", buildJsonObject {
+                    put("type", "string")
+                    put("description", "Необязательный фильтр: подстрока класса или названия")
+                })
+                put("include_non_exported", buildJsonObject {
+                    put("type", "boolean")
+                    put("description", "Показывать неэкспортированные activity (запуск запрещён), по умолчанию false")
+                })
+                put("limit", buildJsonObject {
+                    put("type", "integer")
+                    put("description", "Максимум записей, по умолчанию 100")
+                })
+            })
+            put("required", kotlinx.serialization.json.buildJsonArray { add(kotlinx.serialization.json.JsonPrimitive("package_name")) })
+        },
+    )
+
+    override fun describeForConfirmation(arguments: JsonObject): String {
+        val pkg = arguments["package_name"]?.jsonPrimitive?.content ?: "?"
+        val query = runCatching { arguments["query"]?.jsonPrimitive?.content }.getOrNull()
+        return if (query.isNullOrBlank()) {
+            "Показать activity приложения '$pkg'"
+        } else {
+            "Показать activity приложения '$pkg' по запросу '$query'"
+        }
+    }
+
+    override suspend fun execute(arguments: JsonObject): ToolResult {
+        val packageName = arguments["package_name"]?.jsonPrimitive?.content
+            ?: return ToolResult(false, "Не указан package_name")
+        val query = runCatching { arguments["query"]?.jsonPrimitive?.content }.getOrNull()
+        val includeNonExported = runCatching {
+            arguments["include_non_exported"]?.jsonPrimitive?.content?.toBooleanStrictOrNull()
+        }.getOrNull() ?: false
+        val limit = runCatching {
+            arguments["limit"]?.jsonPrimitive?.content?.toIntOrNull()
+        }.getOrNull() ?: DEFAULT_APP_ACTIVITIES_LIMIT
+        return actions.listAppActivities(packageName, query, includeNonExported, limit)
+    }
+}
+
+class AppStartActivityTool(private val actions: DeviceActions) : Tool {
+    override val schema = ToolSchema(
+        name = "app_start_activity",
+        description = "Явно запустить activity приложения (ComponentName) с данными: action, data (URI), " +
+            "mime_type, categories, extras_json (JSON-объект строкой: string/числа/bool). " +
+            "Только экспортированные activity; цели смотри через app_activities.",
+        parameters = buildJsonObject {
+            put("type", "object")
+            put("properties", buildJsonObject {
+                put("package_name", buildJsonObject {
+                    put("type", "string")
+                    put("description", "Имя пакета Android, например com.android.settings")
+                })
+                put("activity", buildJsonObject {
+                    put("type", "string")
+                    put("description", "Класс activity: полный (com.foo.Bar) или относительный (.Bar)")
+                })
+                put("action", buildJsonObject {
+                    put("type", "string")
+                    put("description", "Необязательное действие, например android.intent.action.VIEW")
+                })
+                put("data", buildJsonObject {
+                    put("type", "string")
+                    put("description", "Необязательный URI данных, например https://example.com")
+                })
+                put("mime_type", buildJsonObject {
+                    put("type", "string")
+                    put("description", "Необязательный MIME-тип данных, например text/plain")
+                })
+                put("categories", buildJsonObject {
+                    put("type", "array")
+                    put("description", "Необязательные категории интента")
+                    put("items", buildJsonObject { put("type", "string") })
+                })
+                put("extras_json", buildJsonObject {
+                    put("type", "string")
+                    put("description", "Необязательные extras JSON-объектом строкой, например {\"text\": \"привет\", \"count\": 3}")
+                })
+            })
+            put("required", kotlinx.serialization.json.buildJsonArray {
+                add(kotlinx.serialization.json.JsonPrimitive("package_name"))
+                add(kotlinx.serialization.json.JsonPrimitive("activity"))
+            })
+        },
+    )
+
+    override fun describeForConfirmation(arguments: JsonObject): String {
+        val pkg = arguments["package_name"]?.jsonPrimitive?.content ?: "?"
+        val activity = arguments["activity"]?.jsonPrimitive?.content ?: "?"
+        return "Запустить $pkg/$activity"
+    }
+
+    override suspend fun execute(arguments: JsonObject): ToolResult {
+        val packageName = arguments["package_name"]?.jsonPrimitive?.content
+            ?: return ToolResult(false, "Не указан package_name")
+        val activity = arguments["activity"]?.jsonPrimitive?.content
+            ?: return ToolResult(false, "Не указан activity")
+        val action = runCatching { arguments["action"]?.jsonPrimitive?.content }.getOrNull()
+        val data = runCatching { arguments["data"]?.jsonPrimitive?.content }.getOrNull()
+        val mimeType = runCatching { arguments["mime_type"]?.jsonPrimitive?.content }.getOrNull()
+        val categories = runCatching {
+            arguments["categories"]?.let { element ->
+                (element as? kotlinx.serialization.json.JsonArray)?.mapNotNull {
+                    runCatching { it.jsonPrimitive.content }.getOrNull()
+                }
+            }
+        }.getOrNull().orEmpty()
+        val extrasJson = runCatching { arguments["extras_json"]?.jsonPrimitive?.content }.getOrNull()
+        return actions.startAppActivity(packageName, activity, action, data, mimeType, categories, extrasJson)
+    }
+}
+
 class WebOpenTool(private val actions: DeviceActions) : Tool {
     override val schema = ToolSchema(
         name = "web_open",

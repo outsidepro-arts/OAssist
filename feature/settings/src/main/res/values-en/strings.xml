@@ -174,8 +174,12 @@
     <string name="tool_unknown_desc">Agent action</string>
     <string name="tool_app_list_title">App list</string>
     <string name="tool_app_list_desc">Installed apps with launcher icons (name and package name)</string>
+    <string name="tool_app_activities_title">App activities</string>
+    <string name="tool_app_activities_desc">List of package activities for explicit launch</string>
     <string name="tool_app_launch_title">Launch apps</string>
     <string name="tool_app_launch_desc">Open apps by package name</string>
+    <string name="tool_app_start_activity_title">Launch activity</string>
+    <string name="tool_app_start_activity_desc">Explicit activity launch with data (extras)</string>
     <string name="tool_web_open_title">Open links</string>
     <string name="tool_web_open_desc">Navigate to URLs in the browser</string>
     <string name="tool_web_search_title">Web search</string>

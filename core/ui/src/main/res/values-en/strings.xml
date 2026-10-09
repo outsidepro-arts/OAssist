@@ -27,6 +27,7 @@
     <string name="group_device_read">Device — read</string>
     <string name="group_device_write">Device — write</string>
     <string name="group_web_read">Web — read</string>
+    <string name="group_apps_navigation_read">Apps and navigation — read</string>
     <string name="group_apps_navigation_write">Apps and navigation — write</string>
     <string name="group_privileged_read">Privileged — read</string>
     <string name="group_privileged_write">Privileged — write</string>

@@ -97,7 +97,7 @@ object ToolGroups {
         "volume_set", "dnd_set", "brightness_set", "flashlight", "media_button",
         "alarm_set", "timer_set", "clipboard_copy",
         "web_search", "web_fetch",
-        "app_list", "app_launch", "open_settings", "web_open", "nav_open", "share_text",
+        "app_list", "app_activities", "app_launch", "app_start_activity", "open_settings", "web_open", "nav_open", "share_text",
         "shell_get_setting",
         "shell_exec", "shell_put_setting",
         "bye",
@@ -128,8 +128,8 @@ object ToolGroups {
         "alarm_set", "timer_set", "clipboard_copy",
         -> key(ToolCategory.DEVICE, ToolAccess.WRITE)
         "web_search", "web_fetch" -> key(ToolCategory.WEB, ToolAccess.READ)
-        "app_list" -> key(ToolCategory.APPS_NAVIGATION, ToolAccess.READ)
-        "app_launch", "open_settings", "web_open", "nav_open", "share_text" ->
+        "app_list", "app_activities" -> key(ToolCategory.APPS_NAVIGATION, ToolAccess.READ)
+        "app_launch", "app_start_activity", "open_settings", "web_open", "nav_open", "share_text" ->
             key(ToolCategory.APPS_NAVIGATION, ToolAccess.WRITE)
         "shell_get_setting" -> key(ToolCategory.PRIVILEGED, ToolAccess.READ)
         "shell_exec", "shell_put_setting" ->

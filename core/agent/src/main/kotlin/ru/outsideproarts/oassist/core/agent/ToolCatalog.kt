@@ -39,7 +39,9 @@ object ToolCatalog {
         search: SearchActions,
     ): List<Tool> = listOf(
         AppListTool(actions),
+        AppActivitiesTool(actions),
         AppLaunchTool(actions),
+        AppStartActivityTool(actions),
         WebOpenTool(actions),
         WebSearchTool(search),
         AlarmSetTool(actions),

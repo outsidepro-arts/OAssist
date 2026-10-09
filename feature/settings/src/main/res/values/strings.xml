@@ -173,8 +173,12 @@
     <string name="tool_unknown_desc">Действие агента</string>
     <string name="tool_app_list_title">Список приложений</string>
     <string name="tool_app_list_desc">Перечень установленных приложений с ярлыками (название и имя пакета)</string>
+    <string name="tool_app_activities_title">Activity приложения</string>
+    <string name="tool_app_activities_desc">Список activity пакета для явного запуска</string>
     <string name="tool_app_launch_title">Запуск приложений</string>
     <string name="tool_app_launch_desc">Открытие приложений по имени пакета</string>
+    <string name="tool_app_start_activity_title">Запуск activity</string>
+    <string name="tool_app_start_activity_desc">Явный запуск activity с данными (extras)</string>
     <string name="tool_web_open_title">Открытие ссылок</string>
     <string name="tool_web_open_desc">Переход по URL в браузере</string>
     <string name="tool_web_search_title">Поиск в интернете</string>
