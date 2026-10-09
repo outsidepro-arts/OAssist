@@ -141,12 +141,14 @@ class AgentLoop(
 
             for (tc in toolCalls) {
                 emit(ChatChunk.ToolCall(id = tc.id, name = tc.name, argumentsJson = tc.argumentsJson))
-                events?.onToolCall(tc.name, tc.argumentsJson)
                 val args = runCatching {
                     Json.parseToJsonElement(tc.argumentsJson).jsonObject
-                }.getOrElse { JsonObject(emptyMap()) }
+                }.getOrElse { kotlinx.serialization.json.buildJsonObject { } }
+                val toolSummary = toolRegistry?.find(tc.name)?.describeForConfirmation(args)
+                    ?: "${tc.name}: ${tc.argumentsJson}"
+                events?.onToolCall(tc.name, tc.argumentsJson, toolSummary)
                 val result = executeOneTool(tc, args) { emit(it) }
-                events?.onToolResult(tc.name, result.output)
+                events?.onToolResult(tc.name, result.output, result.success)
                 // Результат — отдельной сущностью ToolResult (в полотно «Ход работы»,
                 // не в основной ответ; в синтез не идёт). Текстовый маркер
                 // `[name: output]` больше не эмитим — модель получает результат

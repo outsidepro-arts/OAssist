@@ -24,6 +24,15 @@ interface SpeechHandle {
     /** Вкл/выкл рассказ о работе для активного режима. */
     fun setNarrativeEnabled(enabled: Boolean)
 
+    /**
+     * Якорь анонсов скринридера (аналог TeamTalk `announcerObject`): View, от
+     * которого постится `TYPE_ANNOUNCEMENT`. `null` — отвязать (не держать View).
+     */
+    fun setScreenReaderAnchor(view: android.view.View?)
+
+    /** Объявление нарратива — всегда через экранный чтец, независимо от канала ответа. */
+    fun announceToScreenReader(text: String)
+
     companion object {
         @Volatile
         private var instance: SpeechHandle? = null

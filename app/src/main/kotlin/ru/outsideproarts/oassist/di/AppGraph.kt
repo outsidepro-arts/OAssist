@@ -3,6 +3,8 @@ package ru.outsideproarts.oassist.di
 import android.annotation.SuppressLint
 import android.content.Context
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.launch
+import ru.outsideproarts.oassist.R
 import ru.outsideproarts.oassist.core.a11y.FlowAnnouncer
 import ru.outsideproarts.oassist.core.data.DataContainer
 import ru.outsideproarts.oassist.core.data.provider.ProviderRepository
@@ -26,7 +28,7 @@ class AppGraph private constructor(context: Context) {
     val announcer: FlowAnnouncer by lazy { FlowAnnouncer() }
 
     val speechOutput: ru.outsideproarts.oassist.core.speech.SpeechOutput by lazy {
-        ru.outsideproarts.oassist.core.speech.SpeechOutput(appContext, announcer).also { it.init() }
+        ru.outsideproarts.oassist.core.speech.SpeechOutput(appContext).also { it.init() }
     }
 
     val narrator: ru.outsideproarts.oassist.core.speech.Narrator by lazy {
@@ -36,12 +38,12 @@ class AppGraph private constructor(context: Context) {
     /** Мост «цикл → нарратив»: вызовы тулов уходят в таймлайн и объявления. */
     val narratorEvents: ru.outsideproarts.oassist.core.agent.AgentEvents by lazy {
         object : ru.outsideproarts.oassist.core.agent.AgentEvents {
-            override suspend fun onToolCall(toolName: String, argumentsJson: String) {
-                narrator.onToolCall(toolName, argumentsJson)
+            override suspend fun onToolCall(toolName: String, argumentsJson: String, summary: String) {
+                narrator.onToolCall(toolName, argumentsJson, summary)
             }
 
-            override suspend fun onToolResult(toolName: String, output: String) {
-                narrator.onToolResult(toolName, output)
+            override suspend fun onToolResult(toolName: String, output: String, success: Boolean) {
+                narrator.onToolResult(toolName, output, success)
             }
         }
     }
@@ -331,6 +333,12 @@ class AppGraph private constructor(context: Context) {
             override fun setNarrativeEnabled(enabled: Boolean) {
                 narrator.enabled = enabled
             }
+            override fun setScreenReaderAnchor(view: android.view.View?) {
+                speechOutput.setScreenReaderView(view)
+            }
+            override fun announceToScreenReader(text: String) {
+                speechOutput.announceToScreenReader(text)
+            }
         })
         ru.outsideproarts.oassist.core.speech.VoiceHandle.register(object : ru.outsideproarts.oassist.core.speech.VoiceHandle {
             override fun captureState() = voiceListener.state
@@ -344,6 +352,46 @@ class AppGraph private constructor(context: Context) {
             override fun cancelRaw() = voiceListener.cancelRaw()
         })
         registerTorchCallback()
+        startNarratorCollector()
+    }
+
+    /**
+     * Процесс-скоуп коллектор нарратива: форматирует события и отправляет
+     * через `announceToScreenReader` (всегда через экранный чтец, независимо
+     * от канала ответа). Живёт, пока жив процесс — работает в оверлее, чате,
+     * шаринге, даже если MainActivity мертва.
+     */
+    private fun startNarratorCollector() {
+        persistScope.launch {
+            narrator.events.collect { event ->
+                val text = when (event) {
+                    is ru.outsideproarts.oassist.core.speech.Narrator.NarrativeEvent.ToolCall -> {
+                        val name = displayToolName(appContext, event.toolName)
+                        if (event.arguments.isNotBlank()) {
+                            appContext.getString(R.string.narrator_tool_call, name, event.arguments)
+                        } else {
+                            appContext.getString(R.string.narrator_tool_call_short, name)
+                        }
+                    }
+                    is ru.outsideproarts.oassist.core.speech.Narrator.NarrativeEvent.ToolResult -> {
+                        val name = displayToolName(appContext, event.toolName)
+                        if (event.success) {
+                            appContext.getString(R.string.narrator_tool_done, name)
+                        } else {
+                            val brief = event.output.take(120).trim()
+                            if (brief.isNotBlank()) {
+                                appContext.getString(R.string.narrator_tool_error, name, brief)
+                            } else {
+                                appContext.getString(R.string.narrator_tool_error_short, name)
+                            }
+                        }
+                    }
+                    is ru.outsideproarts.oassist.core.speech.Narrator.NarrativeEvent.Thought ->
+                        event.text.take(500)
+                }
+                if (text.isNotBlank()) speechOutput.announceToScreenReader(text)
+            }
+        }
     }
 
     /**
@@ -367,6 +415,20 @@ class AppGraph private constructor(context: Context) {
 
     fun close() {
         data.close()
+    }
+
+    /**
+     * Человекочитаемое имя тула для нарратора (TalkBack не должен слышать сырой
+     * идентификатор «web_fetch» / «device_state»). Ищем строковый ресурс
+     * `tool_<name>_title` в пакете; MCP-тулы (`mcp_<id>__<tool>`) оставляем как есть.
+     */
+    private fun displayToolName(context: android.content.Context, toolName: String): String {
+        val resId = context.resources.getIdentifier(
+            "tool_${toolName.replace("-", "_")}_title",
+            "string",
+            context.packageName,
+        )
+        return if (resId != 0) context.getString(resId) else toolName
     }
 
     companion object {

@@ -160,7 +160,7 @@ API-ключи, токены, пароли, значения `extraHeaders`, Bas
 
 ### 6. Речь: два независимых контента
 
-- **Ответ агента** — `SpeechOutputChannel`: `OFF | SYSTEM_TTS | ONLINE_TTS | SCREEN_READER`. Канал `SCREEN_READER` не издаёт звука: каждое завершённое предложение публикуется в скрытый announcer-узел (`LiveRegion.Polite`), видимый текст — **не** live region. Поведение зеркалит потоковую TTS.
+- **Ответ агента** — `SpeechOutputChannel`: `OFF | SYSTEM_TTS | ONLINE_TTS | SCREEN_READER`. Канал `SCREEN_READER` не издаёт звука: каждое завершённое предложение идёт очередью `TYPE_ANNOUNCEMENT` (`ScreenReaderSpeaker` → `View.announceForAccessibility`, читает сам TalkBack — аналог TeamTalk `TTSENGINE_QTANNOUNCEMENT`), видимый текст — **не** live region. Поведение зеркалит потоковую TTS.
 - **Нарратив работы** (размышления, вызовы инструментов) — `Narrator`, отдельным тумблером, **только** через экранный чтец. Одновременно отображается визуально — сворачиваемый timeline с иконками статуса, навигируемый TalkBack.
 
 ### 7. Модель данных провайдеров/режимов
@@ -206,7 +206,7 @@ Helpers из `core/a11y/Semantics.kt`: `oassistTouchTarget()`, `oassistHeading()
 1. **Touch target ≥ 48dp** — `oassistTouchTarget()` на всё интерактивное.
 2. **Имя + роль + состояние** — каждый контрол имеет `contentDescription`/`label`, правильную `Role`, `stateDescription` если есть состояние.
 3. **Жест ≠ единственный путь** — свайп/long-press имеют кнопочный аналог + `CustomAccessibilityAction` (`oassistCustomAction`).
-4. **Live region — не на стриме** — видимый накапливающийся текст (ответ агента) НЕ live region. Только скрытый announcer-узел (`AnnouncerHost`/`FlowAnnouncer`) или transient-статусы.
+4. **Live region — не на стриме** — видимый накапливающийся текст (ответ агента) НЕ live region. Ответ идёт через `ScreenReaderSpeaker` (`TYPE_ANNOUNCEMENT` с якоря-View); скрытый announcer-узел (`AnnouncerHost`/`FlowAnnouncer`) — только для нарратива и transient-статусов.
 5. **Дропдауны** — `ExposedDropdownMenuBox` + `menuAnchor(PrimaryNotEditable)` + `oassistDropdownClassName()` (TalkBack: «Выпадающий список», не «Окно редактирования»).
 6. **Слайдеры** — `oassistSlider()` (contentDescription + stateDescription + liveRegion + onKeyEvent D-PAD).
 7. **Секреты** — только через `SecretStore`, значение не переотображается (маска `•••• (сохранён)` + Заменить/Удалить).

@@ -109,6 +109,7 @@
     <string name="mode_tts_off">Выключена</string>
     <string name="mode_tts_system">Системный синтезатор</string>
     <string name="mode_tts_screen_reader">Экранный чтец</string>
+    <string name="mode_tts_screen_reader_hint">Скринридер (TalkBack) выключен — без него объявления не слышны</string>
     <string name="mode_tts_voice">Голос</string>
     <string name="mode_tts_voice_default">Голос по умолчанию</string>
     <string name="mode_tts_voice_network">(сеть)</string>

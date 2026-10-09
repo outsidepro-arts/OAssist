@@ -20,8 +20,11 @@
     <string name="approvals_reset_done">Tool permissions reset</string>
     <string name="tools_reset_done">Tool settings reset</string>
     <string name="a11y_service_description">OAssist reads the screen and performs gestures only on your agent command.</string>
-    <string name="narrator_tool_call">Running: %1$s</string>
+    <string name="narrator_tool_call">Running: %1$s (%2$s)</string>
+    <string name="narrator_tool_call_short">Running: %1$s</string>
     <string name="narrator_tool_done">Done: %1$s</string>
+    <string name="narrator_tool_error">Error: %1$s — %2$s</string>
+    <string name="narrator_tool_error_short">Error: %1$s</string>
     <string name="memory_saved">Memory saved</string>
     <string name="fgs_channel_name">Background operations</string>
     <string name="fgs_notification_text">Agent is running a long operation</string>

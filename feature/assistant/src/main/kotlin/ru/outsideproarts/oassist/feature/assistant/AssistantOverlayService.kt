@@ -89,6 +89,11 @@ class AssistantOverlayService : LifecycleService(), SavedStateRegistryOwner {
 
     /** Пауза на подтверждение действия: диалог живёт в композиции оверлея (showOverlay-режим). */
     private var pendingApproval by mutableStateOf<Pair<ApprovalRequest, AgentLoop>?>(null)
+    /**
+     * Ход идёт в канале SCREEN_READER: окну нужен фокус, иначе accessibility-
+     * события анонсов глотаются (прецедент M9 — диалог подтверждения).
+     */
+    private var srKeepFocusable = false
     private var listening = false
 
     private var sttLanguage: String = "ru-RU"
@@ -418,6 +423,7 @@ class AssistantOverlayService : LifecycleService(), SavedStateRegistryOwner {
         isStreaming = true
         pendingBye = false
         pendingApproval = null
+        srKeepFocusable = false
         setInputFocusable(false)
         answer = ""
         thought = ""
@@ -445,6 +451,10 @@ class AssistantOverlayService : LifecycleService(), SavedStateRegistryOwner {
                 val tts = config.effectiveTts()
                 speech?.applyTts(tts)
                 speech?.setNarrativeEnabled(tts.narrative)
+                // SR-стриму нужен фокус окна (иначе анонсы глотаются).
+                srKeepFocusable =
+                    tts.channel == ru.outsideproarts.oassist.core.model.SpeechOutputChannel.SCREEN_READER
+                refreshOverlayFocusable()
 
                 val thoughtSpeaker = StreamSpeaker(
                     speak = { if (autoSpeak) speech?.speak(it) },
@@ -513,8 +523,9 @@ class AssistantOverlayService : LifecycleService(), SavedStateRegistryOwner {
                             if (showOverlay) {
                                 pendingApproval = chunk.request to agent
                                 // Окно нефокусируемо (панель поверх приложения) — пока запрос
-                                // висит, фокус нужен, чтобы accessibility-фокус сел в диалог.
-                                setInputFocusable(true)
+                                // висит, фокус нужен, чтобы accessibility-фокус сел в диалог
+                                // и доходили анонсы (SR-стрим тоже держит фокус).
+                                refreshOverlayFocusable()
                             } else {
                                 // Notification-режим: диалог отдельным окном (ConsentActivity),
                                 // резолвер держим на время паузы цикла.
@@ -551,6 +562,8 @@ class AssistantOverlayService : LifecycleService(), SavedStateRegistryOwner {
                 execute(voiceFlow.onTurnFinished(continueDialog))
             } finally {
                 isStreaming = false
+                srKeepFocusable = false
+                refreshOverlayFocusable()
             }
         }
     }
@@ -591,7 +604,7 @@ class AssistantOverlayService : LifecycleService(), SavedStateRegistryOwner {
                             onDecision = { decision ->
                                 agent.resolveApproval(request.callId, decision)
                                 pendingApproval = null
-                                setInputFocusable(false)
+                                refreshOverlayFocusable()
                             },
                         )
                     }
@@ -626,13 +639,27 @@ class AssistantOverlayService : LifecycleService(), SavedStateRegistryOwner {
 
         windowManager.addView(wrapper, params)
         overlayView = wrapper
+        // Якорь анонсов скринридера — окно панели (аналог TeamTalk announcerObject).
+        speech?.setScreenReaderAnchor(wrapper)
     }
 
     private fun removeOverlay() {
+        speech?.setScreenReaderAnchor(null)
         overlayView?.let {
             runCatching { windowManager.removeView(it) }
             overlayView = null
         }
+    }
+
+    /**
+     * Фокусируемость окна оверлея: нефокусируемое окно не пропускает
+     * accessibility-события. Держим фокус, пока висит подтверждение или идёт
+     * стрим в канале SCREEN_READER; иначе окно нефокусируемое (тапы мимо
+     * панели идут в приложение, IME — только на фокусе поля).
+     */
+    private fun refreshOverlayFocusable() {
+        if (!showOverlay) return
+        setInputFocusable(pendingApproval != null || (isStreaming && srKeepFocusable))
     }
 
     /** Поле ввода требует фокуса окна — иначе IME не придёт; снаружи окно остаётся нефокусируемым. */

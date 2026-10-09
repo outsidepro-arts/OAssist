@@ -639,6 +639,21 @@ private fun TtsSection(
         }
     }
 
+    // Без активного скринридера анонсы канала уходят в пустоту — честный хинт.
+    if (channel == SpeechOutputChannel.SCREEN_READER) {
+        val appContext = androidx.compose.ui.platform.LocalContext.current.applicationContext
+        val readerOn = remember(channel) {
+            ru.outsideproarts.oassist.core.a11y.isScreenReaderEnabled(appContext)
+        }
+        if (!readerOn) {
+            Text(
+                text = stringResource(R.string.mode_tts_screen_reader_hint),
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.error,
+            )
+        }
+    }
+
     ExposedDropdownMenuBox(
         expanded = engineExpanded,
         onExpandedChange = onEngineExpandedChange,

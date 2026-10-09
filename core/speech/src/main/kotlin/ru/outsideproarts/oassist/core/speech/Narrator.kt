@@ -19,15 +19,15 @@ class Narrator {
     private val _timeline = MutableSharedFlow<TimelineEntry>(extraBufferCapacity = 64)
     val timeline: SharedFlow<TimelineEntry> = _timeline.asSharedFlow()
 
-    suspend fun onToolCall(toolName: String, arguments: String) {
+    suspend fun onToolCall(toolName: String, argumentsJson: String, summary: String = "") {
         if (!enabled) return
-        _events.emit(NarrativeEvent.ToolCall(toolName))
-        _timeline.emit(TimelineEntry.ToolCall(toolName, arguments, System.currentTimeMillis()))
+        _events.emit(NarrativeEvent.ToolCall(toolName, summary.ifBlank { argumentsJson }))
+        _timeline.emit(TimelineEntry.ToolCall(toolName, argumentsJson, System.currentTimeMillis()))
     }
 
-    suspend fun onToolResult(toolName: String, output: String) {
+    suspend fun onToolResult(toolName: String, output: String, success: Boolean = true) {
         if (!enabled) return
-        _events.emit(NarrativeEvent.ToolResult(toolName, output))
+        _events.emit(NarrativeEvent.ToolResult(toolName, output, success))
         _timeline.emit(TimelineEntry.ToolResult(toolName, output, System.currentTimeMillis()))
     }
 
@@ -47,8 +47,8 @@ class Narrator {
 
     sealed interface NarrativeEvent {
         data class Thought(val text: String) : NarrativeEvent
-        data class ToolCall(val toolName: String) : NarrativeEvent
-        data class ToolResult(val toolName: String, val output: String) : NarrativeEvent
+        data class ToolCall(val toolName: String, val arguments: String) : NarrativeEvent
+        data class ToolResult(val toolName: String, val output: String, val success: Boolean) : NarrativeEvent
     }
 
     sealed interface TimelineEntry {

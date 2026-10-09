@@ -78,32 +78,6 @@ class MainActivity : AppCompatActivity() {
                 }
 
                 val scope = rememberCoroutineScope()
-                val appContext = LocalContext.current.applicationContext
-                LaunchedEffect(graph) {
-                    // Нарратив работы — только через экранный чтец (звук TTS не занимает).
-                    // Результат тула не зачитываем целиком (шумно): итог — в таймлайне чата.
-                    // Вкл/выкл — флагом narrative в TtsConfig активного режима (ставят UI-старты стримов).
-                    graph.narrator.events.collect { event ->
-                        when (event) {
-                            is ru.outsideproarts.oassist.core.speech.Narrator.NarrativeEvent.ToolCall ->
-                                graph.announcer.announce(
-                                    appContext.getString(
-                                        R.string.narrator_tool_call,
-                                        displayToolName(appContext, event.toolName),
-                                    ),
-                                )
-                            is ru.outsideproarts.oassist.core.speech.Narrator.NarrativeEvent.ToolResult ->
-                                graph.announcer.announce(
-                                    appContext.getString(
-                                        R.string.narrator_tool_done,
-                                        displayToolName(appContext, event.toolName),
-                                    ),
-                                )
-                            is ru.outsideproarts.oassist.core.speech.Narrator.NarrativeEvent.Thought ->
-                                graph.announcer.announce(event.text.take(500))
-                        }
-                    }
-                }
                 OAssistApp(
                     graph = graph,
                     announcer = graph.announcer,
@@ -114,6 +88,20 @@ class MainActivity : AppCompatActivity() {
                 )
             }
         }
+    }
+
+    override fun onResume() {
+        super.onResume()
+        // Якорь анонсов скринридера (аналог TeamTalk announcerObject): оверлей
+        // при показе перепривязывает на своё окно, возврат сюда — через onResume.
+        runCatching {
+            AppGraph.get().speechOutput.setScreenReaderView(window.decorView)
+        }
+    }
+
+    override fun onDestroy() {
+        runCatching { AppGraph.get().speechOutput.setScreenReaderView(null) }
+        super.onDestroy()
     }
 
     private fun applyLanguage(language: AppLanguage) {
@@ -789,21 +777,6 @@ private fun showToast(
     duration: Int = android.widget.Toast.LENGTH_SHORT,
 ) {
     android.widget.Toast.makeText(context, context.getString(resId, *args), duration).show()
-}
-
-/**
- * Человекочитаемое имя тула для нарратора (TalkBack не должен слышать сырой
- * идентификатор «web_fetch» / «device_state»). Ищем строковый ресурс
- * `tool_<name>_title` в пакете; MCP-тулы (`mcp_<id>__<tool>`) оставляем как есть —
- * у них нет локализованного имени, лучше показать идентификатор, чем молчать.
- */
-private fun displayToolName(context: android.content.Context, toolName: String): String {
-    val resId = context.resources.getIdentifier(
-        "tool_${toolName.replace("-", "_")}_title",
-        "string",
-        context.packageName,
-    )
-    return if (resId != 0) context.getString(resId) else toolName
 }
 
 /**

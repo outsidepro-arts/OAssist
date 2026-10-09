@@ -8,10 +8,16 @@ import android.os.Bundle
 import android.speech.tts.TextToSpeech
 import android.speech.tts.UtteranceProgressListener
 import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.SharingStarted
+import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.withTimeoutOrNull
-import ru.outsideproarts.oassist.core.a11y.Announcer
 import ru.outsideproarts.oassist.core.model.OAssistLog
 import ru.outsideproarts.oassist.core.model.SpeechOutputChannel
 import ru.outsideproarts.oassist.core.model.TtsConfig
@@ -45,17 +51,20 @@ fun voiceLanguageTags(voices: List<VoiceInfo>): List<String> =
  * Контракт каналов:
  * - `OFF` — молча;
  * - `SYSTEM_TTS` — Android TextToSpeech, фразы в `QUEUE_ADD` (очередь движка);
- * - `SCREEN_READER` — без звука: каждое завершённое предложение — в [announcer]
- *   (скрытый live-region узел, читает TalkBack);
+ * - `SCREEN_READER` — без звука: каждое завершённое предложение — в
+ *   [screenReader] (очередь `TYPE_ANNOUNCEMENT` через
+ *   `View.announceForAccessibility`, читает сам TalkBack — аналог TeamTalk
+ *   `TTSENGINE_QTANNOUNCEMENT`);
  * - `ONLINE_TTS` — отложен: фраза пропускается с логом, очередь не рвётся.
  *
- * Все методы неблокирующие (`speak` — один вызов TTS / `tryEmit` анонсера),
- * `runBlocking` здесь запрещён. Смена канала через сеттер [channel] очередь не
- * теряет: уже поставленные в TTS фразы договариваются, новые идут в новый канал.
+ * Все методы неблокирующие (`speak` — один вызов TTS / постановка в очередь
+ * анонсов), `runBlocking` здесь запрещён. Смена канала через сеттер [channel]
+ * очередь не теряет: уже поставленные в TTS фразы договариваются, новые идут
+ * в новый канал (очередь анонсов при смене канала сбрасывается).
  */
 class SpeechOutput(
     private val context: Context,
-    private val announcer: Announcer? = null,
+    screenReaderSpeaker: ScreenReaderSpeaker? = null,
 ) {
 
     /**
@@ -95,8 +104,20 @@ class SpeechOutput(
     private val pendingUtterances = mutableSetOf<String>()
     private val _speaking = MutableStateFlow(false)
 
-    /** true, пока очередь TTS непуста; false = всё договорено (или канал не SYSTEM_TTS). */
-    val speaking: kotlinx.coroutines.flow.StateFlow<Boolean> = _speaking
+    /**
+     * Диктор скринридера: якорь-View ставит хост через [setScreenReaderView]
+     * (decorView Activity / окно оверлея); без якоря анонсы глотаются.
+     */
+    private val screenReader = screenReaderSpeaker ?: ScreenReaderSpeaker()
+    private val combineScope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
+
+    /**
+     * true, пока не договорено: очередь TTS непуста ИЛИ очередь анонсов
+     * скринридера непуста (гейт автопродолжения диалога ждёт обоих).
+     */
+    val speaking: kotlinx.coroutines.flow.StateFlow<Boolean> =
+        combine(_speaking, screenReader.speaking) { tts, sr -> tts || sr }
+            .stateIn(combineScope, SharingStarted.Eagerly, false)
 
     private val speechAudioAttributes = AudioAttributes.Builder()
         .setUsage(AudioAttributes.USAGE_ASSISTANT)
@@ -354,7 +375,7 @@ class SpeechOutput(
                 }
             }
             SpeechOutputChannel.SCREEN_READER -> {
-                announcer?.announce(text)
+                screenReader.announce(text)
             }
             SpeechOutputChannel.ONLINE_TTS -> {
                 // Отложен (M4.x): пропускаем фразу, не рвём очередь стрима.
@@ -369,12 +390,36 @@ class SpeechOutput(
     }
 
     /**
-     * Стоп / barge-in: гасит TTS и сбрасывает очередь движка.
-     * Уже сказанное остаётся сказанным; анонсер событий назад не забирает.
+     * Якорь для анонсов скринридера (аналог TeamTalk `announcerObject`):
+     * View, от которого постится `TYPE_ANNOUNCEMENT`. В чате — decorView
+     * Activity, в оверлее — окно панели, `null` — отвязать (не держать View).
+     * Вызывать с Main-потока; хосты перепривязывают при resume/создании окна.
+     */
+    fun setScreenReaderView(view: android.view.View?) {
+        if (view == null) {
+            screenReader.setOutput {}
+        } else {
+            screenReader.setOutput { text -> view.announceForAccessibility(text) }
+        }
+    }
+
+    /**
+     * Объявление нарратива (вызовы тулов, статусы) — всегда через экранный
+     * чтец, независимо от канала ответа. TTS-канал не занимает: нарратив
+     * по спеке идёт только через скринридер.
+     */
+    fun announceToScreenReader(text: String) {
+        screenReader.announce(text)
+    }
+
+    /**
+     * Стоп / barge-in: гасит TTS и сбрасывает очередь движка, очередь анонсов
+     * скринридера тоже сбрасывается. Уже сказанное остаётся сказанным.
      */
     fun stop() {
         tts?.stop()
         resetUtterances()
+        screenReader.stop()
     }
 
     fun shutdown() {
@@ -383,6 +428,8 @@ class SpeechOutput(
         tts = null
         ready.tryEmit(false)
         resetUtterances()
+        screenReader.shutdown()
+        combineScope.cancel()
     }
 
     companion object {

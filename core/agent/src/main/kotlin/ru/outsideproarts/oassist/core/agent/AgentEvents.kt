@@ -6,7 +6,11 @@ package ru.outsideproarts.oassist.core.agent
  * Вызываются из suspend-контекста стрима, блокировать запрещено.
  */
 interface AgentEvents {
-    suspend fun onToolCall(toolName: String, argumentsJson: String) {}
+    /**
+     * @param argumentsJson — сырой JSON аргументов (для timeline)
+     * @param summary — human-readable описание (из `describeForConfirmation`, для речи)
+     */
+    suspend fun onToolCall(toolName: String, argumentsJson: String, summary: String = "") {}
 
-    suspend fun onToolResult(toolName: String, output: String) {}
+    suspend fun onToolResult(toolName: String, output: String, success: Boolean = true) {}
 }

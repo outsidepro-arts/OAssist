@@ -20,8 +20,11 @@
     <string name="approvals_reset_done">Разрешения тулов сброшены</string>
     <string name="tools_reset_done">Настройки инструментов сброшены</string>
     <string name="a11y_service_description">OAssist читает экран и выполняет жесты только по вашей команде агенту.</string>
-    <string name="narrator_tool_call">Выполняю: %1$s</string>
+    <string name="narrator_tool_call">Выполняю: %1$s (%2$s)</string>
+    <string name="narrator_tool_call_short">Выполняю: %1$s</string>
     <string name="narrator_tool_done">Готово: %1$s</string>
+    <string name="narrator_tool_error">Ошибка: %1$s — %2$s</string>
+    <string name="narrator_tool_error_short">Ошибка: %1$s</string>
     <string name="memory_saved">Память сохранена</string>
     <string name="fgs_channel_name">Фоновые операции</string>
     <string name="fgs_notification_text">Агент выполняет долгую операцию</string>

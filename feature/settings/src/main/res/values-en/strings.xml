@@ -109,6 +109,7 @@
     <string name="mode_tts_off">Off</string>
     <string name="mode_tts_system">System synthesizer</string>
     <string name="mode_tts_screen_reader">Screen reader</string>
+    <string name="mode_tts_screen_reader_hint">Screen reader (TalkBack) is off — announcements won\'t be heard without it</string>
     <string name="mode_tts_voice">Voice</string>
     <string name="mode_tts_voice_default">Default voice</string>
     <string name="mode_tts_voice_network">(network)</string>
