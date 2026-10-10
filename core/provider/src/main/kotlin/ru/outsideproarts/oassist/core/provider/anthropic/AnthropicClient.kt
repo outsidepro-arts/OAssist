@@ -104,6 +104,7 @@ class AnthropicClient private constructor(
         ) {
             val acc = AnthropicStreamAccumulator()
             var stopReason: String? = null
+            var sawStop = false
             var callsFlushed = false
             suspend fun flushCalls() {
                 if (callsFlushed) return
@@ -162,6 +163,7 @@ class AnthropicClient private constructor(
                         }.getOrNull()?.delta?.stopReason?.let { stopReason = it }
                     }
                     "message_stop" -> {
+                        sawStop = true
                         flushCalls()
                         emit(ChatChunk.Finish(reason = stopReason ?: "end_turn"))
                     }
@@ -175,8 +177,9 @@ class AnthropicClient private constructor(
                 }
             }
             // Страховка: соединение закрылось без `message_stop` — отдать накопленное.
+            // Без терминатора ответ мог быть усечён — помечаем abrupt.
             flushCalls()
-            emit(ChatChunk.Finish(reason = stopReason ?: "end_turn"))
+            emit(ChatChunk.Finish(reason = stopReason ?: "end_turn", abrupt = !sawStop))
         }
     }
 

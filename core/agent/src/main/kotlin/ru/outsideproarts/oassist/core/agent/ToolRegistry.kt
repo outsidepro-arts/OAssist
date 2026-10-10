@@ -76,8 +76,15 @@ class ToolRegistry(
     suspend fun execute(name: String, arguments: JsonObject): ToolResult {
         val tool = find(name) ?: return ToolResult(false, "Инструмент '$name' не найден")
         if (!isEnabled(name)) return ToolResult(false, "Инструмент '$name' отключён в настройках")
-        return runCatching { tool.execute(arguments) }
-            .getOrElse { ToolResult(false, "Ошибка: ${it.message}") }
+        // runCatching глотает и CancellationException: «Стоп» превращался бы
+        // в фейковый ToolResult(false) в ленте/таймлайне — пробрасываем отмену.
+        return try {
+            tool.execute(arguments)
+        } catch (e: kotlinx.coroutines.CancellationException) {
+            throw e
+        } catch (e: Throwable) {
+            ToolResult(false, "Ошибка: ${e.message}")
+        }
     }
 }
 

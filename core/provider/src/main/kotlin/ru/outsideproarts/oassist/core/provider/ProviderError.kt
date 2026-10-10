@@ -2,9 +2,9 @@ package ru.outsideproarts.oassist.core.provider
 
 import android.content.Context
 import io.ktor.client.plugins.ResponseException
+import io.ktor.client.plugins.sse.SSEClientException
 import kotlinx.coroutines.CancellationException
 import kotlinx.serialization.SerializationException
-import java.io.IOException
 
 /**
  * Ошибка провайдера — обёртка, чтобы слои выше не ловили голое исключение.
@@ -61,14 +61,36 @@ sealed class ProviderError(message: String, cause: Throwable? = null) : RuntimeE
     companion object {
         private const val RAW_LIMIT = 200
 
-        /** Маппинг любого исключения запроса в [ProviderError]. */
-        fun from(t: Throwable): ProviderError = when (t) {
-            is ProviderError -> t
-            is CancellationException -> throw t
-            is ResponseException -> Http(t.response.status.value, t.message?.take(RAW_LIMIT))
-            is SerializationException -> Protocol(t.message ?: "parse error")
-            is IOException -> Network(t.message ?: "network error", t)
-            else -> Network(t.message ?: t::class.java.simpleName, t)
+        /**
+         * Маппинг любого исключения запроса в [ProviderError].
+         * Ktor заворачивает ошибки SSE-стрима в `SSEClientException`
+         * (IllegalStateException), поэтому идём по cause-цепочке: иначе
+         * HTTP-статус (401/429/503) терялся бы в общей «сетевой ошибке».
+         */
+        fun from(t: Throwable): ProviderError {
+            var cur: Throwable? = t
+            while (cur != null) {
+                when (cur) {
+                    is ProviderError -> return cur
+                    // Отмена может быть завёрнута (напр. в SSEClientException):
+                    // бросаем именно её, иначе корутина «завершится ошибкой» вместо отмены.
+                    is CancellationException -> throw cur
+                    // Обёртка SSE-стрима: статус несёт сама (без cause при обрыве
+                    // handshake), иначе — идём глубже по цепочке.
+                    is SSEClientException -> {
+                        val status = runCatching { cur.response?.status?.value }.getOrNull()
+                        if (status != null && status !in 200..299) {
+                            return Http(status, cur.message?.take(RAW_LIMIT))
+                        }
+                        cur = cur.cause
+                        continue
+                    }
+                    is ResponseException -> return Http(cur.response.status.value, cur.message?.take(RAW_LIMIT))
+                    is SerializationException -> return Protocol(cur.message ?: "parse error")
+                }
+                cur = cur.cause
+            }
+            return Network(t.message ?: t::class.java.simpleName, t)
         }
     }
 }

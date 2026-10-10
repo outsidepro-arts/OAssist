@@ -19,6 +19,13 @@ class McpTool(
     description: String?,
     parameters: JsonObject,
     private val client: McpClient,
+    /**
+     * Бюджет одного вызова. Параметр (а не только константа) — чтобы юнит-тест
+     * проверял таймаут-путь детерминированно на маленьком значении:
+     * в `runTest` виртуальный таймер обгоняет ответ MockEngine с реального
+     * диспетчера, поэтому «боевые» тесты этого пути идут на реальном времени.
+     */
+    private val callTimeoutMs: Long = CALL_TIMEOUT_MS,
 ) : Tool {
 
     override val schema: ToolSchema = ToolSchema(
@@ -33,7 +40,11 @@ class McpTool(
         "MCP «$serverName» → $toolName: $arguments"
 
     override suspend fun execute(arguments: JsonObject): ToolResult {
-        val result = client.callTool(toolName, arguments)
+        // Свой бюджет вместо общеклиентских 120 с: зависший MCP-сервер
+        // не должен стопать раунд агента на две минуты.
+        val result = kotlinx.coroutines.withTimeoutOrNull(callTimeoutMs) {
+            client.callTool(toolName, arguments)
+        } ?: return ToolResult(false, "MCP «$serverName» → $toolName: превышен таймаут ${callTimeoutMs / 1000} с")
         val text = result.content.mapNotNull { it.text }.joinToString("\n").ifBlank { "(пусто)" }
         val output = if (text.length > OUTPUT_LIMIT) {
             text.take(OUTPUT_LIMIT) + "\n…[обрезано]"
@@ -46,6 +57,9 @@ class McpTool(
     companion object {
         private const val DESCRIPTION_LIMIT = 500
         private const val OUTPUT_LIMIT = 8000
+
+        /** Бюджет одного вызова внешнего инструмента. */
+        private const val CALL_TIMEOUT_MS = 60_000L
 
         /**
          * Имя в реестре: `mcp_<первые 8 id>__<имя>`, санитизировано под

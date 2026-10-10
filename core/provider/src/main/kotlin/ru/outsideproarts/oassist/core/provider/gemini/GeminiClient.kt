@@ -26,6 +26,7 @@ import ru.outsideproarts.oassist.core.provider.ModelClient
 import ru.outsideproarts.oassist.core.provider.ProviderAuth
 import ru.outsideproarts.oassist.core.provider.ProviderError
 import ru.outsideproarts.oassist.core.provider.ProviderJson
+import ru.outsideproarts.oassist.core.provider.detectStreamErrorMessage
 import ru.outsideproarts.oassist.core.provider.openai.ToolSchemaDto
 
 /**
@@ -112,15 +113,14 @@ class GeminiClient private constructor(
             var finish: String? = null
             incoming.collect { event ->
                 val data = event.data ?: return@collect
+                // Пустой candidates — не чанк: ошибка API (`{"error":...}`
+                // декодируется и как GeminiStreamChunkDto — все поля с дефолтами).
                 val chunk = runCatching {
                     ProviderJson.decodeFromString(GeminiStreamChunkDto.serializer(), data)
-                }.getOrNull()
+                }.getOrNull()?.takeIf { it.candidates.isNotEmpty() }
                 if (chunk == null) {
                     // Ошибка API приходит тем же потоком другим JSON-объектом.
-                    runCatching {
-                        ProviderJson.decodeFromString(GeminiErrorDto.serializer(), data)
-                    }.getOrNull()?.error?.message
-                        ?.take(ERROR_MESSAGE_LIMIT)
+                    detectStreamErrorMessage(data)
                         ?.let { throw ProviderError.Protocol("gemini: $it") }
                     return@collect
                 }
@@ -129,7 +129,8 @@ class GeminiClient private constructor(
                 extracted.finishReason?.let { finish = it }
                 extracted.chunks.forEach { emit(it) }
             }
-            emit(ChatChunk.Finish(reason = finish ?: "STOP"))
+            // Без finish_reason соединение закрылось досрочно: ответ мог быть усечён.
+            emit(ChatChunk.Finish(reason = finish ?: "STOP", abrupt = finish == null))
         }
     }
 
@@ -147,7 +148,6 @@ class GeminiClient private constructor(
 
         private const val MODELS_PREFIX = "models/"
         private const val MODELS_PAGE_SIZE = 100
-        private const val ERROR_MESSAGE_LIMIT = 200
         private const val PROBE_TEXT = "hi"
 
         /** Нестримовый URL генерации (для пробы): `models/{id}:generateContent`. */

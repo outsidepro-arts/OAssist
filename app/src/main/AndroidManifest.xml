@@ -4,6 +4,9 @@
     <!-- INTERNET — явное объявление (раньше приходил только транзитивно из okhttp) -->
     <uses-permission android:name="android.permission.INTERNET" />
 
+    <!-- NetworkMonitor: опрос состояния сети (normal-разрешение, выдачи не требует) -->
+    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+
     <!-- M2.3: коммуникации и данные для intent-тулов (запрос — из экрана «Инструменты агента») -->
     <uses-permission android:name="android.permission.CALL_PHONE" />
     <uses-permission android:name="android.permission.SEND_SMS" />

@@ -35,7 +35,9 @@ import ru.outsideproarts.oassist.core.provider.ChatRole
 import ru.outsideproarts.oassist.core.provider.ImageCodec
 import ru.outsideproarts.oassist.core.provider.ModelClient
 import ru.outsideproarts.oassist.core.provider.ProviderAuth
+import ru.outsideproarts.oassist.core.provider.ProviderError
 import ru.outsideproarts.oassist.core.provider.ProviderJson
+import ru.outsideproarts.oassist.core.provider.detectStreamErrorMessage
 
 class OpenAiCompatibleClient private constructor(
     private val profile: ProviderProfile,
@@ -127,11 +129,30 @@ class OpenAiCompatibleClient private constructor(
             }
             // DONE отменяет апстрим: соединение закрываем сами, а не ждём сервер.
             // Иначе при висящем соединении (кипэлайвы/прокси) стрим не завершится никогда.
-            incoming.takeWhile { event -> event.data != DONE_SENTINEL }.collect { event ->
+            var lastFinish: String? = null
+            var sawDone = false
+            incoming.takeWhile { event ->
+                if (event.data == DONE_SENTINEL) {
+                    sawDone = true
+                    false
+                } else {
+                    true
+                }
+            }.collect { event ->
                 val data = event.data ?: return@collect
+                // Пустой choices — не чанк: либо ошибка API тем же потоком
+                // (`{"error":...}` декодируется и как ChatResponseDto с пустым
+                // choices — все поля с дефолтами), либо мусор — мимо.
                 val chunk = runCatching {
                     ProviderJson.decodeFromString(ChatResponseDto.serializer(), data)
-                }.getOrNull() ?: return@collect
+                }.getOrNull()?.takeIf { it.choices.isNotEmpty() }
+                if (chunk == null) {
+                    // Без детектора серверная перегрузка давала пустой ответ
+                    // + фейковый Finish("stop") (как у Gemini — там та же схема).
+                    detectStreamErrorMessage(data)
+                        ?.let { throw ProviderError.Protocol("openai: $it") }
+                    return@collect
+                }
                 val delta = chunk.choices.firstOrNull()?.delta
                 delta?.content?.let { content ->
                     if (content.isNotEmpty()) emit(ChatChunk.Content(content))
@@ -139,13 +160,15 @@ class OpenAiCompatibleClient private constructor(
                 delta?.toolCalls?.forEach { assembler.feed(it) }
                 val finish = chunk.choices.firstOrNull()?.finishReason
                 if (finish != null) {
+                    lastFinish = finish
                     flushCalls()
                     emit(ChatChunk.Finish(reason = finish))
                 }
             }
             // Страховка: сервер закрыл соединение без DONE/finish — отдать накопленное.
+            // Без терминатора ответ мог быть усечён — помечаем abrupt, а не «stop».
             flushCalls()
-            emit(ChatChunk.Finish(reason = "stop"))
+            emit(ChatChunk.Finish(reason = lastFinish ?: "stop", abrupt = lastFinish == null && !sawDone))
         }
     }
 

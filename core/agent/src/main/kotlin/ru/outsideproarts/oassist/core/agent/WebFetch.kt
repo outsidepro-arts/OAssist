@@ -55,7 +55,11 @@ class WebContentActions(private val httpClient: HttpClient) {
             }
             val charset = responseCharset(response)
             val channel = response.bodyAsChannel()
-            val (text, truncated) = readCapped(channel, charset, MAX_BODY_BYTES)
+            // Медленная докачка («капельный» ответ) раньше висела до общеклиентских
+            // 120 с: у тела свой бюджет поверх таймаута заголовков.
+            val (text, truncated) = withTimeoutOrNull(BODY_TIMEOUT_MS) {
+                readCapped(channel, charset, MAX_BODY_BYTES)
+            } ?: throw java.util.concurrent.TimeoutException("Таймаут чтения тела $BODY_TIMEOUT_MS мс: $url")
             RawFetch(
                 finalUrl = response.request.url.toString(),
                 contentType = response.contentType()?.toString(),
@@ -81,7 +85,9 @@ class WebContentActions(private val httpClient: HttpClient) {
             if (!type.contains("markdown") && !type.contains("plain")) {
                 throw IllegalStateException("Нет Markdown-варианта ($type)")
             }
-            val text = readCapped(response.bodyAsChannel(), responseCharset(response), MAX_BODY_BYTES).text
+            val text = withTimeoutOrNull(BODY_TIMEOUT_MS) {
+                readCapped(response.bodyAsChannel(), responseCharset(response), MAX_BODY_BYTES).text
+            } ?: throw java.util.concurrent.TimeoutException("Таймаут чтения тела: $variant")
             if (text.length < MIN_MARKDOWN_CHARS) throw IllegalStateException("Markdown-вариант пуст")
             text
         }
@@ -128,6 +134,9 @@ class WebContentActions(private val httpClient: HttpClient) {
     companion object {
         const val MAX_BODY_BYTES = 262_144
         const val STATIC_TIMEOUT_MS = 15_000L
+
+        /** Бюджет чтения тела после получения заголовков (защита от «капельных» ответов). */
+        const val BODY_TIMEOUT_MS = 15_000L
         private const val MIN_MARKDOWN_CHARS = 200
         fun normalizeUrl(raw: String): String? {
             val trimmed = raw.trim()

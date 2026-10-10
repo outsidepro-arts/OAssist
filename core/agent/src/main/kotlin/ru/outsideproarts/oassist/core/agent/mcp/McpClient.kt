@@ -73,7 +73,13 @@ class McpClient(
         )
         postRpc("initialize", params)
         // `notifications/initialized` — без ответа; 202/пустое тело — норма.
-        runCatching { postRpc("notifications/initialized", buildJsonObject {}) }
+        // Отмену не глотаем (иначе «Стоп» во время handshake залипает).
+        try {
+            postRpc("notifications/initialized", buildJsonObject {})
+        } catch (e: kotlinx.coroutines.CancellationException) {
+            throw e
+        } catch (_: Throwable) {
+        }
     }
 
     private suspend fun <T> call(
@@ -89,8 +95,28 @@ class McpClient(
     }
 
     private suspend fun postRpc(method: String, params: JsonElement): McpResponseDto {
+        try {
+            return doPost(method, params)
+        } catch (e: io.ktor.client.plugins.ResponseException) {
+            // Сервер забыл сессию (рестарт/эвикция): сбрасываем id, проходим
+            // handshake заново и повторяем вызов один раз. Чужие 404
+            // (неверный URL) — мимо: sessionId там null, пробрасываем как есть.
+            if (e.response.status != io.ktor.http.HttpStatusCode.NotFound || sessionId == null) throw e
+            sessionId = null
+            ensureSession()
+            return doPost(method, params)
+        }
+    }
+
+    private suspend fun doPost(method: String, params: JsonElement): McpResponseDto {
         val request = McpRequestDto(id = nextId(), method = method, params = params)
         val httpResponse = http.post(url) {
+            // tools/call может иметь сайд-эффект (отправить/создать): авто-повтор
+            // задвоит действие, если запрос дошёл, а ответ потерялся. initialize
+            // и tools/list идемпотентны — им повтор HttpRequestRetry полезен.
+            if (method == "tools/call") {
+                attributes.put(ru.outsideproarts.oassist.core.net.NoAutoRetry, Unit)
+            }
             headers {
                 append(HttpHeaders.ContentType, ContentType.Application.Json.toString())
                 append(HttpHeaders.Accept, "$ACCEPT_JSON, $ACCEPT_SSE")

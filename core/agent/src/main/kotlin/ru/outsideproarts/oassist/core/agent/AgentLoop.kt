@@ -14,6 +14,7 @@ import ru.outsideproarts.oassist.core.provider.ChatRole
 import ru.outsideproarts.oassist.core.provider.ModelClient
 import ru.outsideproarts.oassist.core.provider.openai.ToolFunctionSchemaDto
 import ru.outsideproarts.oassist.core.provider.openai.ToolSchemaDto
+import ru.outsideproarts.oassist.core.provider.retryEarlyFailure
 
 /**
  * Агентный цикл: отправляет сообщения в модель, выполняет вызовы инструментов,
@@ -84,6 +85,10 @@ class AgentLoop(
         } ?: emptyList()
 
         var rounds = 0
+        // Обрыв стрима модели виден только здесь (внутренний Finish не форвардится).
+        // Пишется перезаписью, а не OR: обрыв промежуточного тула-раунда не должен
+        // помечать усечённым целый финальный ответ.
+        var streamAbrupt = false
         while (maxToolRounds <= 0 || rounds < maxToolRounds) {
             rounds++
             val toolCalls = mutableListOf<ChatChunk.ToolCall>()
@@ -93,11 +98,18 @@ class AgentLoop(
                 modelId = modelId,
                 messages = enforceImageBudget(messages),
                 tools = tools,
-            ).collect { chunk ->
+            ).retryEarlyFailure(resubscribe = {
+                // Та же история/инструменты раунда: модель ещё ничего не прислала.
+                modelClient.chatCompletionStream(
+                    modelId = modelId,
+                    messages = enforceImageBudget(messages),
+                    tools = tools,
+                )
+            }).collect { chunk ->
                 when (chunk) {
                     is ChatChunk.Content -> contentSb.append(chunk.delta)
                     is ChatChunk.ToolCall -> toolCalls.add(chunk)
-                    is ChatChunk.Finish -> {}
+                    is ChatChunk.Finish -> streamAbrupt = chunk.abrupt
                     // Модель подтверждений/результатов не присылает: ветки для exhaustiveness.
                     is ChatChunk.ApprovalNeeded -> {}
                     is ChatChunk.ToolResult -> {}
@@ -106,7 +118,7 @@ class AgentLoop(
 
             if (toolCalls.isEmpty()) {
                 if (contentSb.isNotEmpty()) emit(ChatChunk.Content(contentSb.toString()))
-                emit(ChatChunk.Finish(reason = "stop"))
+                emit(ChatChunk.Finish(reason = "stop", abrupt = streamAbrupt))
                 val turn = messages.drop(turnStart).toList()
                 onTurnMessages?.invoke(
                     if (contentSb.isNotEmpty()) {

@@ -81,14 +81,3 @@ data class GeminiCandidateDto(
     val content: GeminiContentDto? = null,
     @SerialName("finishReason") val finishReason: String? = null,
 )
-
-@Serializable
-data class GeminiErrorDto(
-    val error: GeminiErrorBodyDto? = null,
-)
-
-@Serializable
-data class GeminiErrorBodyDto(
-    val message: String? = null,
-    val status: String? = null,
-)

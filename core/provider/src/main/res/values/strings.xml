@@ -11,4 +11,5 @@
     <string name="provider_error_name_required">Укажите название</string>
     <string name="provider_error_base_url_required">Укажите Base URL</string>
     <string name="provider_error_base_url_invalid">Некорректный Base URL</string>
+    <string name="provider_stream_truncated">Ответ оборвался — мог быть усечён</string>
 </resources>

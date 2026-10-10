@@ -67,6 +67,7 @@ import ru.outsideproarts.oassist.core.provider.ChatMessage
 import ru.outsideproarts.oassist.core.provider.AudioPart
 import ru.outsideproarts.oassist.core.provider.ChatRole
 import ru.outsideproarts.oassist.core.provider.collectSafe
+import ru.outsideproarts.oassist.core.provider.isEarlyRetryable
 import ru.outsideproarts.oassist.core.speech.CaptureError
 import ru.outsideproarts.oassist.core.speech.CaptureState
 import ru.outsideproarts.oassist.core.speech.Narrator
@@ -100,6 +101,17 @@ data class ChatItem(
 /** Холд Send короче — случайный тап: отмена с хинтом, не отправка. */
 private const val HOLD_MIN_MS = 500L
 
+/** Отложенный ход: сеть пропала до/в начале стрима, повторим фронтом online. */
+private data class PendingChatTurn(val text: String, val audio: AudioPart?)
+
+/** Проекция пузыря ленты в историю модели: только основной ответ ассистента —
+ * мысль и тулы уже связаны tool-протоколом и не должны дублироваться текстом. */
+private fun ChatItem.toHistoryMessage(): ChatMessage = ChatMessage(
+    role = role,
+    content = answer,
+    audio = audio,
+)
+
 @Composable
 fun ChatScreen(
     sendMessage: suspend (String, List<ChatMessage>, AudioPart?) -> AgentSession,
@@ -124,6 +136,8 @@ fun ChatScreen(
     var sttPreview by remember { mutableStateOf("") }
     var isStreaming by remember { mutableStateOf(false) }
     var streamJob by remember { mutableStateOf<Job?>(null) }
+    /** Ход, отложенный до появления сети (пре-чек или ранний обрыв без сети). */
+    var pendingRetry by remember { mutableStateOf<PendingChatTurn?>(null) }
     var pendingApproval by remember { mutableStateOf<Pair<ApprovalRequest, AgentLoop>?>(null) }
     val scope = rememberCoroutineScope()
     val listState = rememberLazyListState()
@@ -131,6 +145,10 @@ fun ChatScreen(
     LaunchedEffect(timeline) {
         timeline?.collect { timelineEntries.add(it) }
     }
+
+    val netHandle = remember { ru.outsideproarts.oassist.core.net.NetworkHandle.get() }
+    val offlineRetryText = stringResource(ru.outsideproarts.oassist.core.ui.R.string.net_offline_retry)
+    val repeatingText = stringResource(ru.outsideproarts.oassist.core.ui.R.string.net_repeating)
 
     // Конец диалога (уход с экрана) — забыть «разрешено на текущую сессию».
     androidx.compose.runtime.DisposableEffect(Unit) {
@@ -167,24 +185,23 @@ fun ChatScreen(
     LaunchedEffect(voice) {
         voice?.captureState()?.collect { capturing = it is CaptureState.Listening }
     }
-    fun send(text: String, audio: AudioPart? = null) {
-        val userMsg = text.trim()
-        if ((userMsg.isEmpty() && audio == null) || isStreaming) return
-        messages.add(ChatItem(ChatRole.USER, answer = userMsg, audio = audio))
-        isStreaming = true
-        // Barge-in: новый вопрос прерывает озвучку предыдущего ответа.
-        stopSpeech?.invoke()
-        val history = messages.dropLast(1).map {
-            ChatMessage(
-                it.role,
-                // В историю — только основной ответ ассистента; мысль и тулы
-                // уже связаны tool-протоколом и не должны дублироваться текстом.
-                if (it.role == ChatRole.ASSISTANT) it.answer else it.answer,
-                audio = it.audio,
-            )
+    // Запуск/повтор стрима. Висящий пузырь ожидания сети (пустой, streaming)
+    // переиспользуется — иначе после повтора в ленте было бы два пузыря ответа.
+    // Текстовый порядок: launchTurn раньше send (локальные fun вызываются только ниже).
+    fun launchTurn(userMsg: String, audio: AudioPart?) {
+        val history: List<ChatMessage>
+        val assistantIndex: Int
+        val waiting = messages.lastOrNull()
+        if (waiting != null && waiting.role == ChatRole.ASSISTANT && waiting.isStreaming &&
+            waiting.thought.isEmpty() && waiting.answer.isEmpty() && waiting.tools.isEmpty()
+        ) {
+            assistantIndex = messages.size - 1
+            history = messages.dropLast(1).map { it.toHistoryMessage() }
+        } else {
+            history = messages.map { it.toHistoryMessage() }
+            assistantIndex = messages.size
+            messages.add(ChatItem(ChatRole.ASSISTANT, isStreaming = true))
         }
-        val assistantIndex = messages.size
-        messages.add(ChatItem(ChatRole.ASSISTANT, isStreaming = true))
         streamJob = scope.launch {
             val thoughtSb = StringBuilder()
             val answerSb = StringBuilder()
@@ -211,6 +228,7 @@ fun ChatScreen(
             }
             var error: ru.outsideproarts.oassist.core.provider.ProviderError? = null
             var cancelled = false
+            var sawAbrupt = false
             try {
                 val session = sendMessage(userMsg, history, audio)
                 error = session.chunks.collectSafe { chunk ->
@@ -250,12 +268,20 @@ fun ChatScreen(
                             thoughtSpeaker.onFinish(thoughtSb.toString())
                             answerSpeaker.onFinish(answerSb.toString())
                             publish(false)
+                            // Поток закрылся без терминатора: пометку покажем после
+                            // сбора (`error` внутри своей лямбды-инициализатора
+                            // ещё не в scope — поэтому отдельный флаг).
+                            if (chunk.abrupt) sawAbrupt = true
                         }
                     }
                 }
             } catch (e: kotlinx.coroutines.CancellationException) {
                 cancelled = true
                 throw e
+            } catch (e: Throwable) {
+                // onAskAgent бросает ProviderError.NotConfigured до создания сессии
+                // (нет провайдера/модели): без перехвата — падение процесса.
+                error = ru.outsideproarts.oassist.core.provider.ProviderError.from(e)
             } finally {
                 // finally, а не строки после collect: при отмене
                 // CancellationException пропускает всё ниже collect.
@@ -271,8 +297,84 @@ fun ChatScreen(
                 }
             }
             if (error != null) {
-                Toast.makeText(context, error.userMessage(context), Toast.LENGTH_LONG).show()
+                val net = ru.outsideproarts.oassist.core.net.NetworkHandle.get()
+                if (net != null && !net.isOnline.value && error.isEarlyRetryable() &&
+                    thoughtSb.isEmpty() && answerSb.isEmpty() && toolEvents.isEmpty()
+                ) {
+                    // Упали до первого чанка без сети (пустой пузырь уже убран в finally).
+                    // Возвращаем состояние ожидания — как в пре-чеке send(): ждущий
+                    // пузырь + isStreaming=true. Иначе эффект фронта не отличит
+                    // ожидание от готовности и не повторит ход.
+                    pendingRetry = PendingChatTurn(userMsg, audio)
+                    messages.add(ChatItem(ChatRole.ASSISTANT, isStreaming = true))
+                    isStreaming = true
+                    Toast.makeText(context, offlineRetryText, Toast.LENGTH_LONG).show()
+                } else {
+                    Toast.makeText(context, error.userMessage(context), Toast.LENGTH_LONG).show()
+                }
+            } else if (sawAbrupt) {
+                // Поток закрылся без терминатора: ответ мог быть усечён.
+                Toast.makeText(
+                    context,
+                    ru.outsideproarts.oassist.core.provider.R.string.provider_stream_truncated,
+                    Toast.LENGTH_LONG,
+                ).show()
             }
+        }
+    }
+    fun send(text: String, audio: AudioPart? = null) {
+        val userMsg = text.trim()
+        if ((userMsg.isEmpty() && audio == null) || isStreaming) return
+        messages.add(ChatItem(ChatRole.USER, answer = userMsg, audio = audio))
+        isStreaming = true
+        // Barge-in: новый вопрос прерывает озвучку предыдущего ответа.
+        stopSpeech?.invoke()
+        messages.add(ChatItem(ChatRole.ASSISTANT, isStreaming = true))
+        val net = ru.outsideproarts.oassist.core.net.NetworkHandle.get()
+        if (net != null && !net.isOnline.value) {
+            // Оффлайн: пузыри уже в ленте, стрим стартует фронтом сети (эффект ниже).
+            pendingRetry = PendingChatTurn(userMsg, audio)
+            Toast.makeText(context, offlineRetryText, Toast.LENGTH_LONG).show()
+            return
+        }
+        pendingRetry = null
+        launchTurn(userMsg, audio)
+    }
+    // Стоп хода: отмена стрима или снятие ожидания сети. Без запущенной job
+    // висящие пузыри ожидания убираются и флаг сбрасывается здесь
+    // (finally(back) несуществующего стрима не будет).
+    fun cancelTurn() {
+        pendingRetry = null
+        val hadJob = streamJob != null
+        streamJob?.cancel()
+        stopSpeech?.invoke()
+        if (!hadJob && isStreaming) {
+            messages.lastOrNull()
+                ?.takeIf {
+                    it.role == ChatRole.ASSISTANT && it.isStreaming &&
+                        it.thought.isEmpty() && it.answer.isEmpty() && it.tools.isEmpty()
+                }?.let { messages.removeAt(messages.size - 1) }
+            isStreaming = false
+        }
+    }
+    // Авто-повтор отложенного хода только по фронту offline→online:
+    // повтор «по уровню» дал бы петлю при флэппинге сети.
+    // Позиция — после launchTurn/send/cancelTurn: эффект их вызывает,
+    // локальные fun видны только ниже объявления.
+    LaunchedEffect(netHandle) {
+        var wasOnline = netHandle?.isOnline?.value ?: true
+        netHandle?.isOnline?.collect { online ->
+            if (online && !wasOnline) {
+                val retry = pendingRetry
+                // Стэш снимаем только при фактическом потреблении: потерянный
+                // ход не должен молча исчезнуть при гонке с активным стримом.
+                if (retry != null && streamJob == null && isStreaming) {
+                    pendingRetry = null
+                    Toast.makeText(context, repeatingText, Toast.LENGTH_SHORT).show()
+                    launchTurn(retry.text, retry.audio)
+                }
+            }
+            wasOnline = online
         }
     }
     // Слушатель системного STT: финал — сразу в send(), в поле не пишем.
@@ -331,10 +433,10 @@ fun ChatScreen(
     // Тап микрофона — toggle STT (доступная альтернатива удержанию).
     fun toggleSttMic() {
         val handle = voice ?: return
-        // Barge-in: прерываем и стрим, и озвучку, и активный захват.
+        // Barge-in: прерываем и стрим, и озвучку, и активный захват
+        // (и ожидание сети, если ход отложен).
         if (isStreaming) {
-            streamJob?.cancel()
-            stopSpeech?.invoke()
+            cancelTurn()
         }
         when (val current = handle.captureState().value) {
             is CaptureState.Listening -> {
@@ -532,8 +634,8 @@ fun ChatScreen(
                     if (isStreaming) {
                         // Стоп: отмена коллекции снимает стрим, паузу подтверждения и HTTP-запрос.
                         // Озвучку тоже гасим (barge-in): недоговорённое не должно дочитываться.
-                        streamJob?.cancel()
-                        stopSpeech?.invoke()
+                        // Без job — снимает ожидание сети (см. cancelTurn).
+                        cancelTurn()
                         return@IconButton
                     }
                     // Эхо клика после холда — игнор.

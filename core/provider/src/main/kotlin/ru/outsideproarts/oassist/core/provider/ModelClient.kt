@@ -104,7 +104,12 @@ sealed interface ChatChunk {
     ) : ChatChunk
     /** Агент просит подтвердить выполнение инструмента; стрим приостановлен до решения. */
     data class ApprovalNeeded(val request: ApprovalRequest) : ChatChunk
-    data class Finish(val reason: String?) : ChatChunk
+    /**
+     * Конец стрима. [abrupt] — соединение закрылось без штатного терминатора
+     * (`[DONE]`/`message_stop`/`finish_reason`): ответ мог быть усечён,
+     * UI показывает пометку вместо «успешного» завершения.
+     */
+    data class Finish(val reason: String?, val abrupt: Boolean = false) : ChatChunk
 }
 
 /** Интерфейс клиента модели. */

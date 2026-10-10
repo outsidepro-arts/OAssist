@@ -13,6 +13,9 @@
     <string name="state_checked">Checked</string>
     <string name="state_unchecked">Not checked</string>
 
+    <string name="net_offline_retry">No network — will retry when connected</string>
+    <string name="net_repeating">Network is back — repeating the request</string>
+
     <string name="group_communication_write">Communication — write</string>
     <string name="group_phone_data_read">Phone data — read</string>
     <string name="group_phone_data_write">Phone data — write</string>

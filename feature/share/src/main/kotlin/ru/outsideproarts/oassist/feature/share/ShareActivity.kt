@@ -52,6 +52,7 @@ import ru.outsideproarts.oassist.core.provider.ChatMessage
 import ru.outsideproarts.oassist.core.provider.ChatRole
 import ru.outsideproarts.oassist.core.provider.ProviderError
 import ru.outsideproarts.oassist.core.provider.collectSafe
+import ru.outsideproarts.oassist.core.provider.isEarlyRetryable
 import ru.outsideproarts.oassist.core.ui.OAssistDimens
 import ru.outsideproarts.oassist.core.ui.components.OAssistPanel
 import ru.outsideproarts.oassist.core.ui.theme.OAssistTheme
@@ -180,6 +181,145 @@ private fun ShareScreen(
     var isStreaming by remember { mutableStateOf(false) }
     val scope = rememberCoroutineScope()
 
+    /** Вопрос, отложенный до появления сети (пре-чек или ранний обрыв без сети). */
+    var pendingShareRetry by remember { mutableStateOf<String?>(null) }
+    val offlineRetryText = stringResource(ru.outsideproarts.oassist.core.ui.R.string.net_offline_retry)
+    val repeatingText = stringResource(ru.outsideproarts.oassist.core.ui.R.string.net_repeating)
+
+    // Текстовый порядок: ask раньше onClick и эффекта (локальные fun вызываются только ниже).
+    fun ask(q: String) {
+        val query = q.trim()
+        if (query.isBlank() || isStreaming) return
+        isStreaming = true
+        // Barge-in: новый вопрос прерывает озвучку предыдущего ответа.
+        SpeechHandle.get()?.stop()
+        val thoughtSb = StringBuilder()
+        val sb = StringBuilder()
+        thought = ""
+        response = ""
+        shareTools.clear()
+        scope.launch {
+            val tts = runCatching {
+                ru.outsideproarts.oassist.core.agent.AgentFactory.get()
+                    .modeConfig(ru.outsideproarts.oassist.core.model.AssistMode.SHARE)
+                    .effectiveTts()
+            }.getOrElse { ru.outsideproarts.oassist.core.model.TtsConfig.DEFAULT }
+            val speech = SpeechHandle.get()
+            // Озвучка режима SHARE применяется перед каждым стримом.
+            speech?.applyTts(tts)
+            speech?.setNarrativeEnabled(tts.narrative)
+            val thoughtSpeaker = StreamSpeaker(
+                speak = { speech?.speak(it) },
+                speakToolCalls = tts.speakToolCalls,
+            )
+            val answerSpeaker = StreamSpeaker(
+                speak = { speech?.speak(it) },
+            )
+            val session = try {
+                onAskAgent(query)
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                isStreaming = false
+                throw e
+            } catch (e: Throwable) {
+                // Нет провайдера/модели — честный тост вместо падения.
+                isStreaming = false
+                val failure = ProviderError.from(e)
+                Toast.makeText(context, failure.userMessage(context), Toast.LENGTH_LONG).show()
+                return@launch
+            }
+            val error = try {
+                session.chunks.collectSafe { chunk ->
+                    when (chunk) {
+                        is ChatChunk.Content -> {
+                            if (chunk.isToolComment) {
+                                thoughtSb.append(chunk.delta)
+                                thought = thoughtSb.toString()
+                                thoughtSpeaker.onText(thoughtSb.toString(), true)
+                            } else {
+                                sb.append(chunk.delta)
+                                response = sb.toString()
+                                answerSpeaker.onText(sb.toString(), false)
+                            }
+                        }
+                        is ChatChunk.ToolCall -> {
+                            shareTools.add(
+                                ru.outsideproarts.oassist.core.agent.AgentToolEvent(
+                                    name = chunk.name,
+                                ),
+                            )
+                        }
+                        is ChatChunk.ToolResult -> {
+                            val pending = shareTools.indexOfLast {
+                                it.name == chunk.name && it.output == null
+                            }
+                            val event =
+                                ru.outsideproarts.oassist.core.agent.AgentToolEvent(
+                                    name = chunk.name,
+                                    output = chunk.output,
+                                    isError = chunk.isError,
+                                )
+                            if (pending >= 0) shareTools[pending] = event
+                            else shareTools.add(event)
+                        }
+                        // В Share нет диалога: опасные действия отклоняем сразу.
+                        is ChatChunk.ApprovalNeeded -> {
+                            session.agent.resolveApproval(
+                                chunk.request.callId,
+                                ru.outsideproarts.oassist.core.model.ApprovalDecision.DENY,
+                            )
+                        }
+                        is ChatChunk.Finish -> {
+                            thoughtSpeaker.onFinish(thoughtSb.toString())
+                            answerSpeaker.onFinish(sb.toString())
+                            if (chunk.abrupt) {
+                                // Поток закрылся без терминатора: ответ мог быть усечён.
+                                Toast.makeText(
+                                    context,
+                                    ru.outsideproarts.oassist.core.provider.R.string.provider_stream_truncated,
+                                    Toast.LENGTH_LONG,
+                                ).show()
+                            }
+                        }
+                    }
+                }
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                throw e
+            } finally {
+                isStreaming = false
+            }
+            if (error != null) {
+                val net = ru.outsideproarts.oassist.core.net.NetworkHandle.get()
+                if (net != null && !net.isOnline.value && error.isEarlyRetryable() &&
+                    thoughtSb.isEmpty() && sb.isEmpty() && shareTools.isEmpty()
+                ) {
+                    // Упали до первого чанка без сети: ждём фронт online.
+                    pendingShareRetry = query
+                    Toast.makeText(context, offlineRetryText, Toast.LENGTH_LONG).show()
+                } else {
+                    Toast.makeText(context, error.userMessage(context), Toast.LENGTH_LONG).show()
+                }
+            }
+        }
+    }
+
+    val netHandle = remember { ru.outsideproarts.oassist.core.net.NetworkHandle.get() }
+    // Авто-повтор отложенного вопроса только по фронту offline→online.
+    LaunchedEffect(netHandle) {
+        var wasOnline = netHandle?.isOnline?.value ?: true
+        netHandle?.isOnline?.collect { online ->
+            if (online && !wasOnline) {
+                val retry = pendingShareRetry
+                // Стэш снимаем только при фактическом потреблении.
+                if (retry != null && !isStreaming) {
+                    pendingShareRetry = null
+                    Toast.makeText(context, repeatingText, Toast.LENGTH_SHORT).show()
+                    ask(retry)
+                }
+            }
+            wasOnline = online
+        }
+    }
+
     LaunchedEffect(response) {
         // scroll handled by parent
     }
@@ -261,83 +401,14 @@ private fun ShareScreen(
                 IconButton(
                     onClick = {
                         if (question.isNotBlank() && !isStreaming) {
-                            isStreaming = true
-                            // Barge-in: новый вопрос прерывает озвучку предыдущего ответа.
-                            SpeechHandle.get()?.stop()
-                            val thoughtSb = StringBuilder()
-                            val sb = StringBuilder()
-                            thought = ""
-                            response = ""
-                            shareTools.clear()
-                            scope.launch {
-                                val tts = runCatching {
-                                    ru.outsideproarts.oassist.core.agent.AgentFactory.get()
-                                        .modeConfig(ru.outsideproarts.oassist.core.model.AssistMode.SHARE)
-                                        .effectiveTts()
-                                }.getOrElse { ru.outsideproarts.oassist.core.model.TtsConfig.DEFAULT }
-                                val speech = SpeechHandle.get()
-                                // Озвучка режима SHARE применяется перед каждым стримом.
-                                speech?.applyTts(tts)
-                                speech?.setNarrativeEnabled(tts.narrative)
-                                val thoughtSpeaker = StreamSpeaker(
-                                    speak = { speech?.speak(it) },
-                                    speakToolCalls = tts.speakToolCalls,
-                                )
-                                val answerSpeaker = StreamSpeaker(
-                                    speak = { speech?.speak(it) },
-                                )
-                                val session = onAskAgent(question.trim())
-                                val error = session.chunks.collectSafe { chunk ->
-                                    when (chunk) {
-                                        is ChatChunk.Content -> {
-                                            if (chunk.isToolComment) {
-                                                thoughtSb.append(chunk.delta)
-                                                thought = thoughtSb.toString()
-                                                thoughtSpeaker.onText(thoughtSb.toString(), true)
-                                            } else {
-                                                sb.append(chunk.delta)
-                                                response = sb.toString()
-                                                answerSpeaker.onText(sb.toString(), false)
-                                            }
-                                        }
-                                        is ChatChunk.ToolCall -> {
-                                            shareTools.add(
-                                                ru.outsideproarts.oassist.core.agent.AgentToolEvent(
-                                                    name = chunk.name,
-                                                ),
-                                            )
-                                        }
-                                        is ChatChunk.ToolResult -> {
-                                            val pending = shareTools.indexOfLast {
-                                                it.name == chunk.name && it.output == null
-                                            }
-                                            val event =
-                                                ru.outsideproarts.oassist.core.agent.AgentToolEvent(
-                                                    name = chunk.name,
-                                                    output = chunk.output,
-                                                    isError = chunk.isError,
-                                                )
-                                            if (pending >= 0) shareTools[pending] = event
-                                            else shareTools.add(event)
-                                        }
-                                        // В Share нет диалога: опасные действия отклоняем сразу.
-                                        is ChatChunk.ApprovalNeeded -> {
-                                            session.agent.resolveApproval(
-                                                chunk.request.callId,
-                                                ru.outsideproarts.oassist.core.model.ApprovalDecision.DENY,
-                                            )
-                                        }
-                                        is ChatChunk.Finish -> {
-                                            thoughtSpeaker.onFinish(thoughtSb.toString())
-                                            answerSpeaker.onFinish(sb.toString())
-                                            isStreaming = false
-                                        }
-                                    }
-                                }
-                                isStreaming = false
-                                if (error != null) {
-                                    Toast.makeText(context, error.userMessage(context), Toast.LENGTH_LONG).show()
-                                }
+                            val net = ru.outsideproarts.oassist.core.net.NetworkHandle.get()
+                            if (net != null && !net.isOnline.value) {
+                                // Оффлайн: вопрос повторится фронтом сети (эффект выше).
+                                pendingShareRetry = question.trim()
+                                Toast.makeText(context, offlineRetryText, Toast.LENGTH_LONG).show()
+                            } else {
+                                pendingShareRetry = null
+                                ask(question.trim())
                             }
                         }
                     },

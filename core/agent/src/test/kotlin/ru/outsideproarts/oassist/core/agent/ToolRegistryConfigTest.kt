@@ -54,4 +54,23 @@ class ToolRegistryConfigTest {
         // Неизвестный — fail-closed группа UNKNOWN.
         assertEquals(ToolGroups.UNKNOWN, registry.groupKey("no_such_tool"))
     }
+
+    @Test
+    fun execute_rethrowsCancellationInsteadOfErrorResult() = runTest {
+        // «Стоп» во время вызова тула не должен превращаться
+        // в фейковый ToolResult(false) в ленте/таймлайне.
+        val cancelling = object : Tool {
+            override val schema = ToolSchema(
+                name = "cancelling",
+                description = "Тестовый инструмент",
+                parameters = buildJsonObject { put("type", "object") },
+            )
+            override suspend fun execute(arguments: JsonObject): ToolResult {
+                throw kotlinx.coroutines.CancellationException("stop")
+            }
+        }
+        val registry = ToolRegistry(tools = listOf(cancelling))
+        val e = runCatching { registry.execute("cancelling", JsonObject(emptyMap())) }.exceptionOrNull()
+        assertTrue(e is kotlinx.coroutines.CancellationException)
+    }
 }

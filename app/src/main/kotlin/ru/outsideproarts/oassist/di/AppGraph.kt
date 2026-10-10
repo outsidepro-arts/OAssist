@@ -59,6 +59,9 @@ class AppGraph private constructor(context: Context) {
 
     val httpClient by lazy { HttpClientFactory.create() }
 
+    /** Живое состояние сети для пре-чеков и авто-повторов (см. NetworkHandle). */
+    private val networkMonitor = ru.outsideproarts.oassist.core.net.NetworkMonitor(appContext)
+
     /** Экран блокировки: модель и диалог получают пометку, пользователю — «разблокируйте». */
     val keyguardLockState: ru.outsideproarts.oassist.permission.KeyguardLockState by lazy {
         ru.outsideproarts.oassist.permission.KeyguardLockState(appContext)
@@ -322,6 +325,13 @@ class AppGraph private constructor(context: Context) {
 
     init {
         ru.outsideproarts.oassist.core.agent.AgentFactory.register(agentFactory)
+        networkMonitor.start()
+        ru.outsideproarts.oassist.core.net.NetworkHandle.register(
+            object : ru.outsideproarts.oassist.core.net.NetworkHandle {
+                override val isOnline: kotlinx.coroutines.flow.StateFlow<Boolean> =
+                    networkMonitor.isOnline
+            },
+        )
         ru.outsideproarts.oassist.core.speech.SpeechHandle.register(object : ru.outsideproarts.oassist.core.speech.SpeechHandle {
             override fun speak(sentence: String) = speechOutput.speak(sentence)
             override fun stop() = speechOutput.stop()

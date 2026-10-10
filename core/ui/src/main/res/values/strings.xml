@@ -13,6 +13,9 @@
     <string name="state_checked">Отмечено</string>
     <string name="state_unchecked">Не отмечено</string>
 
+    <string name="net_offline_retry">Нет сети — повторю при подключении</string>
+    <string name="net_repeating">Сеть появилась — повторяю запрос</string>
+
     <string name="group_communication_write">Связь — запись</string>
     <string name="group_phone_data_read">Данные телефона — чтение</string>
     <string name="group_phone_data_write">Данные телефона — запись</string>

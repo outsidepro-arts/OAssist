@@ -27,6 +27,7 @@ import androidx.savedstate.SavedStateRegistry
 import androidx.savedstate.SavedStateRegistryController
 import androidx.savedstate.SavedStateRegistryOwner
 import androidx.savedstate.setViewTreeSavedStateRegistryOwner
+import kotlinx.coroutines.CoroutineExceptionHandler
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -51,6 +52,7 @@ import ru.outsideproarts.oassist.core.provider.ChatMessage
 import ru.outsideproarts.oassist.core.provider.ChatRole
 import ru.outsideproarts.oassist.core.provider.ProviderError
 import ru.outsideproarts.oassist.core.provider.collectSafe
+import ru.outsideproarts.oassist.core.provider.isEarlyRetryable
 import ru.outsideproarts.oassist.core.speech.CaptureError
 import ru.outsideproarts.oassist.core.speech.SentenceSplitter
 import ru.outsideproarts.oassist.core.speech.SpeechHandle
@@ -68,7 +70,17 @@ import ru.outsideproarts.oassist.core.ui.theme.OAssistTheme
  */
 class AssistantOverlayService : LifecycleService(), SavedStateRegistryOwner {
 
-    private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
+    private val serviceScope = CoroutineScope(
+        SupervisorJob() + Dispatchers.Main + CoroutineExceptionHandler { _, e ->
+            // Неожиданное падение хода вне collectSafe: честный хинт вместо тишины
+            // (finally хода уже сбросил isStreaming/фокус).
+            runCatching {
+                hintText = runCatching {
+                    ProviderError.from(e).userMessage(this)
+                }.getOrNull() ?: getString(R.string.assistant_no_provider)
+            }
+        },
+    )
     private val savedStateRegistryController = SavedStateRegistryController.create(this)
     override val savedStateRegistry: SavedStateRegistry
         get() = savedStateRegistryController.savedStateRegistry
@@ -101,6 +113,8 @@ class AssistantOverlayService : LifecycleService(), SavedStateRegistryOwner {
     private var showOverlay: Boolean = true
     private var sessionActive = false
     private var pendingBye = false
+    /** Ход, отложенный до появления сети (пре-чек или ранний обрыв без сети). */
+    private var pendingRetryText: String? = null
     private var lastNotifAt = 0L
 
     private val voice get() = VoiceHandle.get()
@@ -148,6 +162,25 @@ class AssistantOverlayService : LifecycleService(), SavedStateRegistryOwner {
         super.onCreate()
         ensureChannel()
         ru.outsideproarts.oassist.core.agent.OverlayControl.register(overlayControlImpl)
+        // Авто-повтор отложенного хода только по фронту offline→online.
+        serviceScope.launch {
+            val net = ru.outsideproarts.oassist.core.net.NetworkHandle.get()
+            var wasOnline = net?.isOnline?.value ?: true
+            net?.isOnline?.collect { online ->
+                if (online && !wasOnline) {
+                    val retry = pendingRetryText
+                    // Стэш снимаем только при фактическом потреблении.
+                    if (retry != null && !isStreaming) {
+                        pendingRetryText = null
+                        hintText = getString(
+                            ru.outsideproarts.oassist.core.ui.R.string.net_repeating,
+                        )
+                        startTurn(retry)
+                    }
+                }
+                wasOnline = online
+            }
+        }
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
@@ -420,6 +453,15 @@ class AssistantOverlayService : LifecycleService(), SavedStateRegistryOwner {
 
     private fun startTurn(text: String) {
         val session = AssistSessionStore.getOrCreate()
+        val net = ru.outsideproarts.oassist.core.net.NetworkHandle.get()
+        if (net != null && !net.isOnline.value) {
+            // Оффлайн: состояние не трогаем, ход повторится фронтом сети.
+            pendingRetryText = text
+            hintText = getString(ru.outsideproarts.oassist.core.ui.R.string.net_offline_retry)
+            refreshSessionNotification(force = true)
+            return
+        }
+        pendingRetryText = null
         isStreaming = true
         pendingBye = false
         pendingApproval = null
@@ -485,6 +527,9 @@ class AssistantOverlayService : LifecycleService(), SavedStateRegistryOwner {
                     ),
                     agent = agent,
                 )
+                // Флаг обрыва стрима: `error` внутри своей лямбды-инициализатора
+                // ещё не в scope (там `error` — stdlib-функция), читаем флаг после сбора.
+                var sawAbrupt = false
                 val error = agentSession.chunks.collectSafe { chunk ->
                     when (chunk) {
                         is ChatChunk.Content -> {
@@ -546,12 +591,33 @@ class AssistantOverlayService : LifecycleService(), SavedStateRegistryOwner {
                         is ChatChunk.Finish -> {
                             thoughtSpeaker.onFinish(thoughtSb.toString())
                             answerSpeaker.onFinish(answerSb.toString())
+                            // Поток закрылся без терминатора: пометку покажем после
+                            // сбора (`error` внутри своей лямбды-инициализатора
+                            // ещё не в scope — поэтому отдельный флаг).
+                            if (chunk.abrupt) sawAbrupt = true
                             refreshSessionNotification(force = true)
                         }
                     }
                 }
                 if (error != null) {
-                    hintText = error.userMessage(this@AssistantOverlayService)
+                    val net = ru.outsideproarts.oassist.core.net.NetworkHandle.get()
+                    if (net != null && !net.isOnline.value && error.isEarlyRetryable() &&
+                        answerSb.isEmpty() && thoughtSb.isEmpty() && toolEvents.isEmpty()
+                    ) {
+                        // Упали до первого чанка без сети: ждём фронт online,
+                        // тост ошибки не показываем.
+                        pendingRetryText = text
+                        hintText = getString(ru.outsideproarts.oassist.core.ui.R.string.net_offline_retry)
+                    } else {
+                        hintText = error.userMessage(this@AssistantOverlayService)
+                    }
+                } else if (sawAbrupt) {
+                    // Поток закрылся без терминатора: ответ мог быть усечён.
+                    android.widget.Toast.makeText(
+                        this@AssistantOverlayService,
+                        ru.outsideproarts.oassist.core.provider.R.string.provider_stream_truncated,
+                        android.widget.Toast.LENGTH_LONG,
+                    ).show()
                 }
                 speech?.speaking?.first { !it }
                 refreshSessionNotification(force = true)
