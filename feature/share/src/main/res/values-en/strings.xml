@@ -12,6 +12,11 @@
     <string name="share_send">Send</string>
     <string name="share_response">Agent response</string>
     <string name="share_speak_answer">Speak answer</string>
+    <string name="share_work_title">Progress</string>
+    <string name="share_work_expanded">Expanded</string>
+    <string name="share_work_collapsed">Collapsed</string>
+    <string name="share_action_expand">Expand</string>
+    <string name="share_action_collapse">Collapse</string>
     <string name="share_prompt_text">Text: %1$s\n</string>
     <string name="share_prompt_image">Image: %1$s\n</string>
     <string name="share_prompt_file">File: %1$s\n</string>

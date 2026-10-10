@@ -20,6 +20,8 @@ import ru.outsideproarts.oassist.core.data.secret.SecretStore
 import ru.outsideproarts.oassist.core.model.ModelCapability
 import ru.outsideproarts.oassist.core.model.ModelInfo
 import ru.outsideproarts.oassist.core.model.ProviderProfile
+import ru.outsideproarts.oassist.core.model.ProviderUsage
+import ru.outsideproarts.oassist.core.model.mergeUsage
 import ru.outsideproarts.oassist.core.provider.ChatChunk
 import ru.outsideproarts.oassist.core.provider.ChatMessage
 import ru.outsideproarts.oassist.core.provider.ModelClient
@@ -111,15 +113,25 @@ class GeminiClient private constructor(
         ) {
             var nextId = 0
             var finish: String? = null
+            var usage: ProviderUsage? = null
             incoming.collect { event ->
                 val data = event.data ?: return@collect
-                // Пустой candidates — не чанк: ошибка API (`{"error":...}`
-                // декодируется и как GeminiStreamChunkDto — все поля с дефолтами).
-                val chunk = runCatching {
+                val dto = runCatching {
                     ProviderJson.decodeFromString(GeminiStreamChunkDto.serializer(), data)
-                }.getOrNull()?.takeIf { it.candidates.isNotEmpty() }
-                if (chunk == null) {
+                }.getOrNull()
+                if (dto == null) {
                     // Ошибка API приходит тем же потоком другим JSON-объектом.
+                    detectStreamErrorMessage(data)
+                        ?.let { throw ProviderError.Protocol("gemini: $it") }
+                    return@collect
+                }
+                // Usage-only чанк (финальный, с пустыми candidates) — читаем
+                // usageMetadata до гейта, иначе статистика теряется.
+                dto.usageMetadata?.toProviderUsage()?.let { usage = mergeUsage(usage, it) }
+                val chunk = dto.takeIf { it.candidates.isNotEmpty() }
+                if (chunk == null) {
+                    // `{"error":...}` тоже декодируется как GeminiStreamChunkDto —
+                    // все поля с дефолтами; детектор идёт по сырому JSON.
                     detectStreamErrorMessage(data)
                         ?.let { throw ProviderError.Protocol("gemini: $it") }
                     return@collect
@@ -130,7 +142,7 @@ class GeminiClient private constructor(
                 extracted.chunks.forEach { emit(it) }
             }
             // Без finish_reason соединение закрылось досрочно: ответ мог быть усечён.
-            emit(ChatChunk.Finish(reason = finish ?: "STOP", abrupt = finish == null))
+            emit(ChatChunk.Finish(reason = finish ?: "STOP", abrupt = finish == null, usage = usage))
         }
     }
 
@@ -196,4 +208,22 @@ class GeminiClient private constructor(
             )
         }
     }
+}
+
+/** Usage-метаданные Gemini в каноническую модель; thinking-токены — в output. */
+internal fun GeminiUsageMetadataDto.toProviderUsage(): ProviderUsage? {
+    val output = sumNullable(candidatesTokenCount, thoughtsTokenCount)
+    val mapped = ProviderUsage.of(
+        inputTokens = promptTokenCount,
+        outputTokens = output,
+        totalTokens = totalTokenCount,
+        cachedTokens = cachedContentTokenCount,
+    )
+    return mapped.takeUnless { it.isEmpty }
+}
+
+private fun sumNullable(a: Long?, b: Long?): Long? = when {
+    a == null -> b
+    b == null -> a
+    else -> a + b
 }

@@ -8,6 +8,8 @@ import kotlinx.serialization.json.jsonObject
 import ru.outsideproarts.oassist.core.model.ApprovalDecision
 import ru.outsideproarts.oassist.core.model.ApprovalRequest
 import ru.outsideproarts.oassist.core.model.ApprovalState
+import ru.outsideproarts.oassist.core.model.ProviderUsage
+import ru.outsideproarts.oassist.core.model.mergeUsage
 import ru.outsideproarts.oassist.core.provider.ChatChunk
 import ru.outsideproarts.oassist.core.provider.ChatMessage
 import ru.outsideproarts.oassist.core.provider.ChatRole
@@ -89,6 +91,9 @@ class AgentLoop(
         // Пишется перезаписью, а не OR: обрыв промежуточного тула-раунда не должен
         // помечать усечённым целый финальный ответ.
         var streamAbrupt = false
+        // Сумма usage по раундам хода; промежуточные Finish клиентов usage не несут
+        // (задвоение исключено на уровне клиентов).
+        var turnUsage: ProviderUsage? = null
         while (maxToolRounds <= 0 || rounds < maxToolRounds) {
             rounds++
             val toolCalls = mutableListOf<ChatChunk.ToolCall>()
@@ -109,7 +114,10 @@ class AgentLoop(
                 when (chunk) {
                     is ChatChunk.Content -> contentSb.append(chunk.delta)
                     is ChatChunk.ToolCall -> toolCalls.add(chunk)
-                    is ChatChunk.Finish -> streamAbrupt = chunk.abrupt
+                    is ChatChunk.Finish -> {
+                        streamAbrupt = chunk.abrupt
+                        turnUsage = mergeUsage(turnUsage, chunk.usage)
+                    }
                     // Модель подтверждений/результатов не присылает: ветки для exhaustiveness.
                     is ChatChunk.ApprovalNeeded -> {}
                     is ChatChunk.ToolResult -> {}
@@ -118,7 +126,8 @@ class AgentLoop(
 
             if (toolCalls.isEmpty()) {
                 if (contentSb.isNotEmpty()) emit(ChatChunk.Content(contentSb.toString()))
-                emit(ChatChunk.Finish(reason = "stop", abrupt = streamAbrupt))
+                emit(ChatChunk.Finish(reason = "stop", abrupt = streamAbrupt, usage = turnUsage))
+                turnUsage?.let { events?.onTurnUsage(it) }
                 val turn = messages.drop(turnStart).toList()
                 onTurnMessages?.invoke(
                     if (contentSb.isNotEmpty()) {
@@ -194,7 +203,8 @@ class AgentLoop(
         }
 
         emit(ChatChunk.Content("Достигнут лимит вызовов инструментов."))
-        emit(ChatChunk.Finish(reason = "max_tool_rounds"))
+        emit(ChatChunk.Finish(reason = "max_tool_rounds", usage = turnUsage))
+        turnUsage?.let { events?.onTurnUsage(it) }
         onTurnMessages?.invoke(messages.drop(turnStart).toList())
     }
 

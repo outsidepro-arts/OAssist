@@ -21,6 +21,8 @@ import ru.outsideproarts.oassist.core.data.secret.SecretStore
 import ru.outsideproarts.oassist.core.model.ModelCapability
 import ru.outsideproarts.oassist.core.model.ModelInfo
 import ru.outsideproarts.oassist.core.model.ProviderProfile
+import ru.outsideproarts.oassist.core.model.ProviderUsage
+import ru.outsideproarts.oassist.core.model.mergeUsage
 import ru.outsideproarts.oassist.core.provider.ChatChunk
 import ru.outsideproarts.oassist.core.provider.ChatMessage
 import ru.outsideproarts.oassist.core.provider.ModelClient
@@ -106,6 +108,8 @@ class AnthropicClient private constructor(
             var stopReason: String? = null
             var sawStop = false
             var callsFlushed = false
+            var inputUsage: ProviderUsage? = null
+            var outputTokens: Long? = null
             suspend fun flushCalls() {
                 if (callsFlushed) return
                 callsFlushed = true
@@ -118,12 +122,32 @@ class AnthropicClient private constructor(
                     ))
                 }
             }
+            // Итоговый usage хода: input из message_start, output — кумулятивный
+            // из message_delta (перезапись, не сумма). Строится через mergeUsage
+            // ради восстановления totalTokens.
+            fun currentUsage(): ProviderUsage? = mergeUsage(
+                inputUsage,
+                ProviderUsage.of(outputTokens = outputTokens),
+            )
             // Сервер закрывает стрим сам; отдельного `[DONE]` у Anthropic нет —
             // финал приходит событием `message_stop`.
             incoming.collect { event ->
                 val type = event.event ?: return@collect
                 val data = event.data ?: return@collect
                 when (type) {
+                    "message_start" -> {
+                        runCatching {
+                            ProviderJson.decodeFromString(
+                                AnthropicMessageStartEvent.serializer(),
+                                data,
+                            )
+                        }.getOrNull()?.message?.usage?.let { u ->
+                            inputUsage = ProviderUsage.of(
+                                inputTokens = u.inputTokens,
+                                cachedTokens = u.cacheReadInputTokens,
+                            )
+                        }
+                    }
                     "content_block_start" -> {
                         val start = runCatching {
                             ProviderJson.decodeFromString(
@@ -155,12 +179,15 @@ class AnthropicClient private constructor(
                         }
                     }
                     "message_delta" -> {
-                        runCatching {
+                        val deltaEvent = runCatching {
                             ProviderJson.decodeFromString(
                                 AnthropicMessageDeltaEvent.serializer(),
                                 data,
                             )
-                        }.getOrNull()?.delta?.stopReason?.let { stopReason = it }
+                        }.getOrNull() ?: return@collect
+                        deltaEvent.delta?.stopReason?.let { stopReason = it }
+                        // Кумулятивный итог — берём последнее значение.
+                        deltaEvent.usage?.outputTokens?.let { outputTokens = it }
                     }
                     "message_stop" -> {
                         sawStop = true
@@ -178,8 +205,10 @@ class AnthropicClient private constructor(
             }
             // Страховка: соединение закрылось без `message_stop` — отдать накопленное.
             // Без терминатора ответ мог быть усечён — помечаем abrupt.
+            // Usage несёт только этот финальный Finish (message_stop — без него),
+            // иначе аккумуляция в AgentLoop задвоила бы счётчики.
             flushCalls()
-            emit(ChatChunk.Finish(reason = stopReason ?: "end_turn", abrupt = !sawStop))
+            emit(ChatChunk.Finish(reason = stopReason ?: "end_turn", abrupt = !sawStop, usage = currentUsage()))
         }
     }
 

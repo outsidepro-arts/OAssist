@@ -32,6 +32,7 @@ import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
@@ -96,6 +97,8 @@ data class ChatItem(
     val isStreaming: Boolean = false,
     /** Голосовой ход PTT (история для модели несёт байты, пузырь — плейсхолдер). */
     val audio: AudioPart? = null,
+    /** Статистика хода (токены/cost от провайдера); null — провайдер не прислал. */
+    val usage: ru.outsideproarts.oassist.core.model.ProviderUsage? = null,
 )
 
 /** Холд Send короче — случайный тап: отмена с хинтом, не отправка. */
@@ -128,9 +131,13 @@ fun ChatScreen(
     audioIn: Boolean = false,
     /** Лента нарратива для сворачиваемого timeline. Null — без timeline. */
     timeline: SharedFlow<Narrator.TimelineEntry>? = null,
+    /** Итоги использования за жизнь процесса (in-memory). Null — без строки итогов. */
+    usageTotals: kotlinx.coroutines.flow.StateFlow<ru.outsideproarts.oassist.core.model.UsageTotalsState>? = null,
 ) {
     val messages = remember { mutableStateListOf<ChatItem>() }
     val timelineEntries = remember { mutableStateListOf<Narrator.TimelineEntry>() }
+    val emptyTotals = remember { kotlinx.coroutines.flow.MutableStateFlow(ru.outsideproarts.oassist.core.model.UsageTotalsState()) }
+    val usageTotalsState by (usageTotals ?: emptyTotals).collectAsState()
     var input by remember { mutableStateOf("") }
     /** Живой preview распознавания — НЕ в поле ввода, уходит сразу в сообщение. */
     var sttPreview by remember { mutableStateOf("") }
@@ -150,12 +157,14 @@ fun ChatScreen(
     val offlineRetryText = stringResource(ru.outsideproarts.oassist.core.ui.R.string.net_offline_retry)
     val repeatingText = stringResource(ru.outsideproarts.oassist.core.ui.R.string.net_repeating)
 
-    // Конец диалога (уход с экрана) — забыть «разрешено на текущую сессию».
+    // Конец диалога (уход с экрана) — забыть «разрешено на текущую сессию»
+    // и обнулить итоги использования (статистика живёт в рамках сессии чата).
     androidx.compose.runtime.DisposableEffect(Unit) {
         onDispose {
             runCatching {
-                ru.outsideproarts.oassist.core.agent.AgentFactory.get()
-                    .clearSessionApprovals(ru.outsideproarts.oassist.core.model.AssistMode.CHAT)
+                val factory = ru.outsideproarts.oassist.core.agent.AgentFactory.get()
+                factory.clearSessionApprovals(ru.outsideproarts.oassist.core.model.AssistMode.CHAT)
+                factory.resetUsageTotals()
             }
         }
     }
@@ -206,6 +215,7 @@ fun ChatScreen(
             val thoughtSb = StringBuilder()
             val answerSb = StringBuilder()
             val toolEvents = mutableListOf<AgentToolEvent>()
+            var turnUsage: ru.outsideproarts.oassist.core.model.ProviderUsage? = null
             // Разделение в синтезе: мысль и ответ — два независимых спикера
             // с собственными счётчиками; тулы немы всегда (раньше вырезались
             // stripServiceLines из общей каши — теперь не попадают вовсе).
@@ -224,6 +234,7 @@ fun ChatScreen(
                     tools = toolEvents.toList(),
                     answer = answerSb.toString(),
                     isStreaming = streaming,
+                    usage = turnUsage,
                 )
             }
             var error: ru.outsideproarts.oassist.core.provider.ProviderError? = null
@@ -267,6 +278,7 @@ fun ChatScreen(
                         is ChatChunk.Finish -> {
                             thoughtSpeaker.onFinish(thoughtSb.toString())
                             answerSpeaker.onFinish(answerSb.toString())
+                            turnUsage = chunk.usage
                             publish(false)
                             // Поток закрылся без терминатора: пометку покажем после
                             // сбора (`error` внутри своей лямбды-инициализатора
@@ -575,6 +587,12 @@ fun ChatScreen(
                         speakLabel = speakAnswerLabel,
                     )
                 }
+                // Итоги всего чата — сворачиваемый блок «Ход работы» внизу ленты.
+                if (!usageTotalsState.isEmpty) {
+                    item {
+                        ChatTotalsBlock(totals = usageTotalsState)
+                    }
+                }
             }
         }
 
@@ -733,9 +751,10 @@ private fun MessageBubble(
             style = MaterialTheme.typography.labelSmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
-        // Полотно «Ход работы» (мысль + вызовы) — сворачиваемо, по умолчанию свёрнуто.
-        if (!isUser && (item.thought.isNotBlank() || item.tools.isNotEmpty())) {
-            WorkBlock(thought = item.thought, tools = item.tools)
+        // Полотно «Ход работы» (мысль + вызовы + статистика хода) — сворачиваемо,
+        // по умолчанию свёрнуто. Статистика живёт внутри блока, не отдельной строкой.
+        if (!isUser && (item.thought.isNotBlank() || item.tools.isNotEmpty() || item.usage != null)) {
+            WorkBlock(thought = item.thought, tools = item.tools, usage = item.usage)
         }
         Text(
             text = bodyText,
@@ -751,7 +770,11 @@ private fun MessageBubble(
  * Мысль и вызовы объединены в одну сущность (разворачиваются вместе).
  */
 @Composable
-private fun WorkBlock(thought: String, tools: List<AgentToolEvent>) {
+private fun WorkBlock(
+    thought: String,
+    tools: List<AgentToolEvent>,
+    usage: ru.outsideproarts.oassist.core.model.ProviderUsage?,
+) {
     val title = stringResource(R.string.chat_work_title)
     val expandedState = stringResource(R.string.chat_timeline_expanded)
     val collapsedState = stringResource(R.string.chat_timeline_collapsed)
@@ -797,6 +820,7 @@ private fun WorkBlock(thought: String, tools: List<AgentToolEvent>) {
             }
         }
         if (expanded) {
+            ru.outsideproarts.oassist.core.ui.components.OAssistUsageLine(usage = usage)
             if (thought.isNotBlank()) {
                 Text(
                     text = thought.take(2000),
@@ -829,6 +853,62 @@ private fun WorkBlock(thought: String, tools: List<AgentToolEvent>) {
                     }
                 }
             }
+        }
+    }
+}
+
+/**
+ * Итоги всего чата — сворачиваемый блок «Ход работы» внизу ленты
+ * (аналог per-message WorkBlock, но без мысли/тулов — только «Всего»).
+ */
+@Composable
+private fun ChatTotalsBlock(totals: ru.outsideproarts.oassist.core.model.UsageTotalsState) {
+    val title = stringResource(R.string.chat_work_title)
+    val expandedState = stringResource(R.string.chat_timeline_expanded)
+    val collapsedState = stringResource(R.string.chat_timeline_collapsed)
+    var expanded by remember { mutableStateOf(false) }
+    val state = if (expanded) expandedState else collapsedState
+    val toggleLabel = "$title. $state"
+    val actionLabel = if (expanded) stringResource(R.string.chat_action_collapse)
+                      else stringResource(R.string.chat_action_expand)
+
+    OAssistPanel(title = title) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .oassistTouchTarget()
+                .semantics {
+                    stateDescription = state
+                    customActions = listOf(
+                        CustomAccessibilityAction(toggleLabel) {
+                            expanded = !expanded
+                            true
+                        },
+                    )
+                },
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.SpaceBetween,
+        ) {
+            Text(
+                text = title,
+                style = MaterialTheme.typography.titleMedium,
+                color = MaterialTheme.colorScheme.onSurface,
+                modifier = Modifier
+                    .weight(1f)
+                    .oassistHeading(),
+            )
+            IconButton(
+                onClick = { expanded = !expanded },
+                modifier = Modifier.semantics { contentDescription = actionLabel },
+            ) {
+                Icon(
+                    imageVector = if (expanded) Icons.Default.ExpandLess else Icons.Default.ExpandMore,
+                    contentDescription = null,
+                )
+            }
+        }
+        if (expanded) {
+            ru.outsideproarts.oassist.core.ui.components.OAssistUsageTotalsLine(totals = totals)
         }
     }
 }

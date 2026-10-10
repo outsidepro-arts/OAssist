@@ -1,5 +1,7 @@
 package ru.outsideproarts.oassist.core.agent
 
+import ru.outsideproarts.oassist.core.model.ProviderUsage
+
 /**
  * События цикла для нарратива (таймлайн + объявления скринридера).
  * Методы с дефолтной пустой реализацией — цикл работает и без слушателя.
@@ -13,4 +15,7 @@ interface AgentEvents {
     suspend fun onToolCall(toolName: String, argumentsJson: String, summary: String = "") {}
 
     suspend fun onToolResult(toolName: String, output: String, success: Boolean = true) {}
+
+    /** Итоговая статистика одного хода (сумма по раундам); вызывается один раз на ход. */
+    suspend fun onTurnUsage(usage: ProviderUsage) {}
 }

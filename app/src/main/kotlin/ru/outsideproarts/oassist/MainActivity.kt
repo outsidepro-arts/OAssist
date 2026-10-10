@@ -260,6 +260,7 @@ private fun OAssistApp(
                     stt = chatConfig?.effectiveStt() ?: ru.outsideproarts.oassist.core.model.SttConfig.DEFAULT,
                     audioIn = chatAudioIn,
                     timeline = graph.narrator.timeline,
+                    usageTotals = graph.usageTotals.state,
                 )
             }
             composable("assistant_access") {

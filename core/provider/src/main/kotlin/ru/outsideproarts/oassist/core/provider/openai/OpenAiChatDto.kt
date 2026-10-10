@@ -41,6 +41,15 @@ data class ChatRequestDto(
     @SerialName("max_tokens") val maxTokens: Int? = null,
     val temperature: Double? = null,
     val tools: List<ToolSchemaDto>? = null,
+    /** Только для стрима: просим usage-чанк с пустым choices после finish_reason. */
+    @SerialName("stream_options") val streamOptions: StreamOptionsDto? = null,
+)
+
+@Serializable
+data class StreamOptionsDto(
+    // Без дефолта: kotlinx не кодирует равный-дефолту true (encodeDefaults=false)
+    // и наружу улетал бы пустой `{}` — usage включался бы молча.
+    @SerialName("include_usage") val includeUsage: Boolean,
 )
 
 @Serializable
@@ -62,7 +71,39 @@ data class ChatResponseDto(
     @SerialName("object") val objectType: String? = null,
     val model: String? = null,
     val choices: List<ChatChoiceDto> = emptyList(),
+    val usage: ChatUsageDto? = null,
+    /** Нестандартное поле Zen/прокси: стоимость запроса в USD. Стандартный OpenAI не шлёт. */
+    val cost: Double? = null,
 )
+
+@Serializable
+data class ChatUsageDto(
+    @SerialName("prompt_tokens") val promptTokens: Long? = null,
+    @SerialName("completion_tokens") val completionTokens: Long? = null,
+    @SerialName("total_tokens") val totalTokens: Long? = null,
+    @SerialName("prompt_tokens_details") val promptTokensDetails: ChatPromptTokensDetailsDto? = null,
+)
+
+@Serializable
+data class ChatPromptTokensDetailsDto(
+    @SerialName("cached_tokens") val cachedTokens: Long? = null,
+)
+
+/**
+ * Usage/cost из ответа в каноническую модель. Cost — нестандартное поле
+ * Zen/прокси (top-level), стандартный OpenAI его не шлёт — null честнее выдумок.
+ */
+internal fun ChatResponseDto.usageOrCost(): ru.outsideproarts.oassist.core.model.ProviderUsage? {
+    if (usage == null && cost == null) return null
+    val mapped = ru.outsideproarts.oassist.core.model.ProviderUsage.of(
+        inputTokens = usage?.promptTokens,
+        outputTokens = usage?.completionTokens,
+        totalTokens = usage?.totalTokens,
+        cachedTokens = usage?.promptTokensDetails?.cachedTokens,
+        costUsd = cost,
+    )
+    return mapped.takeUnless { it.isEmpty }
+}
 
 @Serializable
 data class ChatChoiceDto(

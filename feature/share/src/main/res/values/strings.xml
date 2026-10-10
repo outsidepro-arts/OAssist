@@ -12,6 +12,11 @@
     <string name="share_send">Отправить</string>
     <string name="share_response">Ответ агента</string>
     <string name="share_speak_answer">Озвучить ответ</string>
+    <string name="share_work_title">Ход работы</string>
+    <string name="share_work_expanded">Развёрнут</string>
+    <string name="share_work_collapsed">Свёрнут</string>
+    <string name="share_action_expand">Развернуть</string>
+    <string name="share_action_collapse">Свернуть</string>
     <string name="share_prompt_text">Текст: %1$s\n</string>
     <string name="share_prompt_image">Изображение: %1$s\n</string>
     <string name="share_prompt_file">Файл: %1$s\n</string>

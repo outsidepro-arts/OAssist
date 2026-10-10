@@ -16,6 +16,11 @@
     <string name="net_offline_retry">No network — will retry when connected</string>
     <string name="net_repeating">Network is back — repeating the request</string>
 
+    <string name="usage_tokens">Tokens: %1$s</string>
+    <string name="usage_cost">Cost: $%1$s</string>
+    <string name="usage_totals">Total: %1$s tokens · turns: %2$d</string>
+    <string name="usage_totals_cost">Total: %1$s tokens · $%2$s · turns: %3$d</string>
+
     <string name="group_communication_write">Communication — write</string>
     <string name="group_phone_data_read">Phone data — read</string>
     <string name="group_phone_data_write">Phone data — write</string>

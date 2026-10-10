@@ -35,6 +35,11 @@ class AppGraph private constructor(context: Context) {
         ru.outsideproarts.oassist.core.speech.Narrator()
     }
 
+    /** Процесс-скоупные итоги использования (in-memory): сумма по ходам всех режимов. */
+    val usageTotals: ru.outsideproarts.oassist.core.model.UsageTotals by lazy {
+        ru.outsideproarts.oassist.core.model.UsageTotals()
+    }
+
     /** Мост «цикл → нарратив»: вызовы тулов уходят в таймлайн и объявления. */
     val narratorEvents: ru.outsideproarts.oassist.core.agent.AgentEvents by lazy {
         object : ru.outsideproarts.oassist.core.agent.AgentEvents {
@@ -44,6 +49,10 @@ class AppGraph private constructor(context: Context) {
 
             override suspend fun onToolResult(toolName: String, output: String, success: Boolean) {
                 narrator.onToolResult(toolName, output, success)
+            }
+
+            override suspend fun onTurnUsage(usage: ru.outsideproarts.oassist.core.model.ProviderUsage) {
+                usageTotals.record(usage)
             }
         }
     }
@@ -218,6 +227,13 @@ class AppGraph private constructor(context: Context) {
 
         override fun clearSessionApprovals(mode: ru.outsideproarts.oassist.core.model.AssistMode) {
             approvalPolicy.clearSession(mode.name)
+        }
+
+        override fun usageTotals(): kotlinx.coroutines.flow.StateFlow<ru.outsideproarts.oassist.core.model.UsageTotalsState> =
+            usageTotals.state
+
+        override fun resetUsageTotals() {
+            usageTotals.reset()
         }
 
         override suspend fun systemPromptFor(

@@ -29,6 +29,8 @@ import ru.outsideproarts.oassist.core.model.ModelCapability
 import ru.outsideproarts.oassist.core.model.ModelInfo
 import ru.outsideproarts.oassist.core.model.ProviderKind
 import ru.outsideproarts.oassist.core.model.ProviderProfile
+import ru.outsideproarts.oassist.core.model.ProviderUsage
+import ru.outsideproarts.oassist.core.model.mergeUsage
 import ru.outsideproarts.oassist.core.provider.ChatChunk
 import ru.outsideproarts.oassist.core.provider.ChatMessage
 import ru.outsideproarts.oassist.core.provider.ChatRole
@@ -103,6 +105,9 @@ class OpenAiCompatibleClient private constructor(
             messages = messages.flatMap { it.toDtos() },
             stream = true,
             tools = tools.ifEmpty { null },
+            // OpenAI шлёт usage только по запросу (финальный чанк с пустым choices);
+            // совместимые серверы лишнее поле игнорируют.
+            streamOptions = StreamOptionsDto(includeUsage = true),
         )
         http.sse(
             request = {
@@ -131,6 +136,7 @@ class OpenAiCompatibleClient private constructor(
             // Иначе при висящем соединении (кипэлайвы/прокси) стрим не завершится никогда.
             var lastFinish: String? = null
             var sawDone = false
+            var usage: ProviderUsage? = null
             incoming.takeWhile { event ->
                 if (event.data == DONE_SENTINEL) {
                     sawDone = true
@@ -140,15 +146,23 @@ class OpenAiCompatibleClient private constructor(
                 }
             }.collect { event ->
                 val data = event.data ?: return@collect
-                // Пустой choices — не чанк: либо ошибка API тем же потоком
-                // (`{"error":...}` декодируется и как ChatResponseDto с пустым
-                // choices — все поля с дефолтами), либо мусор — мимо.
-                val chunk = runCatching {
+                val dto = runCatching {
                     ProviderJson.decodeFromString(ChatResponseDto.serializer(), data)
-                }.getOrNull()?.takeIf { it.choices.isNotEmpty() }
-                if (chunk == null) {
+                }.getOrNull()
+                if (dto == null) {
                     // Без детектора серверная перегрузка давала пустой ответ
                     // + фейковый Finish("stop") (как у Gemini — там та же схема).
+                    detectStreamErrorMessage(data)
+                        ?.let { throw ProviderError.Protocol("openai: $it") }
+                    return@collect
+                }
+                // Usage-only чанк (include_usage) приходит с пустым choices —
+                // читаем usage до гейта, иначе финальная статистика теряется.
+                dto.usageOrCost()?.let { usage = mergeUsage(usage, it) }
+                val chunk = dto.takeIf { it.choices.isNotEmpty() }
+                if (chunk == null) {
+                    // `{"error":...}` тоже декодируется как ChatResponseDto с пустым
+                    // choices — детектор идёт по сырому JSON.
                     detectStreamErrorMessage(data)
                         ?.let { throw ProviderError.Protocol("openai: $it") }
                     return@collect
@@ -167,8 +181,10 @@ class OpenAiCompatibleClient private constructor(
             }
             // Страховка: сервер закрыл соединение без DONE/finish — отдать накопленное.
             // Без терминатора ответ мог быть усечён — помечаем abrupt, а не «stop».
+            // Usage несёт только этот финальный Finish (промежуточные — без него),
+            // иначе аккумуляция в AgentLoop задвоила бы счётчики.
             flushCalls()
-            emit(ChatChunk.Finish(reason = lastFinish ?: "stop", abrupt = lastFinish == null && !sawDone))
+            emit(ChatChunk.Finish(reason = lastFinish ?: "stop", abrupt = lastFinish == null && !sawDone, usage = usage))
         }
     }
 

@@ -15,6 +15,8 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.Send
+import androidx.compose.material.icons.filled.ExpandLess
+import androidx.compose.material.icons.filled.ExpandMore
 import androidx.compose.material3.Button
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -24,6 +26,7 @@ import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
@@ -36,8 +39,10 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.CustomAccessibilityAction
 import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.customActions
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.stateDescription
 import android.widget.Toast
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
@@ -60,6 +65,14 @@ import ru.outsideproarts.oassist.core.ui.theme.OAssistTheme
 private const val SHARE_MAX_IMAGES = 4
 
 class ShareActivity : AppCompatActivity() {
+
+    override fun onDestroy() {
+        super.onDestroy()
+        // Сессия шаринга кончилась — итоги использования не переживают закрытие.
+        if (isFinishing) {
+            runCatching { ru.outsideproarts.oassist.core.agent.AgentFactory.get().resetUsageTotals() }
+        }
+    }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -178,7 +191,15 @@ private fun ShareScreen(
     var thought by remember { mutableStateOf("") }
     var response by remember { mutableStateOf("") }
     val shareTools = remember { mutableStateListOf<ru.outsideproarts.oassist.core.agent.AgentToolEvent>() }
+    var turnUsage by remember { mutableStateOf<ru.outsideproarts.oassist.core.model.ProviderUsage?>(null) }
     var isStreaming by remember { mutableStateOf(false) }
+    val usageTotalsFlow = remember {
+        runCatching { ru.outsideproarts.oassist.core.agent.AgentFactory.get().usageTotals() }.getOrNull()
+    }
+    val emptyTotalsFlow = remember {
+        kotlinx.coroutines.flow.MutableStateFlow(ru.outsideproarts.oassist.core.model.UsageTotalsState())
+    }
+    val usageTotalsState by (usageTotalsFlow ?: emptyTotalsFlow).collectAsState()
     val scope = rememberCoroutineScope()
 
     /** Вопрос, отложенный до появления сети (пре-чек или ранний обрыв без сети). */
@@ -198,6 +219,7 @@ private fun ShareScreen(
         thought = ""
         response = ""
         shareTools.clear()
+        turnUsage = null
         scope.launch {
             val tts = runCatching {
                 ru.outsideproarts.oassist.core.agent.AgentFactory.get()
@@ -271,6 +293,7 @@ private fun ShareScreen(
                         is ChatChunk.Finish -> {
                             thoughtSpeaker.onFinish(thoughtSb.toString())
                             answerSpeaker.onFinish(sb.toString())
+                            turnUsage = chunk.usage
                             if (chunk.abrupt) {
                                 // Поток закрылся без терминатора: ответ мог быть усечён.
                                 Toast.makeText(
@@ -424,6 +447,13 @@ private fun ShareScreen(
 
             if (response.isNotEmpty()) {
                 OAssistPanel(title = responseLabel, showTitle = true) {
+                    // Статистика — в сворачиваемом блоке «Ход работы», не отдельной строкой.
+                    ShareWorkBlock(
+                        thought = thought,
+                        tools = shareTools.toList(),
+                        usage = turnUsage,
+                        totals = usageTotalsState,
+                    )
                     // Видимый текст — НЕ live region. Озвучка — через канал речи
                     // режима SHARE; повтор — действием «Озвучить ответ» (только ответ,
                     // без мысли и тулов).
@@ -460,6 +490,92 @@ private fun ShareScreen(
                 modifier = Modifier.weight(1f),
             ) {
                 Text(close)
+            }
+        }
+    }
+}
+
+/**
+ * Свёрнутое по умолчанию полотно «Ход работы» шаринга: мысль, вызовы и
+ * статистика (токены/cost) скрыты внутри до разворота — по паттерну WorkBlock чата.
+ */
+@Composable
+private fun ShareWorkBlock(
+    thought: String,
+    tools: List<ru.outsideproarts.oassist.core.agent.AgentToolEvent>,
+    usage: ru.outsideproarts.oassist.core.model.ProviderUsage?,
+    totals: ru.outsideproarts.oassist.core.model.UsageTotalsState,
+) {
+    if (thought.isBlank() && tools.isEmpty() && usage == null) return
+    val title = stringResource(R.string.share_work_title)
+    val expandedState = stringResource(R.string.share_work_expanded)
+    val collapsedState = stringResource(R.string.share_work_collapsed)
+    var expanded by remember { mutableStateOf(false) }
+    val state = if (expanded) expandedState else collapsedState
+    val toggleLabel = "$title. $state"
+    val actionLabel = if (expanded) {
+        stringResource(R.string.share_action_collapse)
+    } else {
+        stringResource(R.string.share_action_expand)
+    }
+
+    OAssistPanel(title = title) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .oassistTouchTarget()
+                .semantics {
+                    stateDescription = state
+                    customActions = listOf(
+                        CustomAccessibilityAction(toggleLabel) {
+                            expanded = !expanded
+                            true
+                        },
+                    )
+                },
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.SpaceBetween,
+        ) {
+            Text(
+                text = title,
+                style = MaterialTheme.typography.titleMedium,
+                color = MaterialTheme.colorScheme.onSurface,
+                modifier = Modifier
+                    .weight(1f)
+                    .oassistHeading(),
+            )
+            IconButton(
+                onClick = { expanded = !expanded },
+                modifier = Modifier.semantics { contentDescription = actionLabel },
+            ) {
+                Icon(
+                    imageVector = if (expanded) Icons.Default.ExpandLess else Icons.Default.ExpandMore,
+                    contentDescription = null,
+                )
+            }
+        }
+        if (expanded) {
+            ru.outsideproarts.oassist.core.ui.components.OAssistUsageLine(usage = usage)
+            ru.outsideproarts.oassist.core.ui.components.OAssistUsageTotalsLine(totals = totals)
+            if (thought.isNotBlank()) {
+                Text(
+                    text = thought.take(2000),
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+            tools.takeLast(20).forEach { tool ->
+                val out = tool.output
+                val line = if (out.isNullOrBlank()) {
+                    "…"
+                } else {
+                    tool.name + ": " + out.take(500)
+                }
+                Text(
+                    text = line,
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
             }
         }
     }

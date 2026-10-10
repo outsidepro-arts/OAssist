@@ -74,10 +74,22 @@ data class GeminiFunctionDeclarationDto(
 @Serializable
 data class GeminiStreamChunkDto(
     val candidates: List<GeminiCandidateDto> = emptyList(),
+    /** Приходит на чанках, включая финальный с пустыми candidates. */
+    @SerialName("usageMetadata") val usageMetadata: GeminiUsageMetadataDto? = null,
 )
 
 @Serializable
 data class GeminiCandidateDto(
     val content: GeminiContentDto? = null,
     @SerialName("finishReason") val finishReason: String? = null,
+)
+
+@Serializable
+data class GeminiUsageMetadataDto(
+    @SerialName("promptTokenCount") val promptTokenCount: Long? = null,
+    @SerialName("candidatesTokenCount") val candidatesTokenCount: Long? = null,
+    @SerialName("totalTokenCount") val totalTokenCount: Long? = null,
+    @SerialName("cachedContentTokenCount") val cachedContentTokenCount: Long? = null,
+    /** Токены thinking-режима — биллятся как output. */
+    @SerialName("thoughtsTokenCount") val thoughtsTokenCount: Long? = null,
 )

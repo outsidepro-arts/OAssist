@@ -1,8 +1,10 @@
 package ru.outsideproarts.oassist.core.agent
 
+import kotlinx.coroutines.flow.StateFlow
 import ru.outsideproarts.oassist.core.model.AssistMode
 import ru.outsideproarts.oassist.core.model.ModeConfig
 import ru.outsideproarts.oassist.core.model.ProviderProfile
+import ru.outsideproarts.oassist.core.model.UsageTotalsState
 
 /**
  * Фабрика агентов для фич-модулей. Реализуется в `app` (через AppGraph),
@@ -18,6 +20,12 @@ interface AgentFactory {
 
     /** Закончилась сессия режима (диалог/панель) — забыть «разрешено на текущую сессию». */
     fun clearSessionApprovals(mode: AssistMode)
+
+    /** Итоги использования за жизнь процесса (in-memory) — строка «Всего» в ходе работы. */
+    fun usageTotals(): StateFlow<UsageTotalsState>
+
+    /** Конец сессии (закрытие оверлея/чата/шаринга) — обнулить итоги. Дефолт — no-op (фейки в тестах). */
+    fun resetUsageTotals() {}
 
     /**
      * Готовый системный промпт режима: шаблон (свой или дефолт из assets)

@@ -94,6 +94,7 @@ class AssistantOverlayService : LifecycleService(), SavedStateRegistryOwner {
     private var answer by mutableStateOf("")
     private var thought by mutableStateOf("")
     private val toolEvents = mutableStateListOf<AgentToolEvent>()
+    private var turnUsage by mutableStateOf<ru.outsideproarts.oassist.core.model.ProviderUsage?>(null)
     private var sttPreview by mutableStateOf("")
     private var isStreaming by mutableStateOf(false)
     private var expanded by mutableStateOf(false)
@@ -232,6 +233,8 @@ class AssistantOverlayService : LifecycleService(), SavedStateRegistryOwner {
         mediaRouter = null
         AssistSessionStore.clear()
         runCatching { AgentFactory.get().clearSessionApprovals(AssistMode.ASSISTANT) }
+        // Сессия оверлея кончилась — итоги использования не переживают закрытие.
+        runCatching { AgentFactory.get().resetUsageTotals() }
         turnJob?.cancel()
         speech?.stop()
         removeOverlay()
@@ -470,6 +473,7 @@ class AssistantOverlayService : LifecycleService(), SavedStateRegistryOwner {
         answer = ""
         thought = ""
         toolEvents.clear()
+        turnUsage = null
         hintText = null
         speech?.stop()
         turnJob?.cancel()
@@ -591,6 +595,7 @@ class AssistantOverlayService : LifecycleService(), SavedStateRegistryOwner {
                         is ChatChunk.Finish -> {
                             thoughtSpeaker.onFinish(thoughtSb.toString())
                             answerSpeaker.onFinish(answerSb.toString())
+                            turnUsage = chunk.usage
                             // Поток закрылся без терминатора: пометку покажем после
                             // сбора (`error` внутри своей лямбды-инициализатора
                             // ещё не в scope — поэтому отдельный флаг).
@@ -678,6 +683,8 @@ class AssistantOverlayService : LifecycleService(), SavedStateRegistryOwner {
                             answer = answer,
                             thought = thought,
                             tools = toolEvents.toList(),
+                            usage = turnUsage,
+                            usageTotals = runCatching { AgentFactory.get().usageTotals() }.getOrNull(),
                             statusHint = hintText,
                             listening = voiceState is AssistVoiceState.Listening && listening,
                             sttPreview = sttPreview,

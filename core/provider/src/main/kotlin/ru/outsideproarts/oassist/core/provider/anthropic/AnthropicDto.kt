@@ -79,6 +79,29 @@ data class AnthropicDelta(
 data class AnthropicMessageDeltaEvent(
     val type: String? = null,
     val delta: AnthropicDelta? = null,
+    /** Кумулятивный output_tokens на конец хода (приходит только здесь). */
+    val usage: AnthropicUsageDto? = null,
+)
+
+/** Usage-поля Anthropic: input — в message_start, output — кумулятивно в message_delta. */
+@Serializable
+data class AnthropicUsageDto(
+    @SerialName("input_tokens") val inputTokens: Long? = null,
+    @SerialName("output_tokens") val outputTokens: Long? = null,
+    @SerialName("cache_creation_input_tokens") val cacheCreationInputTokens: Long? = null,
+    @SerialName("cache_read_input_tokens") val cacheReadInputTokens: Long? = null,
+)
+
+/** Первое событие потока: несёт message с usage (input_tokens известны сразу). */
+@Serializable
+data class AnthropicMessageStartEvent(
+    val type: String? = null,
+    val message: AnthropicMessageStartBody? = null,
+)
+
+@Serializable
+data class AnthropicMessageStartBody(
+    val usage: AnthropicUsageDto? = null,
 )
 
 @Serializable

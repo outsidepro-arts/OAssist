@@ -6,6 +6,7 @@ import ru.outsideproarts.oassist.core.model.ModelCapability
 import ru.outsideproarts.oassist.core.model.ModelInfo
 import ru.outsideproarts.oassist.core.model.ProviderKind
 import ru.outsideproarts.oassist.core.model.ProviderProfile
+import ru.outsideproarts.oassist.core.model.ProviderUsage
 import ru.outsideproarts.oassist.core.provider.anthropic.AnthropicClient
 import ru.outsideproarts.oassist.core.provider.gemini.GeminiClient
 import ru.outsideproarts.oassist.core.provider.openai.OpenAiCompatibleClient
@@ -108,8 +109,16 @@ sealed interface ChatChunk {
      * Конец стрима. [abrupt] — соединение закрылось без штатного терминатора
      * (`[DONE]`/`message_stop`/`finish_reason`): ответ мог быть усечён,
      * UI показывает пометку вместо «успешного» завершения.
+     * [usage] — статистика round-trip'а (только если провайдер её прислал);
+     * у [ru.outsideproarts.oassist.core.agent.AgentLoop] несёт сумму по всем
+     * раундам хода. Промежуточные Finish клиентов usage не несут — иначе
+     * аккумуляция задвоила бы счётчики.
      */
-    data class Finish(val reason: String?, val abrupt: Boolean = false) : ChatChunk
+    data class Finish(
+        val reason: String?,
+        val abrupt: Boolean = false,
+        val usage: ProviderUsage? = null,
+    ) : ChatChunk
 }
 
 /** Интерфейс клиента модели. */

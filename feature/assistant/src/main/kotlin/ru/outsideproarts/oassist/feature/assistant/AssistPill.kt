@@ -24,6 +24,7 @@ import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -58,6 +59,8 @@ fun AssistPill(
     answer: String,
     thought: String,
     tools: List<AgentToolEvent>,
+    usage: ru.outsideproarts.oassist.core.model.ProviderUsage? = null,
+    usageTotals: kotlinx.coroutines.flow.StateFlow<ru.outsideproarts.oassist.core.model.UsageTotalsState>? = null,
     statusHint: String?,
     listening: Boolean,
     sttPreview: String,
@@ -217,9 +220,14 @@ fun AssistPill(
             }
 
             if (expanded) {
+                val emptyTotals = remember {
+                    kotlinx.coroutines.flow.MutableStateFlow(ru.outsideproarts.oassist.core.model.UsageTotalsState())
+                }
+                val totalsState by (usageTotals ?: emptyTotals).collectAsState()
                 OAssistPanel(title = stringResource(R.string.assistant_response), showTitle = true) {
-                    if (thought.isNotBlank() || tools.isNotEmpty()) {
-                        AssistWorkBlock(thought = thought, tools = tools)
+                    // Статистика живёт внутри «Хода работы» (сворачиваемо), не отдельной строкой.
+                    if (thought.isNotBlank() || tools.isNotEmpty() || usage != null) {
+                        AssistWorkBlock(thought = thought, tools = tools, usage = usage, totals = totalsState)
                     }
                     Text(
                         text = answer.ifEmpty { "…" },
@@ -259,7 +267,12 @@ fun AssistPill(
 }
 
 @Composable
-private fun AssistWorkBlock(thought: String, tools: List<AgentToolEvent>) {
+private fun AssistWorkBlock(
+    thought: String,
+    tools: List<AgentToolEvent>,
+    usage: ru.outsideproarts.oassist.core.model.ProviderUsage?,
+    totals: ru.outsideproarts.oassist.core.model.UsageTotalsState,
+) {
     val title = stringResource(R.string.assistant_work_title)
     var expanded by remember { mutableStateOf(false) }
     val state = if (expanded) {
@@ -300,6 +313,8 @@ private fun AssistWorkBlock(thought: String, tools: List<AgentToolEvent>) {
             }
         }
         if (expanded) {
+            ru.outsideproarts.oassist.core.ui.components.OAssistUsageLine(usage = usage)
+            ru.outsideproarts.oassist.core.ui.components.OAssistUsageTotalsLine(totals = totals)
             if (thought.isNotBlank()) {
                 Text(
                     text = thought.take(2000),
