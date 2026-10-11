@@ -120,6 +120,7 @@ fun ModeConfigScreen(
     var ttsVoiceLocale by remember { mutableStateOf("") }
     var ttsToolCalls by remember { mutableStateOf(baseTts.speakToolCalls) }
     var ttsNarrative by remember { mutableStateOf(baseTts.narrative) }
+    var soundEnabled by remember { mutableStateOf(config.effectiveSoundEnabled()) }
     val baseStt = config.effectiveStt()
     var sttEngine by remember { mutableStateOf(baseStt.engine) }
     var sttLanguage by remember { mutableStateOf(baseStt.language) }
@@ -159,6 +160,7 @@ fun ModeConfigScreen(
         ttsEngine = tts.enginePackage ?: ""
         ttsToolCalls = tts.speakToolCalls
         ttsNarrative = tts.narrative
+        soundEnabled = config.effectiveSoundEnabled()
         val stt = config.effectiveStt()
         sttEngine = stt.engine
         sttLanguage = stt.language
@@ -472,6 +474,20 @@ fun ModeConfigScreen(
                 language = sttLanguage,
                 onLanguageChange = { sttLanguage = it },
             )
+
+            OAssistSectionHeading(text = stringResource(R.string.mode_sounds_title))
+            ModeSwitch(
+                title = stringResource(R.string.mode_sounds_enabled),
+                checked = soundEnabled,
+                onCheckedChange = { soundEnabled = it },
+                onState = onState,
+                offState = offState,
+            )
+            Text(
+                text = stringResource(R.string.mode_sounds_hint),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
         }
 
         Row(
@@ -521,6 +537,7 @@ fun ModeConfigScreen(
                                 engine = sttEngine,
                                 language = sttLanguage.ifBlank { SttConfig.DEFAULT.language },
                             ),
+                            soundEnabled = soundEnabled,
                         ),
                     )
                 },

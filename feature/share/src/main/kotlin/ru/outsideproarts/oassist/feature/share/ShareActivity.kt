@@ -49,7 +49,9 @@ import kotlinx.coroutines.launch
 import ru.outsideproarts.oassist.core.a11y.oassistHeading
 import ru.outsideproarts.oassist.core.a11y.oassistRole
 import ru.outsideproarts.oassist.core.a11y.oassistTouchTarget
+import ru.outsideproarts.oassist.core.speech.AgentSound
 import ru.outsideproarts.oassist.core.speech.SentenceSplitter
+import ru.outsideproarts.oassist.core.speech.SoundHandle
 import ru.outsideproarts.oassist.core.speech.SpeechHandle
 import ru.outsideproarts.oassist.core.speech.StreamSpeaker
 import ru.outsideproarts.oassist.core.provider.ChatChunk
@@ -226,6 +228,13 @@ private fun ShareScreen(
                     .modeConfig(ru.outsideproarts.oassist.core.model.AssistMode.SHARE)
                     .effectiveTts()
             }.getOrElse { ru.outsideproarts.oassist.core.model.TtsConfig.DEFAULT }
+            val soundsOn = runCatching {
+                ru.outsideproarts.oassist.core.agent.AgentFactory.get()
+                    .modeConfig(ru.outsideproarts.oassist.core.model.AssistMode.SHARE)
+                    .effectiveSoundEnabled()
+            }.getOrDefault(true)
+            val sounds = SoundHandle.get()
+            sounds?.playIfEnabled(AgentSound.MSG_SEND, soundsOn)
             val speech = SpeechHandle.get()
             // Озвучка режима SHARE применяется перед каждым стримом.
             speech?.applyTts(tts)
@@ -246,6 +255,7 @@ private fun ShareScreen(
                 // Нет провайдера/модели — честный тост вместо падения.
                 isStreaming = false
                 val failure = ProviderError.from(e)
+                sounds?.playIfEnabled(AgentSound.ERROR, soundsOn)
                 Toast.makeText(context, failure.userMessage(context), Toast.LENGTH_LONG).show()
                 return@launch
             }
@@ -257,6 +267,7 @@ private fun ShareScreen(
                                 thoughtSb.append(chunk.delta)
                                 thought = thoughtSb.toString()
                                 thoughtSpeaker.onText(thoughtSb.toString(), true)
+                                sounds?.playIfEnabled(AgentSound.THINKING, soundsOn)
                             } else {
                                 sb.append(chunk.delta)
                                 response = sb.toString()
@@ -269,6 +280,7 @@ private fun ShareScreen(
                                     name = chunk.name,
                                 ),
                             )
+                            sounds?.playIfEnabled(AgentSound.TOOL_CALL, soundsOn)
                         }
                         is ChatChunk.ToolResult -> {
                             val pending = shareTools.indexOfLast {
@@ -285,6 +297,7 @@ private fun ShareScreen(
                         }
                         // В Share нет диалога: опасные действия отклоняем сразу.
                         is ChatChunk.ApprovalNeeded -> {
+                            sounds?.playIfEnabled(AgentSound.PERMISSION_DENIED, soundsOn)
                             session.agent.resolveApproval(
                                 chunk.request.callId,
                                 ru.outsideproarts.oassist.core.model.ApprovalDecision.DENY,
@@ -294,6 +307,7 @@ private fun ShareScreen(
                             thoughtSpeaker.onFinish(thoughtSb.toString())
                             answerSpeaker.onFinish(sb.toString())
                             turnUsage = chunk.usage
+                            sounds?.playIfEnabled(AgentSound.ANSWER_READY, soundsOn)
                             if (chunk.abrupt) {
                                 // Поток закрылся без терминатора: ответ мог быть усечён.
                                 Toast.makeText(
@@ -319,6 +333,7 @@ private fun ShareScreen(
                     pendingShareRetry = query
                     Toast.makeText(context, offlineRetryText, Toast.LENGTH_LONG).show()
                 } else {
+                    sounds?.playIfEnabled(AgentSound.ERROR, soundsOn)
                     Toast.makeText(context, error.userMessage(context), Toast.LENGTH_LONG).show()
                 }
             }

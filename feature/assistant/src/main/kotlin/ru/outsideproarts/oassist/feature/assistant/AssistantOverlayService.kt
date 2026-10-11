@@ -53,8 +53,10 @@ import ru.outsideproarts.oassist.core.provider.ChatRole
 import ru.outsideproarts.oassist.core.provider.ProviderError
 import ru.outsideproarts.oassist.core.provider.collectSafe
 import ru.outsideproarts.oassist.core.provider.isEarlyRetryable
+import ru.outsideproarts.oassist.core.speech.AgentSound
 import ru.outsideproarts.oassist.core.speech.CaptureError
 import ru.outsideproarts.oassist.core.speech.SentenceSplitter
+import ru.outsideproarts.oassist.core.speech.SoundHandle
 import ru.outsideproarts.oassist.core.speech.SpeechHandle
 import ru.outsideproarts.oassist.core.speech.SttError
 import ru.outsideproarts.oassist.core.speech.SttListener
@@ -112,6 +114,7 @@ class AssistantOverlayService : LifecycleService(), SavedStateRegistryOwner {
     private var sttLanguage: String = "ru-RU"
     private var continueDialog: Boolean = false
     private var showOverlay: Boolean = true
+    private var soundEnabled: Boolean = true
     private var sessionActive = false
     private var pendingBye = false
     /** Ход, отложенный до появления сети (пре-чек или ранний обрыв без сети). */
@@ -120,6 +123,7 @@ class AssistantOverlayService : LifecycleService(), SavedStateRegistryOwner {
 
     private val voice get() = VoiceHandle.get()
     private val speech get() = SpeechHandle.get()
+    private val sounds get() = SoundHandle.get()
 
     private val overlayHideMutex = kotlinx.coroutines.sync.Mutex()
 
@@ -209,7 +213,7 @@ class AssistantOverlayService : LifecycleService(), SavedStateRegistryOwner {
         intent?.getStringExtra(EXTRA_SCREEN_IMAGE)?.let {
             session.screenImage = ru.outsideproarts.oassist.core.provider.ImagePart(imageBase64 = it)
         }
-        val effects = if (!sessionActive) {
+        if (!sessionActive) {
             if (showOverlay && !Settings.canDrawOverlays(this)) {
                 hintText = getString(R.string.assistant_no_overlay)
                 refreshSessionNotification(force = true)
@@ -218,17 +222,25 @@ class AssistantOverlayService : LifecycleService(), SavedStateRegistryOwner {
             mediaRouter = MediaButtonRouter(this) { execute(voiceFlow.onPlayPause()) }.also { it.start() }
             if (showOverlay) addOverlay()
             sessionActive = true
-            voiceFlow.onActivate()
+            // Появление сессии звучит целиком ДО старта STT: эффекты
+            // (включая StartStt) исполняем после конца overlay_start.
+            val boot = voiceFlow.onActivate()
+            serviceScope.launch {
+                if (soundEnabled) {
+                    runCatching { sounds?.playOverlayStartAndAwait() }
+                }
+                execute(boot)
+            }
         } else {
-            voiceFlow.onReactivate()
+            execute(voiceFlow.onReactivate())
         }
-        execute(effects)
         return START_NOT_STICKY
     }
 
     override fun onDestroy() {
         ru.outsideproarts.oassist.core.agent.OverlayControl.unregister(overlayControlImpl)
         execute(voiceFlow.onClose())
+        sounds?.playIfEnabled(AgentSound.OVERLAY_STOP, soundEnabled)
         mediaRouter?.release()
         mediaRouter = null
         AssistSessionStore.clear()
@@ -248,6 +260,7 @@ class AssistantOverlayService : LifecycleService(), SavedStateRegistryOwner {
         }.getOrNull() ?: return
         sttLanguage = config.effectiveStt().language
         continueDialog = config.assistant?.continueDialog ?: false
+        soundEnabled = config.effectiveSoundEnabled()
     }
 
     @SuppressLint("InlinedApi")
@@ -375,7 +388,10 @@ class AssistantOverlayService : LifecycleService(), SavedStateRegistryOwner {
                     sttPreview = ""
                     voice?.cancelStt()
                 }
-                is AssistVoiceEffect.SendText -> startTurn(effect.text)
+                is AssistVoiceEffect.SendText -> {
+                    sounds?.playIfEnabled(AgentSound.MSG_SEND, soundEnabled)
+                    startTurn(effect.text)
+                }
                 AssistVoiceEffect.CancelTurn -> {
                     speech?.stop()
                     turnJob?.cancel()
@@ -493,6 +509,7 @@ class AssistantOverlayService : LifecycleService(), SavedStateRegistryOwner {
                 }
         continueDialog = config.assistant?.continueDialog ?: false
         showOverlay = config.assistant?.showOverlay ?: true
+        soundEnabled = config.effectiveSoundEnabled()
                 val autoSpeak = config.assistant?.autoSpeak ?: true
                 val tts = config.effectiveTts()
                 speech?.applyTts(tts)
@@ -541,6 +558,7 @@ class AssistantOverlayService : LifecycleService(), SavedStateRegistryOwner {
                                 thoughtSb.append(chunk.delta)
                                 thought = thoughtSb.toString()
                                 thoughtSpeaker.onText(thoughtSb.toString(), true)
+                                sounds?.playIfEnabled(AgentSound.THINKING, soundEnabled)
                             } else {
                                 answerSb.append(chunk.delta)
                                 answer = answerSb.toString()
@@ -551,6 +569,7 @@ class AssistantOverlayService : LifecycleService(), SavedStateRegistryOwner {
                         is ChatChunk.ToolCall -> {
                             if (chunk.name == BYE_TOOL_NAME) pendingBye = true
                             toolEvents.add(AgentToolEvent(name = chunk.name))
+                            sounds?.playIfEnabled(AgentSound.TOOL_CALL, soundEnabled)
                             refreshSessionNotification()
                         }
                         is ChatChunk.ToolResult -> {
@@ -566,6 +585,7 @@ class AssistantOverlayService : LifecycleService(), SavedStateRegistryOwner {
                             else toolEvents.add(event)
                         }
                         is ChatChunk.ApprovalNeeded -> {
+                            sounds?.playIfEnabled(AgentSound.PERMISSION_REQUEST, soundEnabled)
                             if (chunk.request.screenLocked) {
                                 speech?.speak(getString(ru.outsideproarts.oassist.core.ui.R.string.approval_locked_hint))
                             }
@@ -584,6 +604,7 @@ class AssistantOverlayService : LifecycleService(), SavedStateRegistryOwner {
                                 runCatching {
                                     startActivity(
                                         ConsentActivity.approvalIntent(this@AssistantOverlayService, chunk.request)
+                                            .putExtra(ConsentActivity.EXTRA_SOUND_ENABLED, soundEnabled)
                                             .addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK),
                                     )
                                 }.onFailure {
@@ -596,6 +617,7 @@ class AssistantOverlayService : LifecycleService(), SavedStateRegistryOwner {
                             thoughtSpeaker.onFinish(thoughtSb.toString())
                             answerSpeaker.onFinish(answerSb.toString())
                             turnUsage = chunk.usage
+                            sounds?.playIfEnabled(AgentSound.ANSWER_READY, soundEnabled)
                             // Поток закрылся без терминатора: пометку покажем после
                             // сбора (`error` внутри своей лямбды-инициализатора
                             // ещё не в scope — поэтому отдельный флаг).
@@ -614,6 +636,7 @@ class AssistantOverlayService : LifecycleService(), SavedStateRegistryOwner {
                         pendingRetryText = text
                         hintText = getString(ru.outsideproarts.oassist.core.ui.R.string.net_offline_retry)
                     } else {
+                        sounds?.playIfEnabled(AgentSound.ERROR, soundEnabled)
                         hintText = error.userMessage(this@AssistantOverlayService)
                     }
                 } else if (sawAbrupt) {
@@ -673,6 +696,11 @@ class AssistantOverlayService : LifecycleService(), SavedStateRegistryOwner {
                         ApprovalPanel(
                             request = request,
                             onDecision = { decision ->
+                                if (decision == ApprovalDecision.DENY ||
+                                    decision == ApprovalDecision.ALWAYS_DENY
+                                ) {
+                                    sounds?.playIfEnabled(AgentSound.PERMISSION_DENIED, soundEnabled)
+                                }
                                 agent.resolveApproval(request.callId, decision)
                                 pendingApproval = null
                                 refreshOverlayFocusable()

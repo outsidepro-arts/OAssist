@@ -31,6 +31,11 @@ class AppGraph private constructor(context: Context) {
         ru.outsideproarts.oassist.core.speech.SpeechOutput(appContext).also { it.init() }
     }
 
+    /** Событийные звуки агента (ogg в core/speech res/raw); предзагрузка — в init ниже. */
+    val agentSounds: ru.outsideproarts.oassist.core.speech.AgentSounds by lazy {
+        ru.outsideproarts.oassist.core.speech.AgentSounds(appContext)
+    }
+
     val narrator: ru.outsideproarts.oassist.core.speech.Narrator by lazy {
         ru.outsideproarts.oassist.core.speech.Narrator()
     }
@@ -379,6 +384,13 @@ class AppGraph private constructor(context: Context) {
         })
         registerTorchCallback()
         startNarratorCollector()
+        ru.outsideproarts.oassist.core.speech.SoundHandle.register(object : ru.outsideproarts.oassist.core.speech.SoundHandle {
+            override fun play(sound: ru.outsideproarts.oassist.core.speech.AgentSound) =
+                agentSounds.play(sound)
+            override suspend fun playOverlayStartAndAwait() =
+                agentSounds.playOverlayStartAndAwait()
+        })
+        persistScope.launch { runCatching { agentSounds.init() } }
     }
 
     /**

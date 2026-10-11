@@ -124,6 +124,9 @@
     <string name="mode_tts_tool_calls_hint">Only via the agent’s comment (“looking up contact…”); tool type is never read</string>
     <string name="mode_tts_narrative">Narrate work</string>
     <string name="mode_tts_narrative_hint">Agent steps via screen reader and timeline</string>
+    <string name="mode_sounds_title">Action sounds</string>
+    <string name="mode_sounds_enabled">Agent action sounds</string>
+    <string name="mode_sounds_hint">Short sounds for sending, thinking, tools, requests and errors</string>
     <string name="mode_stt_title">Voice input</string>
     <string name="mode_stt_system">System STT</string>
     <string name="mode_stt_model_audio">Model audio</string>

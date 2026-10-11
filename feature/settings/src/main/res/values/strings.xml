@@ -124,6 +124,9 @@
     <string name="mode_tts_tool_calls_hint">Только комментарием агента («ищу контакт…»); тип инструмента не зачитывается</string>
     <string name="mode_tts_narrative">Рассказывать о работе</string>
     <string name="mode_tts_narrative_hint">Шаги агента — через экранный чтец и ленту</string>
+    <string name="mode_sounds_title">Звуки действий</string>
+    <string name="mode_sounds_enabled">Звуковое сопровождение действий агента</string>
+    <string name="mode_sounds_hint">Короткие звуки на отправку, размышления, инструменты, запросы и ошибки</string>
     <string name="mode_stt_title">Голосовой ввод</string>
     <string name="mode_stt_system">Системный STT</string>
     <string name="mode_stt_model_audio">Аудио модели</string>

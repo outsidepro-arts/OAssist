@@ -257,6 +257,7 @@ private fun OAssistApp(
                     speakSentence = { graph.speechOutput.speak(it) },
                     stopSpeech = { graph.speechOutput.stop() },
                     speakToolCalls = chatConfig?.effectiveTts()?.speakToolCalls ?: true,
+                    soundEnabled = chatConfig?.effectiveSoundEnabled() ?: true,
                     stt = chatConfig?.effectiveStt() ?: ru.outsideproarts.oassist.core.model.SttConfig.DEFAULT,
                     audioIn = chatAudioIn,
                     timeline = graph.narrator.timeline,

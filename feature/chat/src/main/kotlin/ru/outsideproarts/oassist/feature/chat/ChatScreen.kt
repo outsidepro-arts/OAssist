@@ -69,10 +69,12 @@ import ru.outsideproarts.oassist.core.provider.AudioPart
 import ru.outsideproarts.oassist.core.provider.ChatRole
 import ru.outsideproarts.oassist.core.provider.collectSafe
 import ru.outsideproarts.oassist.core.provider.isEarlyRetryable
+import ru.outsideproarts.oassist.core.speech.AgentSound
 import ru.outsideproarts.oassist.core.speech.CaptureError
 import ru.outsideproarts.oassist.core.speech.CaptureState
 import ru.outsideproarts.oassist.core.speech.Narrator
 import ru.outsideproarts.oassist.core.speech.SentenceSplitter
+import ru.outsideproarts.oassist.core.speech.SoundHandle
 import ru.outsideproarts.oassist.core.speech.SttError
 import ru.outsideproarts.oassist.core.speech.SttListener
 import ru.outsideproarts.oassist.core.speech.StreamSpeaker
@@ -125,6 +127,8 @@ fun ChatScreen(
     stopSpeech: (() -> Unit)? = null,
     /** Озвучивать комментарии к вызовам тулов (флаг TtsConfig режима). Тип тула нем всегда. */
     speakToolCalls: Boolean = true,
+    /** Звуковое сопровождение действий агента (флаг ModeConfig режима). */
+    soundEnabled: Boolean = true,
     /** Голосовой ввод режима (движок + язык). */
     stt: SttConfig = SttConfig.DEFAULT,
     /** У модели флаг AUDIO_IN (только ручной) — иначе MODEL_AUDIO падает в STT. */
@@ -156,6 +160,7 @@ fun ChatScreen(
     val netHandle = remember { ru.outsideproarts.oassist.core.net.NetworkHandle.get() }
     val offlineRetryText = stringResource(ru.outsideproarts.oassist.core.ui.R.string.net_offline_retry)
     val repeatingText = stringResource(ru.outsideproarts.oassist.core.ui.R.string.net_repeating)
+    val sounds = remember { SoundHandle.get() }
 
     // Конец диалога (уход с экрана) — забыть «разрешено на текущую сессию»
     // и обнулить итоги использования (статистика живёт в рамках сессии чата).
@@ -249,6 +254,7 @@ fun ChatScreen(
                                 thoughtSb.append(chunk.delta)
                                 publish(true)
                                 thoughtSpeaker.onText(thoughtSb.toString(), true)
+                                sounds?.playIfEnabled(AgentSound.THINKING, soundEnabled)
                             } else {
                                 answerSb.append(chunk.delta)
                                 publish(true)
@@ -258,6 +264,7 @@ fun ChatScreen(
                         is ChatChunk.ToolCall -> {
                             toolEvents.add(AgentToolEvent(name = chunk.name))
                             publish(true)
+                            sounds?.playIfEnabled(AgentSound.TOOL_CALL, soundEnabled)
                         }
                         is ChatChunk.ToolResult -> {
                             val pending = toolEvents.indexOfLast {
@@ -274,12 +281,14 @@ fun ChatScreen(
                         }
                         is ChatChunk.ApprovalNeeded -> {
                             pendingApproval = chunk.request to session.agent
+                            sounds?.playIfEnabled(AgentSound.PERMISSION_REQUEST, soundEnabled)
                         }
                         is ChatChunk.Finish -> {
                             thoughtSpeaker.onFinish(thoughtSb.toString())
                             answerSpeaker.onFinish(answerSb.toString())
                             turnUsage = chunk.usage
                             publish(false)
+                            sounds?.playIfEnabled(AgentSound.ANSWER_READY, soundEnabled)
                             // Поток закрылся без терминатора: пометку покажем после
                             // сбора (`error` внутри своей лямбды-инициализатора
                             // ещё не в scope — поэтому отдельный флаг).
@@ -322,6 +331,7 @@ fun ChatScreen(
                     isStreaming = true
                     Toast.makeText(context, offlineRetryText, Toast.LENGTH_LONG).show()
                 } else {
+                    sounds?.playIfEnabled(AgentSound.ERROR, soundEnabled)
                     Toast.makeText(context, error.userMessage(context), Toast.LENGTH_LONG).show()
                 }
             } else if (sawAbrupt) {
@@ -341,6 +351,7 @@ fun ChatScreen(
         isStreaming = true
         // Barge-in: новый вопрос прерывает озвучку предыдущего ответа.
         stopSpeech?.invoke()
+        sounds?.playIfEnabled(AgentSound.MSG_SEND, soundEnabled)
         messages.add(ChatItem(ChatRole.ASSISTANT, isStreaming = true))
         val net = ru.outsideproarts.oassist.core.net.NetworkHandle.get()
         if (net != null && !net.isOnline.value) {
@@ -708,6 +719,9 @@ fun ChatScreen(
         ApprovalDialog(
             request = request,
             onDecision = { decision ->
+                if (decision == ApprovalDecision.DENY || decision == ApprovalDecision.ALWAYS_DENY) {
+                    sounds?.playIfEnabled(AgentSound.PERMISSION_DENIED, soundEnabled)
+                }
                 agent.resolveApproval(request.callId, decision)
                 pendingApproval = null
             },

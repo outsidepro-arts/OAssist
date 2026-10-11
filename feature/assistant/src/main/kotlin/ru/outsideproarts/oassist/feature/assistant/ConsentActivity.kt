@@ -80,6 +80,14 @@ class ConsentActivity : AppCompatActivity() {
             finish()
             return
         }
+        val soundsOn = intent?.getBooleanExtra(EXTRA_SOUND_ENABLED, true) ?: true
+        runCatching {
+            ru.outsideproarts.oassist.core.speech.SoundHandle.get()
+                ?.playIfEnabled(
+                    ru.outsideproarts.oassist.core.speech.AgentSound.PERMISSION_REQUEST,
+                    soundsOn,
+                )
+        }
         ComposeView(this).apply {
             setContent {
                 OAssistTheme {
@@ -87,6 +95,17 @@ class ConsentActivity : AppCompatActivity() {
                         request = request,
                         onDecision = { decision ->
                             decided = true
+                            if (decision == ApprovalDecision.DENY ||
+                                decision == ApprovalDecision.ALWAYS_DENY
+                            ) {
+                                runCatching {
+                                    ru.outsideproarts.oassist.core.speech.SoundHandle.get()
+                                        ?.playIfEnabled(
+                                            ru.outsideproarts.oassist.core.speech.AgentSound.PERMISSION_DENIED,
+                                            soundsOn,
+                                        )
+                                }
+                            }
                             ApprovalUiBridge.resolve(request.callId, decision)
                             finish()
                         },
@@ -116,6 +135,8 @@ class ConsentActivity : AppCompatActivity() {
         private const val EXTRA_SUMMARY = "summary"
         private const val EXTRA_GROUP_KEY = "group_key"
         private const val EXTRA_SCREEN_LOCKED = "screen_locked"
+        /** Флаг звукового сопровождения ASSISTANT-режима (дефолт — включено). */
+        const val EXTRA_SOUND_ENABLED = "sound_enabled"
 
         const val MODE_PERMISSIONS = "permissions"
         const val MODE_APPROVAL = "approval"

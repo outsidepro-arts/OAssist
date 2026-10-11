@@ -116,6 +116,8 @@ data class ModeConfig(
     val share: ShareExtras? = null,
     val tts: TtsConfig? = null,
     val stt: SttConfig? = null,
+    /** Звуковое сопровождение действий агента; null — legacy, трактуется как включено. */
+    val soundEnabled: Boolean? = null,
 ) {
     companion object {
         fun default(mode: AssistMode): ModeConfig = when (mode) {
@@ -130,6 +132,8 @@ data class ModeConfig(
 
     /** Голосовой ввод режима с учётом старых конфигов без поля [stt]. */
     fun effectiveStt(): SttConfig = stt ?: SttConfig.DEFAULT
+    /** Звуковое сопровождение с учётом старых конфигов без поля [soundEnabled]: дефолт — включено. */
+    fun effectiveSoundEnabled(): Boolean = soundEnabled ?: true
 }
 
 /** Возможности модели — из ответа провайдера или пробы, правятся вручную. */

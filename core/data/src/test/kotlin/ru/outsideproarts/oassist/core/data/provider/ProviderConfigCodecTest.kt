@@ -219,6 +219,23 @@ class ProviderConfigCodecTest {
     }
 
     @Test
+    fun modeConfig_soundEnabled_roundTripAndLegacyDefault() {
+        val config = ModeConfig(
+            mode = AssistMode.CHAT,
+            soundEnabled = false,
+        )
+
+        val decoded = json.decodeFromString<ModeConfig>(json.encodeToString(config))
+
+        assertEquals(config, decoded)
+        assertEquals(false, decoded.effectiveSoundEnabled())
+
+        val legacy = json.decodeFromString<ModeConfig>("""{"mode":"CHAT"}""")
+        assertEquals(null, legacy.soundEnabled)
+        assertEquals(true, legacy.effectiveSoundEnabled())
+    }
+
+    @Test
     fun modelCatalog_roundTrip() {
         val catalog = ModelCatalog(
             providerId = "p1",
