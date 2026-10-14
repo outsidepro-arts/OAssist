@@ -18,7 +18,7 @@ import ru.outsideproarts.oassist.core.data.secret.SecretStore
 import ru.outsideproarts.oassist.core.model.ProviderKind
 import ru.outsideproarts.oassist.core.model.ProviderProfile
 import ru.outsideproarts.oassist.core.provider.openai.OpenAiCompatibleClient
-import ru.outsideproarts.oassist.core.provider.openai.OpenCodeZen
+import ru.outsideproarts.oassist.core.provider.opencode.OpenCodeZen
 
 class OpenCodeZenHeadersTest {
 
@@ -49,7 +49,7 @@ class OpenCodeZenHeadersTest {
     private val zenProfile = ProviderProfile(
         id = "p1",
         name = "Zen",
-        kind = ProviderKind.OPENCODE_ZEN,
+        kind = ProviderKind.OPENCODE,
         baseUrl = "https://opencode.ai/zen/go/v1",
         apiKeyRef = "provider.p1.apiKey",
     )
@@ -62,7 +62,7 @@ class OpenCodeZenHeadersTest {
     )
 
     private fun sessionIdFor(messages: List<ChatMessage>): String =
-        OpenCodeZen.sessionId(OpenAiCompatibleClient.dialogHead(messages))
+        OpenCodeZen.sessionId(dialogKey(messages))
 
     @Test
     fun fetchModels_sendsZenHeaders_andBearer() = runTest {
@@ -73,7 +73,7 @@ class OpenCodeZenHeadersTest {
                 .forEach { captured[it.key.lowercase()] = it.value.single() }
             respond("""{"data":[]}""", status = HttpStatusCode.OK, headers = headersOf("Content-Type", "application/json"))
         }
-        val client = OpenAiCompatibleClient.fromProfile(zenProfile, secretsWithKey("test-key"), mockClient(engine))
+        val client = ModelClient.create(zenProfile, secretsWithKey("test-key"), mockClient(engine))
 
         client.fetchModels()
 
@@ -93,7 +93,7 @@ class OpenCodeZenHeadersTest {
             request.headers["x-opencode-request"]?.let { requestIds += it }
             respond("""{"data":[]}""", status = HttpStatusCode.OK, headers = headersOf("Content-Type", "application/json"))
         }
-        val client = OpenAiCompatibleClient.fromProfile(zenProfile, emptySecrets, mockClient(engine))
+        val client = ModelClient.create(zenProfile, emptySecrets, mockClient(engine))
 
         client.fetchModels()
         client.fetchModels()

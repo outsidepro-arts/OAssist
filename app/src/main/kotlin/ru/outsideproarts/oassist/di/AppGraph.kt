@@ -73,6 +73,16 @@ class AppGraph private constructor(context: Context) {
 
     val httpClient by lazy { HttpClientFactory.create() }
 
+    /** Каталог models.dev: маршрутизация протокола моделей агрегаторов (OpenCode). */
+    val modelsDevCatalog by lazy {
+        ru.outsideproarts.oassist.core.provider.modelsdev.ModelsDevCatalog(
+            httpClient,
+            ru.outsideproarts.oassist.core.provider.modelsdev.FileModelsDevCache(
+                java.io.File(deviceContext.filesDir, "models-dev"),
+            ),
+        )
+    }
+
     /** Живое состояние сети для пре-чеков и авто-повторов (см. NetworkHandle). */
     private val networkMonitor = ru.outsideproarts.oassist.core.net.NetworkMonitor(appContext)
 
@@ -184,7 +194,16 @@ class AppGraph private constructor(context: Context) {
     }
 
     suspend fun modelClientFor(profile: ProviderProfile): ModelClient =
-        ModelClient.create(profile, data.secretStore, httpClient)
+        ModelClient.create(
+            profile,
+            data.secretStore,
+            httpClient,
+            protocolOverride = { modelId ->
+                data.providers.observeModelCatalog(profile.id).first()
+                    ?.models?.firstOrNull { it.id == modelId }?.protocol
+            },
+            modelsDev = modelsDevCatalog,
+        )
 
     private val agentFactory = object : ru.outsideproarts.oassist.core.agent.AgentFactory {
         override suspend fun modeConfig(mode: ru.outsideproarts.oassist.core.model.AssistMode) =

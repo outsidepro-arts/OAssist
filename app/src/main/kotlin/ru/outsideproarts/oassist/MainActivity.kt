@@ -687,7 +687,7 @@ private fun OAssistApp(
                                 runCatching {
                                     val client = graph.modelClientFor(profile)
                                     val fetched = client.fetchModels()
-                                    graph.providers.saveModelCatalog(providerId, fetched)
+                                    graph.providers.refreshModelCatalog(providerId, fetched)
                                     fetched
                                 }.onSuccess { fetched ->
                                     models = fetched
@@ -756,6 +756,12 @@ private fun OAssistApp(
                             models = graph.providers.observeModelCatalog(capsProviderId).first()?.models ?: emptyList()
                         }
                     },
+                    onSaveProtocol = { protoProviderId, protoModelId, protocol ->
+                        scope.launch {
+                            graph.providers.updateModelProtocol(protoProviderId, protoModelId, protocol)
+                            models = graph.providers.observeModelCatalog(protoProviderId).first()?.models ?: emptyList()
+                        }
+                    },
                     loadVoices = { pkg -> graph.speechOutput.availableVoices(pkg) },
                     loadEngines = { graph.speechOutput.availableEngines() },
                     onBack = { navController.popBackStack() },
@@ -805,7 +811,7 @@ private suspend fun saveProvider(
                 apiKey != null -> graph.providers.setApiKey(updated.id, apiKey.toCharArray())
             }
             if (result is ProviderValidationResult.Success) {
-                graph.providers.saveModelCatalog(updated.id, result.models)
+                graph.providers.refreshModelCatalog(updated.id, result.models)
             }
             Result.success(result)
         }

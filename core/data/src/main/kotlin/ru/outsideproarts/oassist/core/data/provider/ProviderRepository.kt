@@ -8,6 +8,7 @@ import ru.outsideproarts.oassist.core.model.ModeConfig
 import ru.outsideproarts.oassist.core.model.ModelCapability
 import ru.outsideproarts.oassist.core.model.ModelCatalog
 import ru.outsideproarts.oassist.core.model.ModelInfo
+import ru.outsideproarts.oassist.core.model.ModelProtocol
 import ru.outsideproarts.oassist.core.model.ProviderProfile
 import ru.outsideproarts.oassist.core.model.Time
 
@@ -95,8 +96,8 @@ class ProviderRepository(
     }
 
     /**
-     * Точечное обновление capabilities одной модели (проба/ручная правка).
-     * Модели вне каталога (ручной ввод) — добавляются новой записью.
+     * Точечное обновление capabilities модели (проба/ручная правка).
+     * Модели ещё не было (ручной ввод) - добавляется. Отметка времени - новая.
      */
     suspend fun updateModelCapabilities(
         providerId: String,
@@ -106,6 +107,32 @@ class ProviderRepository(
         val current = store.modelCatalog(providerId).first()
         store.saveModelCatalog(
             patchModelCapabilities(current, providerId, modelId, capabilities, Time.nowEpochMs()),
+        )
+    }
+
+    /**
+     * Ручной override проводного протокола модели (для агрегаторов);
+     * null - вернуть авто-резолв.
+     */
+    suspend fun updateModelProtocol(
+        providerId: String,
+        modelId: String,
+        protocol: ModelProtocol?,
+    ) {
+        val current = store.modelCatalog(providerId).first()
+        store.saveModelCatalog(
+            patchModelProtocol(current, providerId, modelId, protocol, Time.nowEpochMs()),
+        )
+    }
+
+    /**
+     * Свежий список с провайдера: merge с правками пользователя
+     * (capabilities/protocol/label не теряются при «Обновить список»).
+     */
+    suspend fun refreshModelCatalog(providerId: String, fetched: List<ModelInfo>) {
+        val current = store.modelCatalog(providerId).first()
+        store.saveModelCatalog(
+            mergeModelCatalog(current, providerId, fetched, Time.nowEpochMs()),
         )
     }
 
@@ -140,4 +167,46 @@ internal fun patchModelCapabilities(
         models + ModelInfo(id = modelId, capabilities = capabilities)
     }
     return ModelCatalog(providerId = providerId, updatedAtEpochMs = nowEpochMs, models = updated)
+}
+
+/**
+ * Точечный override проводного протокола модели (null = авто-резолв):
+ * как [patchModelCapabilities], но поле protocol.
+ */
+internal fun patchModelProtocol(
+    current: ModelCatalog?,
+    providerId: String,
+    modelId: String,
+    protocol: ModelProtocol?,
+    nowEpochMs: Long,
+): ModelCatalog {
+    val models = current?.models.orEmpty()
+    val updated = if (models.any { it.id == modelId }) {
+        models.map { if (it.id == modelId) it.copy(protocol = protocol) else it }
+    } else {
+        models + ModelInfo(id = modelId, protocol = protocol)
+    }
+    return ModelCatalog(providerId = providerId, updatedAtEpochMs = nowEpochMs, models = updated)
+}
+
+/**
+ * Merge свежего списка с провайдера с правками пользователя: capabilities
+ * (проба/ручные), protocol (override) и label переживают обновление каталога.
+ */
+internal fun mergeModelCatalog(
+    current: ModelCatalog?,
+    providerId: String,
+    fetched: List<ModelInfo>,
+    nowEpochMs: Long,
+): ModelCatalog {
+    val existing = current?.models.orEmpty().associateBy { it.id }
+    val merged = fetched.map { fresh ->
+        val old = existing[fresh.id] ?: return@map fresh
+        fresh.copy(
+            label = fresh.label ?: old.label,
+            capabilities = old.capabilities.ifEmpty { fresh.capabilities },
+            protocol = old.protocol ?: fresh.protocol,
+        )
+    }
+    return ModelCatalog(providerId = providerId, updatedAtEpochMs = nowEpochMs, models = merged)
 }

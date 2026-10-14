@@ -95,7 +95,7 @@ class OpenAiProbeTest {
         val profile = ProviderProfile(
             id = "p1",
             name = "Zen",
-            kind = ProviderKind.OPENCODE_ZEN,
+            kind = ProviderKind.OPENCODE,
             baseUrl = "https://opencode.ai/zen/v1",
         )
         val zen = kotlinx.coroutines.runBlocking {

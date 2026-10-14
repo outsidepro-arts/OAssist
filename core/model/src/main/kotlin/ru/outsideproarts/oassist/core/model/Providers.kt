@@ -145,12 +145,19 @@ enum class ModelCapability {
     REASONING,
 }
 
-/** Модель из списка провайдера. Список моделей никогда не захардкожен — только запрос к провайдеру. */
+/**
+ * Модель из списка провайдера. Список моделей никогда не захардкожен — только запрос к провайдеру.
+ *
+ * [protocol] — **ручной override** проводного протокола модели (для агрегаторов);
+ * null — авто-резолв (каталог моделей → эвристика по id → chat/completions).
+ * Сознательно не «решённый» протокол: авто-резолв живой и не персистится.
+ */
 @Serializable
 data class ModelInfo(
     val id: String,
     val label: String? = null,
     val capabilities: Set<ModelCapability> = emptySet(),
+    val protocol: ModelProtocol? = null,
 )
 
 /** Кэш списка моделей провайдера. */

@@ -74,9 +74,10 @@
 
     <!-- Типы провайдеров -->
     <string name="provider_kind_openai_compat_desc">OpenAI-совместимый API (OpenAI, OpenRouter, локальные серверы)</string>
-    <string name="provider_kind_anthropic_desc">Anthropic Messages API — поддержка появится позже</string>
-    <string name="provider_kind_gemini_desc">Google Gemini API — поддержка появится позже</string>
-    <string name="provider_kind_opencode_desc">OpenCode Zen / Go — OpenAI-совместимый API + заголовки x-opencode-*</string>
+    <string name="provider_kind_anthropic_desc">Anthropic Messages API (Claude)</string>
+    <string name="provider_kind_gemini_desc">Google Gemini API</string>
+    <string name="provider_kind_openai_responses_desc">OpenAI Responses API (GPT/Grok)</string>
+    <string name="provider_kind_opencode_desc">OpenCode Zen / Go — агрегатор: протокол выбирается по модели</string>
 
     <string name="provider_save_error_title">Не удалось сохранить провайдера</string>
     <string name="provider_validating">Проверка подключения…</string>
@@ -97,6 +98,14 @@
     <string name="mode_caps_title">Возможности модели</string>
     <string name="mode_probe">Проверить</string>
     <string name="mode_probe_hint">Проба — короткий запрос с фиктивным инструментом</string>
+    <string name="mode_protocol_title">Протокол модели</string>
+    <string name="mode_protocol_auto">Авто</string>
+    <string name="mode_protocol_hint">Авто — по каталогу моделей и имени; вручную — если агрегатор увёл модель не туда</string>
+    <string name="mode_protocol_badge">Протокол: %1$s</string>
+    <string name="protocol_openai_completions">OpenAI Chat Completions</string>
+    <string name="protocol_openai_responses">OpenAI Responses</string>
+    <string name="protocol_anthropic_messages">Anthropic Messages</string>
+    <string name="protocol_gemini_generate">Google Gemini</string>
     <string name="cap_tools">Инструменты</string>
     <string name="cap_vision">Зрение</string>
     <string name="cap_audio_in">Аудиовход</string>

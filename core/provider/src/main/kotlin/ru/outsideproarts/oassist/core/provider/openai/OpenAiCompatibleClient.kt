@@ -27,43 +27,44 @@ import kotlinx.serialization.json.put
 import ru.outsideproarts.oassist.core.data.secret.SecretStore
 import ru.outsideproarts.oassist.core.model.ModelCapability
 import ru.outsideproarts.oassist.core.model.ModelInfo
-import ru.outsideproarts.oassist.core.model.ProviderKind
+import ru.outsideproarts.oassist.core.model.ModelProtocol
 import ru.outsideproarts.oassist.core.model.ProviderProfile
 import ru.outsideproarts.oassist.core.model.ProviderUsage
 import ru.outsideproarts.oassist.core.model.mergeUsage
 import ru.outsideproarts.oassist.core.provider.ChatChunk
 import ru.outsideproarts.oassist.core.provider.ChatMessage
 import ru.outsideproarts.oassist.core.provider.ChatRole
+import ru.outsideproarts.oassist.core.provider.EndpointConfig
 import ru.outsideproarts.oassist.core.provider.ImageCodec
 import ru.outsideproarts.oassist.core.provider.ModelClient
 import ru.outsideproarts.oassist.core.provider.ProviderAuth
 import ru.outsideproarts.oassist.core.provider.ProviderError
 import ru.outsideproarts.oassist.core.provider.ProviderJson
 import ru.outsideproarts.oassist.core.provider.detectStreamErrorMessage
+import ru.outsideproarts.oassist.core.provider.dialogKey
+import ru.outsideproarts.oassist.core.provider.isProtocolUnsupportedMessage
+import ru.outsideproarts.oassist.core.provider.resolveProviderAuth
 
-class OpenAiCompatibleClient private constructor(
-    private val profile: ProviderProfile,
-    private val auth: ProviderAuth,
+class OpenAiCompatibleClient internal constructor(
+    private val endpoint: EndpointConfig,
     private val http: HttpClient,
 ) : ModelClient {
 
-    private val isZen: Boolean = profile.kind == ProviderKind.OPENCODE_ZEN
-
     override suspend fun fetchModels(): List<ModelInfo> {
-        val modelsUrl = URLBuilder(profile.baseUrl).apply {
+        val modelsUrl = URLBuilder(endpoint.baseUrl).apply {
             appendPathSegments("models")
         }.buildString()
         val response = http.request {
             method = HttpMethod.Get
             url.takeFrom(modelsUrl)
-            applyAuth(zenSessionId = if (isZen) OpenCodeZen.sessionId(profile.baseUrl) else null)
+            applyAuth(dialogKey = endpoint.baseUrl)
         }
         val dto = ProviderJson.decodeFromString(OpenAiModelsResponseDto.serializer(), response.bodyAsText())
         return dto.data.map { ModelInfo(id = it.id) }
     }
 
     override suspend fun probeCapabilities(modelId: String): Set<ModelCapability> {
-        val chatUrl = URLBuilder(profile.baseUrl).apply {
+        val chatUrl = URLBuilder(endpoint.baseUrl).apply {
             appendPathSegments("chat", "completions")
         }.buildString()
         val requestDto = ChatRequestDto(
@@ -77,7 +78,7 @@ class OpenAiCompatibleClient private constructor(
             val response = http.request {
                 method = HttpMethod.Post
                 url.takeFrom(chatUrl)
-                applyAuth(zenSessionId = if (isZen) OpenCodeZen.sessionId(dialogHead(emptyList())) else null)
+                applyAuth(dialogKey = dialogKey(emptyList()))
                 contentType(ContentType.Application.Json)
                 setBody(requestDto)
             }
@@ -86,7 +87,10 @@ class OpenAiCompatibleClient private constructor(
         } catch (e: ResponseException) {
             // 400 — сервер не принял `tools` (модель без инструментов или строгий
             // гейт): это сигнал, а не ошибка. 401/404/сеть — пробрасываются выше.
-            if (e.response.status == HttpStatusCode.BadRequest) return emptySet()
+            // «Не тот протокол» (агрегаторы) тоже пробрасывается — гейт фолбэка.
+            if (e.response.status == HttpStatusCode.BadRequest && !isProtocolUnsupportedMessage(e.message)) {
+                return emptySet()
+            }
             throw e
         }
     }
@@ -96,10 +100,9 @@ class OpenAiCompatibleClient private constructor(
         messages: List<ChatMessage>,
         tools: List<ToolSchemaDto>,
     ): Flow<ChatChunk> = flow {
-        val chatUrl = URLBuilder(profile.baseUrl).apply {
+        val chatUrl = URLBuilder(endpoint.baseUrl).apply {
             appendPathSegments("chat", "completions")
         }.buildString()
-        val zenSessionId = if (isZen) OpenCodeZen.sessionId(dialogHead(messages)) else null
         val requestDto = ChatRequestDto(
             model = modelId,
             messages = messages.flatMap { it.toDtos() },
@@ -113,7 +116,7 @@ class OpenAiCompatibleClient private constructor(
             request = {
                 method = HttpMethod.Post
                 url.takeFrom(chatUrl)
-                applyAuth(zenSessionId)
+                applyAuth(dialogKey = dialogKey(messages))
                 contentType(ContentType.Application.Json)
                 setBody(requestDto)
             },
@@ -188,19 +191,13 @@ class OpenAiCompatibleClient private constructor(
         }
     }
 
-    private fun HttpRequestBuilder.applyAuth(zenSessionId: String? = null) {
+    private fun HttpRequestBuilder.applyAuth(dialogKey: String) {
         // Zen/совместимые API — только Bearer (API-ключ); Basic Auth удалён:
         // стандартный сервер opencode.ai его не поддерживает.
-        auth.bearerToken?.let {
+        endpoint.auth.bearerToken?.let {
             headers.append(HttpHeaders.Authorization, "Bearer " + String(it))
         }
-        if (zenSessionId != null) {
-            headers.append(OpenCodeZen.SESSION_HEADER, zenSessionId)
-            headers.append(OpenCodeZen.REQUEST_HEADER, OpenCodeZen.requestId())
-        }
-        auth.extraHeaders.forEach { (name, value) ->
-            headers.append(name, value)
-        }
+        endpoint.decorateHeaders(this, dialogKey)
     }
 
     companion object {
@@ -219,39 +216,19 @@ class OpenAiCompatibleClient private constructor(
             ),
         )
 
-        /** «Голова» диалога: первое system-сообщение + первый user-вопрос. */
-        internal fun dialogHead(messages: List<ChatMessage>): String {
-            val system = messages.firstOrNull { it.role == ChatRole.SYSTEM }?.content.orEmpty()
-            val firstUser = messages.firstOrNull { it.role == ChatRole.USER }?.content.orEmpty()
-            return "$system\u0000$firstUser"
-        }
-
         suspend fun fromProfile(
             profile: ProviderProfile,
             secretStore: SecretStore,
             httpClient: HttpClient,
             overrides: ProviderAuth? = null,
-        ): OpenAiCompatibleClient {
-            val apiKey = overrides?.bearerToken ?: profile.apiKeyRef?.let { secretStore.get(it) }
-            val extras = if (overrides != null && overrides.extraHeaders.isNotEmpty()) {
-                overrides.extraHeaders
-            } else {
-                profile.extraHeaders.mapNotNull { (name, alias) ->
-                    val value = secretStore.get(alias) ?: return@mapNotNull null
-                    try {
-                        name to String(value)
-                    } finally {
-                        value.fill('\u0000')
-                    }
-                }.toMap()
-            }
-
-            val auth = ProviderAuth(
-                bearerToken = apiKey,
-                extraHeaders = extras,
-            )
-            return OpenAiCompatibleClient(profile, auth, httpClient)
-        }
+        ): OpenAiCompatibleClient = OpenAiCompatibleClient(
+            EndpointConfig(
+                protocol = ModelProtocol.OPENAI_COMPLETIONS,
+                baseUrl = profile.baseUrl,
+                auth = resolveProviderAuth(profile, secretStore, overrides),
+            ),
+            httpClient,
+        )
 
         private fun ChatRole.toWire(): String = when (this) {
             ChatRole.SYSTEM -> "system"

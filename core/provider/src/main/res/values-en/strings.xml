@@ -1,6 +1,13 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <string name="provider_error_auth">Invalid API key or access denied</string>
+    <string name="provider_error_free_tier">Free OpenCode models work only inside the OpenCode client - pick a paid model</string>
+    <string name="provider_error_region_blocked">The model is not available in your region (provider restriction)</string>
+    <string name="provider_error_model_deprecated">The model is deprecated. Use: %1$s</string>
+    <string name="provider_error_model_deprecated_plain">The model is deprecated - pick another one</string>
+    <string name="provider_error_model_protocol">The model does not support this protocol - check Model protocol in mode settings</string>
+    <string name="provider_error_model_access">Model access is disabled for this API key</string>
+    <string name="provider_error_upstream_unavailable">The model service is temporarily unavailable - try again later</string>
     <string name="provider_error_not_found">Endpoint not found — check Base URL</string>
     <string name="provider_error_http">HTTP error %1$d</string>
     <string name="provider_error_network">Network unavailable or server not responding</string>

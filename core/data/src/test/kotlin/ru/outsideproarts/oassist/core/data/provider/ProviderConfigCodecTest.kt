@@ -11,6 +11,7 @@ import ru.outsideproarts.oassist.core.model.ModeConfig
 import ru.outsideproarts.oassist.core.model.ModelCapability
 import ru.outsideproarts.oassist.core.model.ModelCatalog
 import ru.outsideproarts.oassist.core.model.ModelInfo
+import ru.outsideproarts.oassist.core.model.ModelProtocol
 import ru.outsideproarts.oassist.core.model.ProviderKind
 import ru.outsideproarts.oassist.core.model.ProviderProfile
 import ru.outsideproarts.oassist.core.model.ShareExtras
@@ -61,40 +62,43 @@ class ProviderConfigCodecTest {
         val decoded = json.decodeFromString<ProviderProfile>(legacyJson)
 
         assertEquals("p1", decoded.id)
-        assertEquals(ProviderKind.OPENCODE_ZEN, decoded.kind)
+        assertEquals(ProviderKind.OPENCODE, decoded.kind)
     }
 
     @Test
-    fun providerProfile_legacyOpenCodeKind_migratesToOpenCodeZen() {
-        val legacyJson = """
-            {
-              "id": "p1",
-              "name": "Zen",
-              "kind": "OPENCODE",
-              "baseUrl": "https://opencode.ai/zen/go/v1"
-            }
-        """.trimIndent()
+    fun providerProfile_legacyOpenCodeKinds_migrateToOpenCode() {
+        val legacyKinds = listOf("OPENCODE", "OPENCODE_ZEN")
+        for (legacy in legacyKinds) {
+            val legacyJson = """
+                {
+                  "id": "p1",
+                  "name": "Zen",
+                  "kind": "$legacy",
+                  "baseUrl": "https://opencode.ai/zen/go/v1"
+                }
+            """.trimIndent()
 
-        val decoded = json.decodeFromString<ProviderProfile>(legacyJson)
+            val decoded = json.decodeFromString<ProviderProfile>(legacyJson)
 
-        assertEquals(ProviderKind.OPENCODE_ZEN, decoded.kind)
+            assertEquals("kind=$legacy", ProviderKind.OPENCODE, decoded.kind)
+        }
     }
 
     @Test
-    fun providerProfile_openCodeZenKind_roundTrips() {
+    fun providerProfile_openCodeKind_roundTrips() {
         val profile = ProviderProfile(
             id = "p1",
             name = "Zen Go",
-            kind = ProviderKind.OPENCODE_ZEN,
+            kind = ProviderKind.OPENCODE,
             baseUrl = "https://opencode.ai/zen/go/v1",
         )
 
         val encoded = json.encodeToString(profile)
         val decoded = json.decodeFromString<ProviderProfile>(encoded)
 
-        assertEquals(ProviderKind.OPENCODE_ZEN, decoded.kind)
-        assertEquals(true, encoded.contains("OPENCODE_ZEN"))
-        assertEquals(false, encoded.contains("\"OPENCODE\""))
+        assertEquals(ProviderKind.OPENCODE, decoded.kind)
+        assertEquals(true, encoded.contains("\"OPENCODE\""))
+        assertEquals(false, encoded.contains("OPENCODE_ZEN"))
     }
 
     @Test
@@ -249,6 +253,22 @@ class ProviderConfigCodecTest {
         val decoded = json.decodeFromString<ModelCatalog>(json.encodeToString(catalog))
 
         assertEquals(catalog, decoded)
+    }
+
+    @Test
+    fun modelInfo_protocolOverride_roundTrips() {
+        val info = ModelInfo(id = "claude-opus-4-8", protocol = ModelProtocol.ANTHROPIC_MESSAGES)
+
+        val decoded = json.decodeFromString<ModelInfo>(json.encodeToString(info))
+
+        assertEquals(ModelProtocol.ANTHROPIC_MESSAGES, decoded.protocol)
+    }
+
+    @Test
+    fun modelInfo_legacyJsonWithoutProtocol_readsNull() {
+        val legacy = json.decodeFromString<ModelInfo>("""{"id":"gpt-4o","label":"GPT-4o"}""")
+
+        assertEquals(null, legacy.protocol)
     }
 
     @Test

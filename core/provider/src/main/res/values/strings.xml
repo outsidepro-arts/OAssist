@@ -1,6 +1,13 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <string name="provider_error_auth">Неверный API-ключ или нет доступа</string>
+    <string name="provider_error_free_tier">Бесплатные модели OpenCode доступны только внутри клиента OpenCode — выберите платную модель</string>
+    <string name="provider_error_region_blocked">Модель недоступна в вашем регионе (ограничение провайдера)</string>
+    <string name="provider_error_model_deprecated">Модель устарела. Используйте: %1$s</string>
+    <string name="provider_error_model_deprecated_plain">Модель устарела — выберите другую</string>
+    <string name="provider_error_model_protocol">Модель не поддерживает этот протокол — проверьте «Протокол модели» в настройках режима</string>
+    <string name="provider_error_model_access">Доступ к модели отключён для этого ключа</string>
+    <string name="provider_error_upstream_unavailable">Сервис модели временно недоступен — попробуйте позже</string>
     <string name="provider_error_not_found">Эндпоинт не найден — проверьте Base URL</string>
     <string name="provider_error_http">Ошибка HTTP %1$d</string>
     <string name="provider_error_network">Сеть недоступна или сервер не отвечает</string>

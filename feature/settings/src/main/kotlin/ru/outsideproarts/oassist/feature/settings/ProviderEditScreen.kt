@@ -365,7 +365,8 @@ private fun kindDescription(kind: ProviderKind): String = when (kind) {
     ProviderKind.OPENAI_COMPAT -> stringResource(R.string.provider_kind_openai_compat_desc)
     ProviderKind.ANTHROPIC -> stringResource(R.string.provider_kind_anthropic_desc)
     ProviderKind.GEMINI -> stringResource(R.string.provider_kind_gemini_desc)
-            ProviderKind.OPENCODE_ZEN -> stringResource(R.string.provider_kind_opencode_desc)
+    ProviderKind.OPENAI_RESPONSES -> stringResource(R.string.provider_kind_openai_responses_desc)
+    ProviderKind.OPENCODE -> stringResource(R.string.provider_kind_opencode_desc)
 }
 
 private fun generateId(): String = "p${System.currentTimeMillis()}"

@@ -56,6 +56,7 @@ import ru.outsideproarts.oassist.core.model.ModeConfig
 import ru.outsideproarts.oassist.core.model.ShareExtras
 import ru.outsideproarts.oassist.core.model.ModelCapability
 import ru.outsideproarts.oassist.core.model.ModelInfo
+import ru.outsideproarts.oassist.core.model.ModelProtocol
 import ru.outsideproarts.oassist.core.model.ProviderProfile
 import ru.outsideproarts.oassist.core.model.SpeechOutputChannel
 import ru.outsideproarts.oassist.core.model.SttConfig
@@ -83,6 +84,7 @@ fun ModeConfigScreen(
     isProbing: Boolean,
     onProbeModel: (providerId: String, modelId: String) -> Unit,
     onSaveCapabilities: (providerId: String, modelId: String, capabilities: Set<ModelCapability>) -> Unit,
+    onSaveProtocol: (providerId: String, modelId: String, protocol: ModelProtocol?) -> Unit = { _, _, _ -> },
     onBack: () -> Unit,
     modifier: Modifier = Modifier,
     /** Установленные синтезаторы; пусто — список недоступен (только дефолт). */
@@ -343,6 +345,49 @@ fun ModeConfigScreen(
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     modifier = Modifier.weight(1f),
                 )
+            }
+
+            OAssistSectionHeading(text = stringResource(R.string.mode_protocol_title))
+            var protocolExpanded by remember { mutableStateOf(false) }
+            val currentProtocol = models.find { it.id == modelId }?.protocol
+            ExposedDropdownMenuBox(
+                expanded = protocolExpanded,
+                onExpandedChange = { protocolExpanded = it },
+            ) {
+                OutlinedTextField(
+                    value = currentProtocol?.let { protocolName(it) } ?: stringResource(R.string.mode_protocol_auto),
+                    onValueChange = {},
+                    label = { Text(stringResource(R.string.mode_protocol_title)) },
+                    readOnly = true,
+                    enabled = modelId.isNotBlank(),
+                    trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = protocolExpanded) },
+                    supportingText = { Text(stringResource(R.string.mode_protocol_hint)) },
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .menuAnchor(ExposedDropdownMenuAnchorType.PrimaryNotEditable)
+                        .oassistDropdownClassName(),
+                )
+                ExposedDropdownMenu(
+                    expanded = protocolExpanded,
+                    onDismissRequest = { protocolExpanded = false },
+                ) {
+                    DropdownMenuItem(
+                        text = { Text(stringResource(R.string.mode_protocol_auto)) },
+                        onClick = {
+                            if (modelId.isNotBlank()) onSaveProtocol(providerId, modelId, null)
+                            protocolExpanded = false
+                        },
+                    )
+                    ModelProtocol.entries.forEach { p ->
+                        DropdownMenuItem(
+                            text = { Text(protocolName(p)) },
+                            onClick = {
+                                if (modelId.isNotBlank()) onSaveProtocol(providerId, modelId, p)
+                                protocolExpanded = false
+                            },
+                        )
+                    }
+                }
             }
 
             Row(
@@ -1001,6 +1046,14 @@ private fun capabilityLabel(cap: ModelCapability): String = when (cap) {
     ModelCapability.REASONING -> stringResource(R.string.cap_reasoning)
 }
 
+@Composable
+private fun protocolName(protocol: ModelProtocol): String = when (protocol) {
+    ModelProtocol.OPENAI_COMPLETIONS -> stringResource(R.string.protocol_openai_completions)
+    ModelProtocol.OPENAI_RESPONSES -> stringResource(R.string.protocol_openai_responses)
+    ModelProtocol.ANTHROPIC_MESSAGES -> stringResource(R.string.protocol_anthropic_messages)
+    ModelProtocol.GEMINI_GENERATE -> stringResource(R.string.protocol_gemini_generate)
+}
+
 /**
  * Пикер моделей: диалог со списком от провайдера. Тап по модели заполняет
  * поле ID модели выбранной. Список обновляется кнопкой «Обновить».
@@ -1056,11 +1109,22 @@ private fun ModelPickerDialog(
                             .oassistTouchTarget()
                             .semantics { contentDescription = itemLabel },
                     ) {
-                        Text(
-                            text = m.id,
-                            style = MaterialTheme.typography.bodyLarge,
-                            modifier = Modifier.fillMaxWidth(),
-                        )
+                        Column(modifier = Modifier.fillMaxWidth()) {
+                            Text(
+                                text = m.id,
+                                style = MaterialTheme.typography.bodyLarge,
+                                modifier = Modifier.fillMaxWidth(),
+                            )
+                            val protocolOverride = m.protocol
+                            if (protocolOverride != null) {
+                                Text(
+                                    text = stringResource(R.string.mode_protocol_badge, protocolName(protocolOverride)),
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    modifier = Modifier.fillMaxWidth(),
+                                )
+                            }
+                        }
                     }
                 }
             }

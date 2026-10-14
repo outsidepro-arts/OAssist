@@ -20,15 +20,21 @@ import kotlinx.serialization.json.JsonPrimitive
 import ru.outsideproarts.oassist.core.data.secret.SecretStore
 import ru.outsideproarts.oassist.core.model.ModelCapability
 import ru.outsideproarts.oassist.core.model.ModelInfo
+import ru.outsideproarts.oassist.core.model.ModelProtocol
 import ru.outsideproarts.oassist.core.model.ProviderProfile
 import ru.outsideproarts.oassist.core.model.ProviderUsage
 import ru.outsideproarts.oassist.core.model.mergeUsage
 import ru.outsideproarts.oassist.core.provider.ChatChunk
 import ru.outsideproarts.oassist.core.provider.ChatMessage
+import ru.outsideproarts.oassist.core.provider.EndpointConfig
 import ru.outsideproarts.oassist.core.provider.ModelClient
 import ru.outsideproarts.oassist.core.provider.ProviderAuth
 import ru.outsideproarts.oassist.core.provider.ProviderError
 import ru.outsideproarts.oassist.core.provider.ProviderJson
+import ru.outsideproarts.oassist.core.provider.UrlStyle
+import ru.outsideproarts.oassist.core.provider.dialogKey
+import ru.outsideproarts.oassist.core.provider.isProtocolUnsupportedMessage
+import ru.outsideproarts.oassist.core.provider.resolveProviderAuth
 import ru.outsideproarts.oassist.core.provider.openai.ToolSchemaDto
 
 /**
@@ -36,17 +42,16 @@ import ru.outsideproarts.oassist.core.provider.openai.ToolSchemaDto
  * Auth — `x-api-key` + `anthropic-version` (не Bearer); `baseUrl` — хост
  * (`https://api.anthropic.com`) или с суффиксом `/v1`, удвоение не допускается.
  */
-class AnthropicClient private constructor(
-    private val profile: ProviderProfile,
-    private val auth: ProviderAuth,
+class AnthropicClient internal constructor(
+    private val endpoint: EndpointConfig,
     private val http: HttpClient,
 ) : ModelClient {
 
     override suspend fun fetchModels(): List<ModelInfo> {
         val response = http.request {
             method = HttpMethod.Get
-            url.takeFrom(modelsUrl(profile.baseUrl))
-            applyAuth()
+            url.takeFrom(modelsUrl(endpoint.baseUrl, endpoint.urlStyle))
+            applyAuth(dialogKey = endpoint.baseUrl)
         }
         val dto = ProviderJson.decodeFromString(
             AnthropicModelsResponseDto.serializer(),
@@ -66,8 +71,8 @@ class AnthropicClient private constructor(
         try {
             val response = http.request {
                 method = HttpMethod.Post
-                url.takeFrom(messagesUrl(profile.baseUrl))
-                applyAuth()
+                url.takeFrom(messagesUrl(endpoint.baseUrl, endpoint.urlStyle))
+                applyAuth(dialogKey = dialogKey(emptyList()))
                 contentType(ContentType.Application.Json)
                 setBody(requestDto)
             }
@@ -78,7 +83,10 @@ class AnthropicClient private constructor(
             return setOf(ModelCapability.TOOLS)
         } catch (e: ResponseException) {
             // 400 — модель не приняла `tools`: сигнал, а не ошибка.
-            if (e.response.status == HttpStatusCode.BadRequest) return emptySet()
+            // «Не тот протокол» (агрегаторы) пробрасывается — гейт фолбэка.
+            if (e.response.status == HttpStatusCode.BadRequest && !isProtocolUnsupportedMessage(e.message)) {
+                return emptySet()
+            }
             throw e
         }
     }
@@ -98,8 +106,8 @@ class AnthropicClient private constructor(
         http.sse(
             request = {
                 method = HttpMethod.Post
-                url.takeFrom(messagesUrl(profile.baseUrl))
-                applyAuth()
+                url.takeFrom(messagesUrl(endpoint.baseUrl, endpoint.urlStyle))
+                applyAuth(dialogKey = dialogKey(messages))
                 contentType(ContentType.Application.Json)
                 setBody(requestDto)
             },
@@ -212,16 +220,14 @@ class AnthropicClient private constructor(
         }
     }
 
-    private fun HttpRequestBuilder.applyAuth() {
-        auth.bearerToken?.let {
+    private fun HttpRequestBuilder.applyAuth(dialogKey: String) {
+        endpoint.auth.bearerToken?.let {
             headers.append(API_KEY_HEADER, String(it))
         }
-        if (!auth.extraHeaders.containsKey(VERSION_HEADER)) {
+        if (!endpoint.auth.extraHeaders.containsKey(VERSION_HEADER)) {
             headers.append(VERSION_HEADER, ANTHROPIC_VERSION)
         }
-        auth.extraHeaders.forEach { (name, value) ->
-            headers.append(name, value)
-        }
+        endpoint.decorateHeaders(this, dialogKey)
     }
 
     companion object {
@@ -241,16 +247,23 @@ class AnthropicClient private constructor(
 
         /**
          * URL списка моделей: `{base}/v1/models`. Хвост `/v1` в base терпится,
-         * чтобы не удваивать (`.../v1/v1/models`).
+         * чтобы не удваивать (`.../v1/v1/models`). [UrlStyle.FLAT] дописывает
+         * путь как есть (`{base}/models`) — layout агрегаторов.
          */
-        internal fun modelsUrl(baseUrl: String): String {
+        internal fun modelsUrl(baseUrl: String, style: UrlStyle = UrlStyle.NATIVE): String {
             val base = baseUrl.trimEnd('/')
-            return if (base.endsWith("/v1")) "$base/models" else "$base/v1/models"
+            return when (style) {
+                UrlStyle.FLAT -> "$base/models"
+                UrlStyle.NATIVE -> if (base.endsWith("/v1")) "$base/models" else "$base/v1/models"
+            }
         }
 
-        internal fun messagesUrl(baseUrl: String): String {
+        internal fun messagesUrl(baseUrl: String, style: UrlStyle = UrlStyle.NATIVE): String {
             val base = baseUrl.trimEnd('/')
-            return if (base.endsWith("/v1")) "$base/messages" else "$base/v1/messages"
+            return when (style) {
+                UrlStyle.FLAT -> "$base/messages"
+                UrlStyle.NATIVE -> if (base.endsWith("/v1")) "$base/messages" else "$base/v1/messages"
+            }
         }
 
         suspend fun fromProfile(
@@ -258,25 +271,13 @@ class AnthropicClient private constructor(
             secretStore: SecretStore,
             httpClient: HttpClient,
             overrides: ProviderAuth? = null,
-        ): AnthropicClient {
-            val apiKey = overrides?.bearerToken ?: profile.apiKeyRef?.let { secretStore.get(it) }
-            val extras = if (overrides != null && overrides.extraHeaders.isNotEmpty()) {
-                overrides.extraHeaders
-            } else {
-                profile.extraHeaders.mapNotNull { (name, alias) ->
-                    val value = secretStore.get(alias) ?: return@mapNotNull null
-                    try {
-                        name to String(value)
-                    } finally {
-                        value.fill('\u0000')
-                    }
-                }.toMap()
-            }
-            return AnthropicClient(
-                profile,
-                ProviderAuth(bearerToken = apiKey, extraHeaders = extras),
-                httpClient,
-            )
-        }
+        ): AnthropicClient = AnthropicClient(
+            EndpointConfig(
+                protocol = ModelProtocol.ANTHROPIC_MESSAGES,
+                baseUrl = profile.baseUrl,
+                auth = resolveProviderAuth(profile, secretStore, overrides),
+            ),
+            httpClient,
+        )
     }
 }

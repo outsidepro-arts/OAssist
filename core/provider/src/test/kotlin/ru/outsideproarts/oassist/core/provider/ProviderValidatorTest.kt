@@ -145,7 +145,7 @@ class ProviderValidatorTest {
             )
         }
         val result = validator(engine).validate(
-            profile(kind = ProviderKind.OPENCODE_ZEN, baseUrl = "https://zen.example.com/v1"),
+            profile(kind = ProviderKind.OPENCODE, baseUrl = "https://zen.example.com/v1"),
         )
         val models = (result as ProviderValidationResult.Success).models
         assertEquals(listOf("glm-5.3"), models.map { it.id })

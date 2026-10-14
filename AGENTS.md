@@ -144,7 +144,7 @@ API-ключи, токены, пароли, значения `extraHeaders`, Bas
 
 ### 3. Никаких захардкоженных списков моделей
 
-Список моделей **только** через запрос к провайдеру (`/models`, `/v1/models`, `/v1beta/models`, у OpenCode — `/provider`). Фолбэк — ручной ввод `modelId`. Никаких статических списков в коде/ресурсах.
+Список моделей **только** через запрос к провайдеру (`/models`, `/v1/models`, `/v1beta/models`). Фолбэк — ручной ввод `modelId`. Никаких статических списков в коде/ресурсах (models.dev — только маршрутизация протокола агрегаторов, не список моделей).
 
 ### 4. Русский приоритетен
 
@@ -165,7 +165,7 @@ API-ключи, токены, пароли, значения `extraHeaders`, Bas
 
 ### 7. Модель данных провайдеров/режимов
 
-- `ProviderProfile` — **несколько** профилей (`OPENAI_COMPAT | ANTHROPIC | GEMINI | OPENCODE`), каждый со `baseUrl`, `apiKeyRef` (alias в `SecretStore`), `extraHeaders`.
+- `ProviderProfile` — **несколько** профилей (`OPENAI_COMPAT | ANTHROPIC | GEMINI | OPENAI_RESPONSES | OPENCODE`), каждый со `baseUrl`, `apiKeyRef` (alias в `SecretStore`), `extraHeaders`. `OPENCODE` — агрегатор (Zen/Go): протокол каждой модели выбирается по цепочке «ручной override → models.dev (`provider.npm`) → эвристика по id».
 - `ModeConfig` — три режима (`CHAT | ASSISTANT | SHARE`), у каждого **свои** провайдер, модель и initial prompt.
 - **Общее** на все режимы: скиллы, память (`MEMORY.md`), MCP-серверы, STT/TTS, привилегии, каталог инструментов.
 

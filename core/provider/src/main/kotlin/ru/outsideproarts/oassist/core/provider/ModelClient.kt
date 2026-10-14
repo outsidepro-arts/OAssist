@@ -4,13 +4,16 @@ import kotlinx.coroutines.flow.Flow
 import ru.outsideproarts.oassist.core.model.ApprovalRequest
 import ru.outsideproarts.oassist.core.model.ModelCapability
 import ru.outsideproarts.oassist.core.model.ModelInfo
+import ru.outsideproarts.oassist.core.model.ModelProtocol
 import ru.outsideproarts.oassist.core.model.ProviderKind
 import ru.outsideproarts.oassist.core.model.ProviderProfile
 import ru.outsideproarts.oassist.core.model.ProviderUsage
 import ru.outsideproarts.oassist.core.provider.anthropic.AnthropicClient
 import ru.outsideproarts.oassist.core.provider.gemini.GeminiClient
 import ru.outsideproarts.oassist.core.provider.openai.OpenAiCompatibleClient
+import ru.outsideproarts.oassist.core.provider.openai.OpenAiResponsesClient
 import ru.outsideproarts.oassist.core.provider.openai.ToolSchemaDto
+import ru.outsideproarts.oassist.core.provider.opencode.OpenCodeRoutingClient
 
 /**
  * Резолвленный набор секретов и заголовков для конкретного запроса.
@@ -144,22 +147,47 @@ interface ModelClient {
 
     companion object {
         /**
-         * Создаёт клиент по типу профиля.
+         * Создаёт клиент по типу профиля: простой протокол — свой протокольный
+         * клиент; [ProviderKind.OPENCODE] — агрегатор с роутингом по модели.
          * [overrides] — несохранённые значения из полей ввода (для проверки перед сохранением);
          * null-поля берутся из профиля/SecretStore как обычно.
+         * [protocolOverride] — ручной выбор протокола модели (из каталога);
+         * [modelsDev] — каталог models.dev для авто-резолва протокола/имён агрегаторов.
          */
         suspend fun create(
             profile: ProviderProfile,
             secretStore: ru.outsideproarts.oassist.core.data.secret.SecretStore,
             httpClient: io.ktor.client.HttpClient = ru.outsideproarts.oassist.core.net.HttpClientFactory.create(),
             overrides: ProviderAuth? = null,
-        ): ModelClient = when (profile.kind) {
-            ProviderKind.OPENAI_COMPAT, ProviderKind.OPENCODE_ZEN ->
-                OpenAiCompatibleClient.fromProfile(profile, secretStore, httpClient, overrides)
-            ProviderKind.ANTHROPIC ->
-                AnthropicClient.fromProfile(profile, secretStore, httpClient, overrides)
-            ProviderKind.GEMINI ->
-                GeminiClient.fromProfile(profile, secretStore, httpClient, overrides)
+            protocolOverride: suspend (modelId: String) -> ModelProtocol? = { null },
+            modelsDev: ru.outsideproarts.oassist.core.provider.modelsdev.ModelsDevCatalog? = null,
+        ): ModelClient {
+            val auth = resolveProviderAuth(profile, secretStore, overrides)
+            return when (profile.kind) {
+                ProviderKind.OPENAI_COMPAT -> OpenAiCompatibleClient(
+                    EndpointConfig(ModelProtocol.OPENAI_COMPLETIONS, profile.baseUrl, auth),
+                    httpClient,
+                )
+                ProviderKind.ANTHROPIC -> AnthropicClient(
+                    EndpointConfig(ModelProtocol.ANTHROPIC_MESSAGES, profile.baseUrl, auth),
+                    httpClient,
+                )
+                ProviderKind.GEMINI -> GeminiClient(
+                    EndpointConfig(ModelProtocol.GEMINI_GENERATE, profile.baseUrl, auth),
+                    httpClient,
+                )
+                ProviderKind.OPENAI_RESPONSES -> OpenAiResponsesClient(
+                    EndpointConfig(ModelProtocol.OPENAI_RESPONSES, profile.baseUrl, auth),
+                    httpClient,
+                )
+                ProviderKind.OPENCODE -> OpenCodeRoutingClient(
+                    profile.baseUrl,
+                    auth,
+                    httpClient,
+                    protocolOverride,
+                    modelsDev,
+                )
+            }
         }
     }
 }

@@ -1,11 +1,13 @@
-package ru.outsideproarts.oassist.core.provider.openai
+package ru.outsideproarts.oassist.core.provider.opencode
 
+import ru.outsideproarts.oassist.core.provider.RequestHeaders
 import java.util.UUID
 
 /**
- * Заголовки OpenCode Zen (и Go): relay пинает запросы диалога на один backend
+ * Заголовки OpenCode (Zen и Go): relay пинает запросы диалога на один backend
  * по `x-opencode-session` — это греет prompt cache. `x-opencode-request` —
- * идентификатор каждого HTTP-запроса.
+ * идентификатор каждого HTTP-запроса. Слой агрегатора: шлём на **все**
+ * транспорты (completions/responses/messages/gemini).
  */
 internal object OpenCodeZen {
     const val SESSION_HEADER = "x-opencode-session"
@@ -21,4 +23,12 @@ internal object OpenCodeZen {
 
     /** Свежий id запроса в формате `msg_<uuid>`. */
     fun requestId(): String = "msg_" + UUID.randomUUID()
+}
+
+/** Декоратор заголовков OpenCode для [ru.outsideproarts.oassist.core.provider.EndpointConfig]. */
+internal class OpenCodeRequestHeaders : RequestHeaders {
+    override fun headersFor(dialogKey: String): Map<String, String> = mapOf(
+        OpenCodeZen.SESSION_HEADER to OpenCodeZen.sessionId(dialogKey),
+        OpenCodeZen.REQUEST_HEADER to OpenCodeZen.requestId(),
+    )
 }
