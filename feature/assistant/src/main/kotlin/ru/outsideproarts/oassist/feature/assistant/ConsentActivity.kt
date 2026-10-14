@@ -33,6 +33,10 @@ class ConsentActivity : AppCompatActivity() {
         val outcome = when {
             id == null -> null
             results.values.all { it } -> PermissionRequestOutcome.GRANTED
+            // Нет rationale после отказа = «больше не спрашивать»: диалог больше не появится.
+            results.filterValues { granted -> !granted }.keys
+                .none { shouldShowRequestPermissionRationale(it) } ->
+                PermissionRequestOutcome.DENIED_FOREVER
             else -> PermissionRequestOutcome.DENIED
         }
         if (id != null && outcome != null) PermissionRequestBridge.complete(id, outcome)
@@ -43,7 +47,12 @@ class ConsentActivity : AppCompatActivity() {
         super.onCreate(savedInstanceState)
         setShowWhenLocked(true)
         when (intent?.getStringExtra(EXTRA_MODE)) {
-            MODE_PERMISSIONS -> startPermissionRequest()
+            MODE_PERMISSIONS -> {
+                // Метка «окно показано»: мост отличит живой диалог от заблокированного старта.
+                intent?.getStringExtra(EXTRA_REQUEST_ID)
+                    ?.let(PermissionRequestBridge::markStarted)
+                startPermissionRequest()
+            }
             MODE_APPROVAL -> showApprovalDialog()
             else -> finish()
         }
@@ -117,6 +126,13 @@ class ConsentActivity : AppCompatActivity() {
 
     override fun onDestroy() {
         super.onDestroy()
+        // Умерла без результата (system kill/finish до колбэка) — fail-closed, иначе ожидание
+        // виснет. Смена конфигурации не считается: реестр результатов доживёт в новом инстансе.
+        if (!isChangingConfigurations &&
+            intent?.getStringExtra(EXTRA_MODE) == MODE_PERMISSIONS
+        ) {
+            intent?.getStringExtra(EXTRA_REQUEST_ID)?.let(PermissionRequestBridge::cancel)
+        }
         // Закрытие без решения (назад/система) — fail-closed отказ, иначе стрим зависнет.
         val callId = intent?.getStringExtra(EXTRA_CALL_ID) ?: return
         if (!decided) {

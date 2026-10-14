@@ -269,10 +269,15 @@ class AgentLoop(
                 false,
                 "Пользователь отклонил разрешение «${missing.joinToString()}» — действие отклонено.",
             )
+            PermissionRequestOutcome.DENIED_FOREVER -> ToolResult(
+                false,
+                "Разрешение «${missing.joinToString()}» отклонено навсегда — попросите пользователя " +
+                    "выдать его в настройках приложения OAssist, затем повторите действие.",
+            )
             PermissionRequestOutcome.UNAVAILABLE -> ToolResult(
                 false,
-                "Не удалось запросить разрешение «${missing.joinToString()}» — " +
-                    "откройте приложение и выдайте его вручную.",
+                "Не удалось показать системный диалог для разрешения «${missing.joinToString()}» — " +
+                    "попросите пользователя открыть OAssist и выдать разрешение в настройках приложения.",
             )
         }
     }

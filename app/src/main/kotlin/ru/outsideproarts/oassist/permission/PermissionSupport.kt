@@ -8,6 +8,7 @@ import androidx.core.content.ContextCompat
 import ru.outsideproarts.oassist.core.agent.PermissionRequestOutcome
 import ru.outsideproarts.oassist.core.agent.PermissionRequestBridge
 import ru.outsideproarts.oassist.core.agent.PermissionRequester
+import ru.outsideproarts.oassist.core.model.OAssistLog
 import ru.outsideproarts.oassist.feature.assistant.ConsentActivity
 
 /**
@@ -24,7 +25,8 @@ class KeyguardLockState(private val context: Context) {
 /**
  * Запрос runtime-разрешений через translucent [ConsentActivity]:
  * работает и из сервиса оверлея (с `FLAG_ACTIVITY_NEW_TASK`), и из чата.
- * Ожидание — через [PermissionRequestBridge].
+ * Ожидание — через [PermissionRequestBridge.await] (fail-safe: без вечных зависаний,
+ * с фолбэк-действием в уведомлении при заблокированном старте окна).
  */
 class AppPermissionRequester(private val context: Context) : PermissionRequester {
 
@@ -35,16 +37,26 @@ class AppPermissionRequester(private val context: Context) : PermissionRequester
     override suspend fun request(permissions: List<String>): PermissionRequestOutcome {
         val missing = permissions.filterNot(::isGranted)
         if (missing.isEmpty()) return PermissionRequestOutcome.GRANTED
-        val (requestId, deferred) = PermissionRequestBridge.register()
+        val requestId = PermissionRequestBridge.register(missing)
         val intent = ConsentActivity.permissionIntent(context, requestId, missing)
             .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-        return runCatching { context.startActivity(intent) }
-            .fold(
-                onSuccess = { deferred.await() },
-                onFailure = {
-                    PermissionRequestBridge.cancel(requestId)
-                    PermissionRequestOutcome.UNAVAILABLE
-                },
+        val started = runCatching { context.startActivity(intent) }.isSuccess
+        if (!started) {
+            // Старт невозможен в принципе: фолбэк-тап повторил бы тот же вызов.
+            PermissionRequestBridge.cancel(requestId)
+            return PermissionRequestOutcome.UNAVAILABLE
+        }
+        val outcome = PermissionRequestBridge.await(requestId)
+        if (outcome == PermissionRequestOutcome.UNAVAILABLE) {
+            OAssistLog.warn(
+                TAG,
+                "Системный диалог разрешений не показан или не завершён: ${missing.joinToString()}",
             )
+        }
+        return outcome
+    }
+
+    private companion object {
+        const val TAG = "PermissionRequester"
     }
 }

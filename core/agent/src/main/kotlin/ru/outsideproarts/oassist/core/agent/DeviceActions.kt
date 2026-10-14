@@ -252,7 +252,10 @@ class DeviceActions(
         context.checkSelfPermission(permission) == PackageManager.PERMISSION_GRANTED
 
     private fun noPermissionResult(permission: String): ToolResult =
-        ToolResult(false, "Нет разрешения $permission — выдайте его в разделе «Инструменты агента»")
+        ToolResult(
+            false,
+            "Нет разрешения $permission — выдайте его в настройках приложения OAssist, затем повторите",
+        )
 
     fun placeCall(number: String): ToolResult {
         if (!hasPermission(Manifest.permission.CALL_PHONE)) {

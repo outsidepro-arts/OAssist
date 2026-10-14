@@ -42,4 +42,6 @@
     <string name="assistant_no_overlay">Нет разрешения «Показывать поверх других окон»</string>
     <string name="assistant_fgs_channel">Ассистент</string>
     <string name="assistant_fgs_text">Оверлей ассистента активен</string>
+    <string name="assistant_permission_needed">Требуется разрешение</string>
+    <string name="assistant_permission_grant">Выдать</string>
 </resources>

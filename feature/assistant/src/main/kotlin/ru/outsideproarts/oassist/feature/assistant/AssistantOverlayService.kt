@@ -44,6 +44,8 @@ import ru.outsideproarts.oassist.core.agent.AssistSessionStore
 import ru.outsideproarts.oassist.core.agent.AssistVoiceEffect
 import ru.outsideproarts.oassist.core.agent.AssistVoiceFlow
 import ru.outsideproarts.oassist.core.agent.AssistVoiceState
+import ru.outsideproarts.oassist.core.agent.BlockedPermissionRequest
+import ru.outsideproarts.oassist.core.agent.PermissionRequestBridge
 import ru.outsideproarts.oassist.core.model.ApprovalDecision
 import ru.outsideproarts.oassist.core.model.ApprovalRequest
 import ru.outsideproarts.oassist.core.model.AssistMode
@@ -121,6 +123,12 @@ class AssistantOverlayService : LifecycleService(), SavedStateRegistryOwner {
     private var pendingRetryText: String? = null
     private var lastNotifAt = 0L
 
+    /**
+     * Запрос системных разрешений, чей диалог заблокирован системой (старт окна из фона):
+     * в notification-режиме показываем действие «Выдать» в сессионном уведомлении.
+     */
+    private var pendingPermission by mutableStateOf<BlockedPermissionRequest?>(null)
+
     private val voice get() = VoiceHandle.get()
     private val speech get() = SpeechHandle.get()
     private val sounds get() = SoundHandle.get()
@@ -184,6 +192,13 @@ class AssistantOverlayService : LifecycleService(), SavedStateRegistryOwner {
                     }
                 }
                 wasOnline = online
+            }
+        }
+        // Фолбэк заблокированного системного диалога разрешений: действие в уведомлении.
+        serviceScope.launch {
+            PermissionRequestBridge.blocked.collect { request ->
+                pendingPermission = request
+                refreshSessionNotification(force = true)
             }
         }
     }
@@ -324,7 +339,13 @@ class AssistantOverlayService : LifecycleService(), SavedStateRegistryOwner {
             else -> getString(R.string.assistant_title)
         }
         val sttPreviewText = sttPreview.takeIf { it.isNotBlank() }
-        val text = sttPreviewText ?: answer.ifBlank { hintText ?: getString(R.string.assistant_fgs_text) }
+        val pendingPerm = pendingPermission
+        val permissionLine = getString(R.string.assistant_permission_needed)
+        val text = when {
+            pendingPerm != null -> permissionLine
+            sttPreviewText != null -> sttPreviewText
+            else -> answer.ifBlank { hintText ?: getString(R.string.assistant_fgs_text) }
+        }
         val micAction = Notification.Action.Builder(
             android.R.drawable.ic_btn_speak_now,
             getString(R.string.assistant_mic),
@@ -344,7 +365,7 @@ class AssistantOverlayService : LifecycleService(), SavedStateRegistryOwner {
             getString(R.string.assistant_close),
             commandIntent(CMD_CLOSE),
         ).build()
-        return Notification.Builder(this, SESSION_CHANNEL_ID)
+        val builder = Notification.Builder(this, SESSION_CHANNEL_ID)
             .setContentTitle(title)
             .setContentText(text)
             .setStyle(Notification.BigTextStyle().bigText(text))
@@ -353,7 +374,31 @@ class AssistantOverlayService : LifecycleService(), SavedStateRegistryOwner {
             .addAction(micAction)
             .addAction(replyAction)
             .addAction(closeAction)
-            .build()
+        if (pendingPerm != null) {
+            builder.addAction(
+                Notification.Action.Builder(
+                    android.R.drawable.ic_lock_idle_lock,
+                    getString(R.string.assistant_permission_grant),
+                    grantPermissionIntent(pendingPerm),
+                ).build(),
+            )
+        }
+        return builder.build()
+    }
+
+    /**
+     * Тап по действию — легальный путь показать системный диалог из фона:
+     * PendingIntent стартует `ConsentActivity` уже от имени пользователя.
+     */
+    private fun grantPermissionIntent(request: BlockedPermissionRequest): android.app.PendingIntent {
+        val intent = ConsentActivity.permissionIntent(this, request.requestId, request.permissions)
+            .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        return android.app.PendingIntent.getActivity(
+            this,
+            request.requestId.hashCode(),
+            intent,
+            android.app.PendingIntent.FLAG_UPDATE_CURRENT or android.app.PendingIntent.FLAG_IMMUTABLE,
+        )
     }
 
     private fun commandIntent(cmd: String, mutable: Boolean = false): android.app.PendingIntent {

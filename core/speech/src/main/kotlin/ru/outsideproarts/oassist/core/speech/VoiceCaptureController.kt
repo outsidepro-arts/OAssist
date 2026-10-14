@@ -73,7 +73,7 @@ class AgentVoiceCapture(private val voice: VoiceListener) : VoiceCaptureControll
         fun failureText(error: CaptureError): String = when (error) {
             CaptureError.BUSY -> "Уже идёт запись."
             CaptureError.NO_RECOGNIZER -> "Распознавание речи недоступно на этом устройстве."
-            CaptureError.NO_PERMISSION -> "Нет доступа к микрофону — попросите пользователя выдать его в разделе «Инструменты агента»."
+            CaptureError.NO_PERMISSION -> "Нет доступа к микрофону — попросите пользователя выдать его в настройках приложения OAssist."
             CaptureError.INIT_FAILED -> "Не удалось включить микрофон."
         }
 
