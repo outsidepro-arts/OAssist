@@ -11,6 +11,9 @@ enum class ToolCategory {
     /** Контакты, календарь — данные телефона. */
     PHONE_DATA,
 
+    /** Журнал вызовов — история звонков. */
+    CALL_LOG,
+
     /** Память и навыки — данные приложения. */
     APP_DATA,
 
@@ -85,6 +88,7 @@ object ToolGroups {
         "call_place", "sms_send", "notify_reply",
         "contact_find",
         "calendar_add",
+        "call_log_list",
         "memory_get", "skill_list", "skill_get",
         "memory_put", "memory_forget",
         "notify_list",
@@ -109,6 +113,7 @@ object ToolGroups {
             key(ToolCategory.COMMUNICATION, ToolAccess.WRITE)
         "contact_find" -> key(ToolCategory.PHONE_DATA, ToolAccess.READ)
         "calendar_add" -> key(ToolCategory.PHONE_DATA, ToolAccess.WRITE)
+        "call_log_list" -> key(ToolCategory.CALL_LOG, ToolAccess.READ)
         "memory_get", "skill_list", "skill_get" ->
             key(ToolCategory.APP_DATA, ToolAccess.READ)
         "memory_put", "memory_forget" ->

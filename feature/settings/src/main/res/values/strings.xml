@@ -205,6 +205,8 @@
     <string name="tool_sms_send_desc">Отправка SMS на номер</string>
     <string name="tool_contact_find_title">Поиск контактов</string>
     <string name="tool_contact_find_desc">Поиск имён и номеров в контактах</string>
+    <string name="tool_call_log_list_title">Журнал вызовов</string>
+    <string name="tool_call_log_list_desc">Последние звонки: тип, имя, номер, дата и длительность</string>
     <string name="tool_calendar_add_title">События календаря</string>
     <string name="tool_calendar_add_desc">Добавление событий в календарь</string>
     <string name="tool_timer_set_title">Таймер</string>

@@ -24,6 +24,7 @@
     <string name="group_communication_write">Связь — запись</string>
     <string name="group_phone_data_read">Данные телефона — чтение</string>
     <string name="group_phone_data_write">Данные телефона — запись</string>
+    <string name="group_call_log_read">Журнал вызовов — чтение</string>
     <string name="group_app_data_read">Данные приложения — чтение</string>
     <string name="group_app_data_write">Данные приложения — запись</string>
     <string name="group_notifications_read">Уведомления — чтение</string>

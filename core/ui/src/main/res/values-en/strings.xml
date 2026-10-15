@@ -24,6 +24,7 @@
     <string name="group_communication_write">Communication — write</string>
     <string name="group_phone_data_read">Phone data — read</string>
     <string name="group_phone_data_write">Phone data — write</string>
+    <string name="group_call_log_read">Call log — read</string>
     <string name="group_app_data_read">App data — read</string>
     <string name="group_app_data_write">App data — write</string>
     <string name="group_notifications_read">Notifications — read</string>

@@ -397,6 +397,61 @@ class ContactFindTool(private val actions: DeviceActions) : Tool {
     }
 }
 
+class CallLogListTool(private val actions: DeviceActions) : Tool {
+    override val requiredPermissions = listOf(Manifest.permission.READ_CALL_LOG)
+    override val schema = ToolSchema(
+        name = "call_log_list",
+        description = "Журнал вызовов: последние звонки с типом (входящий, исходящий, пропущенный, отклонённый), " +
+            "именем из контактов, номером, датой и длительностью. Данные только читаются. " +
+            "Используй чтобы узнать кто звонил и когда, были ли пропущенные.",
+        parameters = buildJsonObject {
+            put("type", "object")
+            put("properties", buildJsonObject {
+                put("query", buildJsonObject {
+                    put("type", "string")
+                    put("description", "Необязательный фильтр: подстрока имени или номера")
+                })
+                put("type", buildJsonObject {
+                    put("type", "string")
+                    put("description", "Тип звонка: all, incoming, outgoing, missed, rejected — по умолчанию all")
+                })
+                put("limit", buildJsonObject {
+                    put("type", "integer")
+                    put("description", "Максимум записей, по умолчанию 20")
+                })
+            })
+        },
+    )
+
+    override fun describeForConfirmation(arguments: JsonObject): String {
+        val query = runCatching { arguments["query"]?.jsonPrimitive?.content }.getOrNull()
+        val type = runCatching { arguments["type"]?.jsonPrimitive?.content }.getOrNull()
+        val parts = buildList {
+            if (!query.isNullOrBlank()) add("по запросу '$query'")
+            if (!type.isNullOrBlank() && type.trim().lowercase() != "all") add("тип $type")
+        }
+        return if (parts.isEmpty()) {
+            "Показать журнал вызовов"
+        } else {
+            "Показать журнал вызовов " + parts.joinToString(", ")
+        }
+    }
+
+    override suspend fun execute(arguments: JsonObject): ToolResult {
+        val query = runCatching { arguments["query"]?.jsonPrimitive?.content }.getOrNull()
+        val typeRaw = runCatching { arguments["type"]?.jsonPrimitive?.content }.getOrNull()
+        val limit = runCatching {
+            arguments["limit"]?.jsonPrimitive?.content?.toIntOrNull()
+        }.getOrNull() ?: DEFAULT_CALL_LOG_LIMIT
+        val type = try {
+            callTypeFilterOf(typeRaw)
+        } catch (e: IllegalArgumentException) {
+            return ToolResult(false, e.message ?: "Некорректный type")
+        }
+        return actions.readCallLog(query, type, limit)
+    }
+}
+
 class CalendarAddTool(private val actions: DeviceActions) : Tool {
     override val requiredPermissions = listOf(Manifest.permission.WRITE_CALENDAR)
     override val schema = ToolSchema(

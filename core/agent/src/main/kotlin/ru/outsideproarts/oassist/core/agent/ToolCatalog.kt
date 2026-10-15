@@ -50,6 +50,7 @@ object ToolCatalog {
         SmsSendTool(actions),
         ContactFindTool(actions),
         CalendarAddTool(actions),
+        CallLogListTool(actions),
         TimerSetTool(actions),
         DeviceInfoTool(actions),
         ClipboardCopyTool(actions),

@@ -32,6 +32,7 @@ private fun groupLabelRes(category: ToolCategory, access: ToolAccess): Int? = wh
     } else {
         R.string.group_phone_data_write
     }
+    ToolCategory.CALL_LOG -> if (access == ToolAccess.READ) R.string.group_call_log_read else null
     ToolCategory.APP_DATA -> if (access == ToolAccess.READ) {
         R.string.group_app_data_read
     } else {

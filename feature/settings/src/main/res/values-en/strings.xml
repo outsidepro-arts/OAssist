@@ -206,6 +206,8 @@
     <string name="tool_sms_send_desc">Send SMS to a number</string>
     <string name="tool_contact_find_title">Find contacts</string>
     <string name="tool_contact_find_desc">Search names and numbers in contacts</string>
+    <string name="tool_call_log_list_title">Call log</string>
+    <string name="tool_call_log_list_desc">Recent calls: type, name, number, date, and duration</string>
     <string name="tool_calendar_add_title">Calendar events</string>
     <string name="tool_calendar_add_desc">Add events to the calendar</string>
     <string name="tool_timer_set_title">Timer</string>

@@ -13,6 +13,7 @@ import android.net.Uri
 import android.os.Build
 import android.provider.AlarmClock
 import android.provider.CalendarContract
+import android.provider.CallLog
 import android.provider.ContactsContract
 import android.telephony.SmsManager
 import android.provider.Settings
@@ -315,6 +316,61 @@ class DeviceActions(
                 ToolResult(true, "Найдено: ${found.joinToString("; ")}")
             }
         }.getOrElse { ToolResult(false, "Не удалось найти контакты: ${it.message}") }
+    }
+
+    /**
+     * Журнал вызовов: только чтение, выборка новыми вперёд с потолком [CALL_LOG_FETCH_CAP].
+     * Фильтры и лимит применяет форматтер; `LIMIT` в selection провайдер запрещает —
+     * только `LIMIT_PARAM_KEY` в URI.
+     */
+    suspend fun readCallLog(
+        query: String?,
+        type: CallType?,
+        limit: Int,
+    ): ToolResult = withContext(Dispatchers.IO) {
+        if (!hasPermission(Manifest.permission.READ_CALL_LOG)) {
+            return@withContext noPermissionResult(Manifest.permission.READ_CALL_LOG)
+        }
+        runCatching {
+            val entries = mutableListOf<CallLogEntry>()
+            val uri = CallLog.Calls.CONTENT_URI.buildUpon()
+                .appendQueryParameter(CallLog.Calls.LIMIT_PARAM_KEY, CALL_LOG_FETCH_CAP.toString())
+                .build()
+            context.contentResolver.query(
+                uri,
+                arrayOf(
+                    CallLog.Calls.NUMBER,
+                    CallLog.Calls.CACHED_NAME,
+                    CallLog.Calls.DATE,
+                    CallLog.Calls.DURATION,
+                    CallLog.Calls.TYPE,
+                    CallLog.Calls.NUMBER_PRESENTATION,
+                ),
+                null,
+                null,
+                "${CallLog.Calls.DATE} DESC",
+            )?.use { cursor ->
+                val numberIdx = cursor.getColumnIndex(CallLog.Calls.NUMBER)
+                val nameIdx = cursor.getColumnIndex(CallLog.Calls.CACHED_NAME)
+                val dateIdx = cursor.getColumnIndex(CallLog.Calls.DATE)
+                val durationIdx = cursor.getColumnIndex(CallLog.Calls.DURATION)
+                val typeIdx = cursor.getColumnIndex(CallLog.Calls.TYPE)
+                val presentationIdx = cursor.getColumnIndex(CallLog.Calls.NUMBER_PRESENTATION)
+                while (cursor.moveToNext() && entries.size < CALL_LOG_FETCH_CAP) {
+                    entries.add(
+                        CallLogEntry(
+                            number = cursor.getString(numberIdx),
+                            name = cursor.getString(nameIdx),
+                            dateMillis = cursor.getLong(dateIdx),
+                            durationSec = cursor.getInt(durationIdx),
+                            type = callTypeFromInt(cursor.getInt(typeIdx)),
+                            presentation = callPresentationFromInt(cursor.getInt(presentationIdx)),
+                        ),
+                    )
+                }
+            }
+            ToolResult(true, formatCallLog(entries, query, type, limit))
+        }.getOrElse { ToolResult(false, "Не удалось прочитать журнал вызовов: ${it.message}") }
     }
 
     fun addCalendarEvent(title: String, startMillis: Long, endMillis: Long, description: String?): ToolResult {
