@@ -123,6 +123,7 @@ fun ModeConfigScreen(
     var ttsToolCalls by remember { mutableStateOf(baseTts.speakToolCalls) }
     var ttsNarrative by remember { mutableStateOf(baseTts.narrative) }
     var soundEnabled by remember { mutableStateOf(config.effectiveSoundEnabled()) }
+    var autoSaveChats by remember { mutableStateOf(config.effectiveAutoSaveChats()) }
     val baseStt = config.effectiveStt()
     var sttEngine by remember { mutableStateOf(baseStt.engine) }
     var sttLanguage by remember { mutableStateOf(baseStt.language) }
@@ -163,6 +164,7 @@ fun ModeConfigScreen(
         ttsToolCalls = tts.speakToolCalls
         ttsNarrative = tts.narrative
         soundEnabled = config.effectiveSoundEnabled()
+        autoSaveChats = config.effectiveAutoSaveChats()
         val stt = config.effectiveStt()
         sttEngine = stt.engine
         sttLanguage = stt.language
@@ -533,6 +535,22 @@ fun ModeConfigScreen(
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
+
+            if (mode == AssistMode.CHAT || mode == AssistMode.SHARE) {
+                OAssistSectionHeading(text = stringResource(R.string.mode_chats_title))
+                ModeSwitch(
+                    title = stringResource(R.string.mode_chats_autosave),
+                    checked = autoSaveChats,
+                    onCheckedChange = { autoSaveChats = it },
+                    onState = onState,
+                    offState = offState,
+                )
+                Text(
+                    text = stringResource(R.string.mode_chats_autosave_hint),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
         }
 
         Row(
@@ -583,6 +601,7 @@ fun ModeConfigScreen(
                                 language = sttLanguage.ifBlank { SttConfig.DEFAULT.language },
                             ),
                             soundEnabled = soundEnabled,
+                            autoSaveChats = autoSaveChats,
                         ),
                     )
                 },

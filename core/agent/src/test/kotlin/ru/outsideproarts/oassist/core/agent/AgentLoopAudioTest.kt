@@ -7,10 +7,10 @@ import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertEquals
 import org.junit.Test
 import ru.outsideproarts.oassist.core.model.ModelInfo
-import ru.outsideproarts.oassist.core.provider.AudioPart
+import ru.outsideproarts.oassist.core.model.AudioPart
 import ru.outsideproarts.oassist.core.provider.ChatChunk
-import ru.outsideproarts.oassist.core.provider.ChatMessage
-import ru.outsideproarts.oassist.core.provider.ChatRole
+import ru.outsideproarts.oassist.core.model.ChatMessage
+import ru.outsideproarts.oassist.core.model.ChatRole
 import ru.outsideproarts.oassist.core.provider.ModelClient
 import ru.outsideproarts.oassist.core.provider.openai.ToolSchemaDto
 

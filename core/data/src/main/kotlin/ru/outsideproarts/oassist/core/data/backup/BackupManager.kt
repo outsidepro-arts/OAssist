@@ -79,8 +79,7 @@ class BackupManager(private val data: DataContainer) {
         data.skills.list().forEach { data.skills.delete(it.name) }
         data.memory.clear()
         data.approvals.clear()
-        data.database.messageDao().deleteAll()
-        data.database.sessionDao().deleteAll()
+        data.chats.clearAll()
         data.secretStore.clearAll()
         data.settings.setLanguage(AppLanguage.DEFAULT)
     }

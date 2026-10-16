@@ -1,13 +1,10 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <string name="chat_title">Чат</string>
     <string name="chat_empty_title">Нет сообщений</string>
     <string name="chat_empty_body">Начните диалог с агентом. Провайдер и модель настраиваются в Настройках.</string>
     <string name="chat_input_hint">Сообщение агенту</string>
     <string name="chat_send">Отправить</string>
     <string name="chat_stop">Остановить</string>
-    <string name="chat_role_user">Вы</string>
-    <string name="chat_role_assistant">Ассистент</string>
     <string name="chat_speak_answer">Озвучить ответ</string>
     <string name="chat_mic">Голосовой ввод</string>
     <string name="chat_no_recognizer">Распознавание речи недоступно на этом устройстве</string>
@@ -17,7 +14,6 @@
     <string name="chat_hold_hint">Удерживайте кнопку, чтобы говорить</string>
     <string name="chat_voice_short">Слишком коротко — удерживайте дольше</string>
     <string name="chat_listening">Слушаю…</string>
-    <string name="chat_voice_message">Голосовое сообщение (%1$d с)</string>
     <string name="chat_timeline_title">Ход работы</string>
     <string name="chat_timeline_empty">Пока тихо — агент ещё ничего не делал.</string>
     <string name="chat_timeline_expanded">Развёрнут</string>
@@ -26,6 +22,8 @@
     <string name="chat_action_collapse">Свернуть</string>
     <string name="chat_timeline_tool_call">Выполняю: %1$s</string>
     <string name="chat_timeline_tool_result">Готово: %1$s</string>
-    <string name="chat_image_attached">Изображение</string>
     <string name="chat_work_title">Ход работы</string>
+    <string name="chat_open_list">Список чатов</string>
+    <string name="chat_save">Сохранить чат</string>
+    <string name="chat_delete_current">Удалить чат</string>
 </resources>

@@ -3,22 +3,18 @@
     <string name="share_activity_label">OAssist — общий доступ</string>
     <string name="share_title">Отправить в OAssist</string>
     <string name="share_received_label">Полученный контент</string>
-    <string name="share_empty">Нет контента для отправки</string>
     <string name="share_open_chat">Открыть чат</string>
     <string name="share_close">Закрыть</string>
     <string name="share_images_count">Изображений: %1$d</string>
     <string name="share_image_attached">Изображение</string>
     <string name="share_ask_label">Вопрос агенту</string>
     <string name="share_send">Отправить</string>
-    <string name="share_response">Ответ агента</string>
     <string name="share_speak_answer">Озвучить ответ</string>
-    <string name="share_work_title">Ход работы</string>
-    <string name="share_work_expanded">Развёрнут</string>
-    <string name="share_work_collapsed">Свёрнут</string>
-    <string name="share_action_expand">Развернуть</string>
-    <string name="share_action_collapse">Свернуть</string>
     <string name="share_prompt_text">Текст: %1$s\n</string>
     <string name="share_prompt_image">Изображение: %1$s\n</string>
     <string name="share_prompt_file">Файл: %1$s\n</string>
     <string name="share_prompt_question">%1$s\nВопрос: %2$s</string>
+    <string name="share_back">К списку чатов</string>
+    <string name="share_save_chat">Сохранить чат</string>
+    <string name="share_delete_chat">Удалить чат</string>
 </resources>

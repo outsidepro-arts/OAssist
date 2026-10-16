@@ -3,6 +3,7 @@ package ru.outsideproarts.oassist.feature.share
 import android.content.Intent
 import android.net.Uri
 import android.os.Bundle
+import android.widget.Toast
 import androidx.activity.compose.setContent
 import androidx.appcompat.app.AppCompatActivity
 import androidx.compose.foundation.layout.Arrangement
@@ -11,12 +12,11 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.verticalScroll
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.Send
-import androidx.compose.material.icons.filled.ExpandLess
-import androidx.compose.material.icons.filled.ExpandMore
 import androidx.compose.material3.Button
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -24,6 +24,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
@@ -37,30 +38,41 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
-import androidx.compose.ui.semantics.CustomAccessibilityAction
-import androidx.compose.ui.semantics.Role
-import androidx.compose.ui.semantics.contentDescription
-import androidx.compose.ui.semantics.customActions
-import androidx.compose.ui.semantics.semantics
-import androidx.compose.ui.semantics.stateDescription
-import android.widget.Toast
-import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import ru.outsideproarts.oassist.core.a11y.oassistHeading
-import ru.outsideproarts.oassist.core.a11y.oassistRole
 import ru.outsideproarts.oassist.core.a11y.oassistTouchTarget
+import ru.outsideproarts.oassist.core.agent.AgentFactory
+import ru.outsideproarts.oassist.core.agent.AgentSession
+import ru.outsideproarts.oassist.core.agent.AgentToolEvent
+import ru.outsideproarts.oassist.core.agent.ChatTitler
+import ru.outsideproarts.oassist.core.data.chat.ChatHandle
+import ru.outsideproarts.oassist.core.model.ApprovalDecision
+import ru.outsideproarts.oassist.core.model.AssistMode
+import ru.outsideproarts.oassist.core.model.ChatMessage
+import ru.outsideproarts.oassist.core.model.ChatRole
+import ru.outsideproarts.oassist.core.model.ChatSummary
+import ru.outsideproarts.oassist.core.model.ImagePart
+import ru.outsideproarts.oassist.core.model.StoredTool
+import ru.outsideproarts.oassist.core.model.StoredTurn
+import ru.outsideproarts.oassist.core.provider.ChatChunk
+import ru.outsideproarts.oassist.core.provider.ImageCodec
+import ru.outsideproarts.oassist.core.provider.ProviderError
+import ru.outsideproarts.oassist.core.provider.collectSafe
+import ru.outsideproarts.oassist.core.provider.isEarlyRetryable
 import ru.outsideproarts.oassist.core.speech.AgentSound
 import ru.outsideproarts.oassist.core.speech.SentenceSplitter
 import ru.outsideproarts.oassist.core.speech.SoundHandle
 import ru.outsideproarts.oassist.core.speech.SpeechHandle
 import ru.outsideproarts.oassist.core.speech.StreamSpeaker
-import ru.outsideproarts.oassist.core.provider.ChatChunk
-import ru.outsideproarts.oassist.core.provider.ChatMessage
-import ru.outsideproarts.oassist.core.provider.ChatRole
-import ru.outsideproarts.oassist.core.provider.ProviderError
-import ru.outsideproarts.oassist.core.provider.collectSafe
-import ru.outsideproarts.oassist.core.provider.isEarlyRetryable
 import ru.outsideproarts.oassist.core.ui.OAssistDimens
+import ru.outsideproarts.oassist.core.ui.components.ChatDeleteDialog
+import ru.outsideproarts.oassist.core.ui.components.ChatMessageBubble
+import ru.outsideproarts.oassist.core.ui.components.ChatPickerList
+import ru.outsideproarts.oassist.core.ui.components.ChatUnsavedDialog
+import ru.outsideproarts.oassist.core.ui.components.OAssistImageThumbnail
 import ru.outsideproarts.oassist.core.ui.components.OAssistPanel
 import ru.outsideproarts.oassist.core.ui.theme.OAssistTheme
 
@@ -72,68 +84,16 @@ class ShareActivity : AppCompatActivity() {
         super.onDestroy()
         // Сессия шаринга кончилась — итоги использования не переживают закрытие.
         if (isFinishing) {
-            runCatching { ru.outsideproarts.oassist.core.agent.AgentFactory.get().resetUsageTotals() }
+            runCatching { AgentFactory.get().resetUsageTotals() }
         }
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         val payload = SharePayload.from(intent)
-        val agentFactory = ru.outsideproarts.oassist.core.agent.AgentFactory.get()
-
         setContent {
             OAssistTheme {
-                ShareScreen(
-                    payload = payload,
-                    onAskAgent = { question ->
-                        val shareConfig = agentFactory.modeConfig(ru.outsideproarts.oassist.core.model.AssistMode.SHARE)
-                        val profile = agentFactory.providerForMode(ru.outsideproarts.oassist.core.model.AssistMode.SHARE)
-                            ?: throw ProviderError.NotConfigured(ProviderError.NotConfigured.Reason.PROVIDER_MISSING)
-                        val modelId = shareConfig.modelId?.takeIf { it.isNotBlank() }
-                            ?: throw ProviderError.NotConfigured(ProviderError.NotConfigured.Reason.MODEL_MISSING)
-
-                        val agent = agentFactory.agentFor(profile, ru.outsideproarts.oassist.core.model.AssistMode.SHARE)
-
-                        val images = payload.imageUris.take(SHARE_MAX_IMAGES).mapNotNull { uri ->
-                            runCatching {
-                                contentResolver.openInputStream(uri)?.use { it.readBytes() }
-                            }.getOrNull()?.let { bytes ->
-                                ru.outsideproarts.oassist.core.provider.ImageCodec.fromBytes(bytes)
-                            }
-                        }
-                        val contentDesc = buildString {
-                            payload.text?.let { append(getString(R.string.share_prompt_text, it)) }
-                            payload.imageUris.forEach { append(getString(R.string.share_prompt_image, it)) }
-                            payload.otherUris.forEach { append(getString(R.string.share_prompt_file, it)) }
-                        }
-                        val userMsg = getString(R.string.share_prompt_question, contentDesc, question)
-
-                        ru.outsideproarts.oassist.core.agent.AgentSession(
-                            chunks = agent.stream(
-                                modelId = modelId,
-                                systemPrompt = agentFactory.systemPromptFor(
-                                    ru.outsideproarts.oassist.core.model.AssistMode.SHARE,
-                                    sharedContent = contentDesc.ifBlank { null },
-                                ),
-                                history = emptyList(),
-                                userMessage = userMsg,
-                                images = images.ifEmpty { null },
-                            ),
-                            agent = agent,
-                        )
-                    },
-                    onOpenChat = {
-                        startActivity(
-                            packageManager.getLaunchIntentForPackage(packageName)
-                                ?.addFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP)
-                        )
-                        finish()
-                    },
-                    onClose = {
-                        SpeechHandle.get()?.stop()
-                        finish()
-                    },
-                )
+                ShareFlow(payload = payload)
             }
         }
     }
@@ -168,75 +128,157 @@ data class SharePayload(
     }
 }
 
+/**
+ * Шаринг в два экрана: список диалогов («Новый чат» + сохранённые, без записи
+ * ассистента) → выбранный диалог с полной историей, прикреплённым файлом и
+ * полем промпта. Каждый ход пишется в выбранный диалог (или создаёт новый).
+ */
 @Composable
-private fun ShareScreen(
-    payload: SharePayload,
-    onAskAgent: suspend (String) -> ru.outsideproarts.oassist.core.agent.AgentSession,
-    onOpenChat: () -> Unit,
-    onClose: () -> Unit,
-) {
-    val title = stringResource(R.string.share_title)
-    val receivedLabel = stringResource(R.string.share_received_label)
-    val empty = stringResource(R.string.share_empty)
-    val openChat = stringResource(R.string.share_open_chat)
-    val close = stringResource(R.string.share_close)
-    val askLabel = stringResource(R.string.share_ask_label)
-    val sendLabel = stringResource(R.string.share_send)
-    val responseLabel = stringResource(R.string.share_response)
-    val speakLabel = stringResource(R.string.share_speak_answer)
-    val imagesCount = stringResource(R.string.share_images_count, payload.imageUris.size)
+private fun ShareFlow(payload: SharePayload) {
     val context = LocalContext.current
+    val scope = rememberCoroutineScope()
+    val chatsFlow = remember {
+        ChatHandle.get()?.observeChats()
+            ?: kotlinx.coroutines.flow.flowOf(emptyList())
+    }
+    val chats by chatsFlow.collectAsState(initial = emptyList())
 
-    val textToShow = remember(payload) { payload.text?.trim().orEmpty() }
+    var inConversation by remember { mutableStateOf(false) }
+    var chatId by remember { mutableStateOf<String?>(null) }
+    var chatTitle by remember { mutableStateOf("") }
+    var titleLocked by remember { mutableStateOf(false) }
+    val turns = remember { mutableStateListOf<StoredTurn>() }
+    var autoSave by remember { mutableStateOf(true) }
+    var images by remember { mutableStateOf<List<ImagePart>>(emptyList()) }
+    var pendingSwitch by remember { mutableStateOf<(() -> Unit)?>(null) }
+    var deleteAsk by remember { mutableStateOf(false) }
 
     var question by remember { mutableStateOf("") }
+    var activeUserMsg by remember { mutableStateOf<String?>(null) }
     var thought by remember { mutableStateOf("") }
     var response by remember { mutableStateOf("") }
-    val shareTools = remember { mutableStateListOf<ru.outsideproarts.oassist.core.agent.AgentToolEvent>() }
+    val shareTools = remember { mutableStateListOf<AgentToolEvent>() }
     var turnUsage by remember { mutableStateOf<ru.outsideproarts.oassist.core.model.ProviderUsage?>(null) }
     var isStreaming by remember { mutableStateOf(false) }
-    val usageTotalsFlow = remember {
-        runCatching { ru.outsideproarts.oassist.core.agent.AgentFactory.get().usageTotals() }.getOrNull()
-    }
-    val emptyTotalsFlow = remember {
-        kotlinx.coroutines.flow.MutableStateFlow(ru.outsideproarts.oassist.core.model.UsageTotalsState())
-    }
-    val usageTotalsState by (usageTotalsFlow ?: emptyTotalsFlow).collectAsState()
-    val scope = rememberCoroutineScope()
-
-    /** Вопрос, отложенный до появления сети (пре-чек или ранний обрыв без сети). */
     var pendingShareRetry by remember { mutableStateOf<String?>(null) }
+
     val offlineRetryText = stringResource(ru.outsideproarts.oassist.core.ui.R.string.net_offline_retry)
     val repeatingText = stringResource(ru.outsideproarts.oassist.core.ui.R.string.net_repeating)
+    // Шаблоны промпта — через stringResource (ленивая локаль), не context.getString.
+    val promptTextTemplate = stringResource(R.string.share_prompt_text)
+    val promptImageTemplate = stringResource(R.string.share_prompt_image)
+    val promptFileTemplate = stringResource(R.string.share_prompt_file)
+    val promptQuestionTemplate = stringResource(R.string.share_prompt_question)
 
-    // Текстовый порядок: ask раньше onClick и эффекта (локальные fun вызываются только ниже).
+    LaunchedEffect(Unit) {
+        autoSave = runCatching {
+            AgentFactory.get().modeConfig(AssistMode.SHARE).effectiveAutoSaveChats()
+        }.getOrDefault(true)
+        images = withContext(Dispatchers.IO) {
+            payload.imageUris.take(SHARE_MAX_IMAGES).mapNotNull { uri ->
+                runCatching {
+                    context.contentResolver.openInputStream(uri)?.use { it.readBytes() }
+                }.getOrNull()?.let { bytes -> ImageCodec.fromBytes(bytes) }
+            }
+        }
+    }
+
+    // Текстовый порядок: локальные fun объявляются до UI, которые их вызывают.
+    fun generateTitle(nameSeed: String) {
+        if (titleLocked) return
+        scope.launch {
+            val generated = runCatching {
+                ChatTitler.generateTitle(AssistMode.SHARE, nameSeed, AgentFactory.get())
+            }.getOrNull() ?: return@launch
+            if (!titleLocked) {
+                chatTitle = generated
+                chatId?.let { id -> ChatHandle.get()?.renameChat(id, generated) }
+            }
+        }
+    }
+
+    /** Ход в БД: в сохранённый диалог, при autoSave — создать новый, иначе в память. */
+    fun persistTurn(stored: StoredTurn, nameSeed: String) {
+        val repo = ChatHandle.get()
+        val currentId = chatId
+        val isFirstTurn = turns.size == 1
+        when {
+            currentId != null -> {
+                if (repo != null) {
+                    scope.launch { repo.appendTurn(currentId, stored) }
+                }
+            }
+            autoSave -> {
+                val placeholder = ChatTitler.placeholder(nameSeed)
+                if (isFirstTurn && chatTitle.isBlank()) chatTitle = placeholder
+                if (repo != null) {
+                    scope.launch {
+                        val id = repo.createChat(AssistMode.SHARE, chatTitle.ifBlank { placeholder })
+                        chatId = id
+                        repo.appendTurn(id, stored)
+                        if (isFirstTurn) generateTitle(nameSeed)
+                    }
+                }
+            }
+            isFirstTurn -> {
+                if (chatTitle.isBlank()) chatTitle = ChatTitler.placeholder(nameSeed)
+                generateTitle(nameSeed)
+            }
+        }
+    }
+
     fun ask(q: String) {
         val query = q.trim()
         if (query.isBlank() || isStreaming) return
         isStreaming = true
-        // Barge-in: новый вопрос прерывает озвучку предыдущего ответа.
         SpeechHandle.get()?.stop()
+        val contentDesc = buildString {
+            payload.text?.let { append(String.format(promptTextTemplate, it)) }
+            payload.imageUris.forEach { append(String.format(promptImageTemplate, it)) }
+            payload.otherUris.forEach { append(String.format(promptFileTemplate, it)) }
+        }
+        val userMsg = String.format(promptQuestionTemplate, contentDesc, query)
+        activeUserMsg = userMsg
+        val history = turns.flatMap { it.modelMessages() }
         val thoughtSb = StringBuilder()
         val sb = StringBuilder()
         thought = ""
         response = ""
         shareTools.clear()
         turnUsage = null
+        var turnTranscript: List<ChatMessage> = emptyList()
+        var turnRecorded = false
+        fun recordTurn() {
+            if (turnRecorded) return
+            turnRecorded = true
+            if (thoughtSb.isEmpty() && sb.isEmpty() && shareTools.isEmpty()) return
+            val stored = StoredTurn(
+                userText = userMsg,
+                userImages = images,
+                thought = thoughtSb.toString(),
+                tools = shareTools.toList().map {
+                    StoredTool(name = it.name, output = it.output, isError = it.isError, images = it.images)
+                },
+                answer = sb.toString(),
+                usage = turnUsage,
+                turn = turnTranscript.ifEmpty {
+                    if (sb.isNotBlank()) listOf(ChatMessage(ChatRole.ASSISTANT, sb.toString())) else emptyList()
+                },
+            )
+            turns.add(stored)
+            activeUserMsg = null
+            persistTurn(stored, nameSeed = query)
+        }
         scope.launch {
             val tts = runCatching {
-                ru.outsideproarts.oassist.core.agent.AgentFactory.get()
-                    .modeConfig(ru.outsideproarts.oassist.core.model.AssistMode.SHARE)
-                    .effectiveTts()
+                AgentFactory.get().modeConfig(AssistMode.SHARE).effectiveTts()
             }.getOrElse { ru.outsideproarts.oassist.core.model.TtsConfig.DEFAULT }
             val soundsOn = runCatching {
-                ru.outsideproarts.oassist.core.agent.AgentFactory.get()
-                    .modeConfig(ru.outsideproarts.oassist.core.model.AssistMode.SHARE)
-                    .effectiveSoundEnabled()
+                AgentFactory.get().modeConfig(AssistMode.SHARE).effectiveSoundEnabled()
             }.getOrDefault(true)
             val sounds = SoundHandle.get()
             sounds?.playIfEnabled(AgentSound.MSG_SEND, soundsOn)
             val speech = SpeechHandle.get()
-            // Озвучка режима SHARE применяется перед каждым стримом.
             speech?.applyTts(tts)
             speech?.setNarrativeEnabled(tts.narrative)
             val thoughtSpeaker = StreamSpeaker(
@@ -247,13 +289,34 @@ private fun ShareScreen(
                 speak = { speech?.speak(it) },
             )
             val session = try {
-                onAskAgent(query)
-            } catch (e: kotlinx.coroutines.CancellationException) {
+                val factory = AgentFactory.get()
+                val config = factory.modeConfig(AssistMode.SHARE)
+                val profile = factory.providerForMode(AssistMode.SHARE)
+                    ?: throw ProviderError.NotConfigured(ProviderError.NotConfigured.Reason.PROVIDER_MISSING)
+                val modelId = config.modelId?.takeIf { it.isNotBlank() }
+                    ?: throw ProviderError.NotConfigured(ProviderError.NotConfigured.Reason.MODEL_MISSING)
+                val agent = factory.agentFor(profile, AssistMode.SHARE)
+                AgentSession(
+                    chunks = agent.stream(
+                        modelId = modelId,
+                        systemPrompt = factory.systemPromptFor(
+                            AssistMode.SHARE,
+                            sharedContent = contentDesc.ifBlank { null },
+                        ),
+                        history = history,
+                        userMessage = userMsg,
+                        images = images.ifEmpty { null },
+                        onTurnMessages = { turn -> turnTranscript = turn },
+                    ),
+                    agent = agent,
+                )
+            } catch (e: CancellationException) {
                 isStreaming = false
                 throw e
             } catch (e: Throwable) {
                 // Нет провайдера/модели — честный тост вместо падения.
                 isStreaming = false
+                activeUserMsg = null
                 val failure = ProviderError.from(e)
                 sounds?.playIfEnabled(AgentSound.ERROR, soundsOn)
                 Toast.makeText(context, failure.userMessage(context), Toast.LENGTH_LONG).show()
@@ -275,39 +338,32 @@ private fun ShareScreen(
                             }
                         }
                         is ChatChunk.ToolCall -> {
-                            shareTools.add(
-                                ru.outsideproarts.oassist.core.agent.AgentToolEvent(
-                                    name = chunk.name,
-                                ),
-                            )
+                            shareTools.add(AgentToolEvent(name = chunk.name))
                             sounds?.playIfEnabled(AgentSound.TOOL_CALL, soundsOn)
                         }
                         is ChatChunk.ToolResult -> {
                             val pending = shareTools.indexOfLast {
                                 it.name == chunk.name && it.output == null
                             }
-                            val event =
-                                ru.outsideproarts.oassist.core.agent.AgentToolEvent(
-                                    name = chunk.name,
-                                    output = chunk.output,
-                                    isError = chunk.isError,
-                                )
+                            val event = AgentToolEvent(
+                                name = chunk.name,
+                                output = chunk.output,
+                                isError = chunk.isError,
+                            )
                             if (pending >= 0) shareTools[pending] = event
                             else shareTools.add(event)
                         }
-                        // В Share нет диалога: опасные действия отклоняем сразу.
+                        // В Share нет диалога подтверждений: опасные действия отклоняем сразу.
                         is ChatChunk.ApprovalNeeded -> {
                             sounds?.playIfEnabled(AgentSound.PERMISSION_DENIED, soundsOn)
-                            session.agent.resolveApproval(
-                                chunk.request.callId,
-                                ru.outsideproarts.oassist.core.model.ApprovalDecision.DENY,
-                            )
+                            session.agent.resolveApproval(chunk.request.callId, ApprovalDecision.DENY)
                         }
                         is ChatChunk.Finish -> {
                             thoughtSpeaker.onFinish(thoughtSb.toString())
                             answerSpeaker.onFinish(sb.toString())
                             turnUsage = chunk.usage
                             sounds?.playIfEnabled(AgentSound.ANSWER_READY, soundsOn)
+                            recordTurn()
                             if (chunk.abrupt) {
                                 // Поток закрылся без терминатора: ответ мог быть усечён.
                                 Toast.makeText(
@@ -319,10 +375,11 @@ private fun ShareScreen(
                         }
                     }
                 }
-            } catch (e: kotlinx.coroutines.CancellationException) {
+            } catch (e: CancellationException) {
                 throw e
             } finally {
                 isStreaming = false
+                recordTurn()
             }
             if (error != null) {
                 val net = ru.outsideproarts.oassist.core.net.NetworkHandle.get()
@@ -331,6 +388,7 @@ private fun ShareScreen(
                 ) {
                     // Упали до первого чанка без сети: ждём фронт online.
                     pendingShareRetry = query
+                    activeUserMsg = null
                     Toast.makeText(context, offlineRetryText, Toast.LENGTH_LONG).show()
                 } else {
                     sounds?.playIfEnabled(AgentSound.ERROR, soundsOn)
@@ -341,13 +399,11 @@ private fun ShareScreen(
     }
 
     val netHandle = remember { ru.outsideproarts.oassist.core.net.NetworkHandle.get() }
-    // Авто-повтор отложенного вопроса только по фронту offline→online.
     LaunchedEffect(netHandle) {
         var wasOnline = netHandle?.isOnline?.value ?: true
         netHandle?.isOnline?.collect { online ->
             if (online && !wasOnline) {
                 val retry = pendingShareRetry
-                // Стэш снимаем только при фактическом потреблении.
                 if (retry != null && !isStreaming) {
                     pendingShareRetry = null
                     Toast.makeText(context, repeatingText, Toast.LENGTH_SHORT).show()
@@ -358,14 +414,180 @@ private fun ShareScreen(
         }
     }
 
-    LaunchedEffect(response) {
-        // scroll handled by parent
+    fun backToList() {
+        if (turns.isNotEmpty() && chatId == null) {
+            pendingSwitch = {
+                activeUserMsg = null
+                inConversation = false
+            }
+        } else {
+            activeUserMsg = null
+            inConversation = false
+        }
     }
+
+    if (!inConversation) {
+        ShareChatList(
+            payload = payload,
+            chats = chats,
+            onOpenChat = { summary ->
+                chatId = summary.id
+                chatTitle = summary.title
+                titleLocked = true
+                turns.clear()
+                activeUserMsg = null
+                inConversation = true
+                scope.launch {
+                    val loaded = ChatHandle.get()?.loadTurns(summary.id).orEmpty()
+                    turns.addAll(loaded)
+                }
+            },
+            onNewChat = {
+                chatId = null
+                chatTitle = ""
+                titleLocked = false
+                turns.clear()
+                activeUserMsg = null
+                inConversation = true
+            },
+            onRenameChat = { summary, name ->
+                ChatHandle.get()?.let { repo -> scope.launch { repo.renameChat(summary.id, name) } }
+                if (summary.id == chatId) {
+                    chatTitle = name
+                    titleLocked = true
+                }
+            },
+            onDeleteChat = { summary ->
+                ChatHandle.get()?.let { repo -> scope.launch { repo.deleteChat(summary.id) } }
+                if (summary.id == chatId) chatId = null
+            },
+            onClose = {
+                SpeechHandle.get()?.stop()
+                (context as? android.app.Activity)?.finish()
+            },
+            onOpenApp = {
+                SpeechHandle.get()?.stop()
+                val launch = context.packageManager.getLaunchIntentForPackage(context.packageName)
+                if (launch != null) {
+                    launch.addFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP)
+                    context.startActivity(launch)
+                }
+                (context as? android.app.Activity)?.finish()
+            },
+        )
+    } else {
+        ShareConversation(
+            payload = payload,
+            chatTitle = chatTitle,
+            isSaved = chatId != null,
+            turns = turns,
+            activeUserMsg = activeUserMsg,
+            thought = thought,
+            response = response,
+            tools = shareTools.toList(),
+            usage = turnUsage,
+            isStreaming = isStreaming,
+            question = question,
+            onQuestionChange = { question = it },
+            onSend = {
+                if (question.isNotBlank() && !isStreaming) {
+                    val net = ru.outsideproarts.oassist.core.net.NetworkHandle.get()
+                    if (net != null && !net.isOnline.value) {
+                        pendingShareRetry = question.trim()
+                        Toast.makeText(context, offlineRetryText, Toast.LENGTH_LONG).show()
+                    } else {
+                        pendingShareRetry = null
+                        ask(question.trim())
+                        question = ""
+                    }
+                }
+            },
+            onBack = ::backToList,
+            onSaveChat = {
+                val repo = ChatHandle.get()
+                if (chatId == null && repo != null && turns.isNotEmpty()) {
+                    val snapshot = turns.toList()
+                    val fallback = ChatTitler.placeholder(snapshot.firstOrNull()?.userText.orEmpty())
+                    if (chatTitle.isBlank()) chatTitle = fallback
+                    val title = chatTitle
+                    scope.launch {
+                        val id = repo.createChat(AssistMode.SHARE, title)
+                        snapshot.forEach { repo.appendTurn(id, it) }
+                        chatId = id
+                    }
+                }
+            },
+            onDeleteChat = { deleteAsk = true },
+        )
+    }
+
+    pendingSwitch?.let { action ->
+        ChatUnsavedDialog(
+            onSaveAndContinue = {
+                val repo = ChatHandle.get()
+                if (chatId == null && repo != null && turns.isNotEmpty()) {
+                    val snapshot = turns.toList()
+                    val fallback = ChatTitler.placeholder(snapshot.firstOrNull()?.userText.orEmpty())
+                    if (chatTitle.isBlank()) chatTitle = fallback
+                    val title = chatTitle
+                    scope.launch {
+                        val id = repo.createChat(AssistMode.SHARE, title)
+                        snapshot.forEach { repo.appendTurn(id, it) }
+                        chatId = id
+                    }
+                }
+                action()
+                pendingSwitch = null
+            },
+            onContinueWithoutSaving = {
+                action()
+                pendingSwitch = null
+            },
+            onDismiss = { pendingSwitch = null },
+        )
+    }
+
+    if (deleteAsk) {
+        ChatDeleteDialog(
+            chatTitle = chatTitle.ifBlank {
+                stringResource(ru.outsideproarts.oassist.core.ui.R.string.chats_new)
+            },
+            onConfirm = {
+                deleteAsk = false
+                val id = chatId
+                chatId = null
+                if (id != null) {
+                    val repo = ChatHandle.get()
+                    if (repo != null) {
+                        scope.launch { repo.deleteChat(id) }
+                    }
+                }
+            },
+            onDismiss = { deleteAsk = false },
+        )
+    }
+}
+
+/** Первый экран шаринга: что получено + список диалогов для отправки. */
+@Composable
+private fun ShareChatList(
+    payload: SharePayload,
+    chats: List<ChatSummary>,
+    onOpenChat: (ChatSummary) -> Unit,
+    onNewChat: () -> Unit,
+    onRenameChat: (ChatSummary, String) -> Unit,
+    onDeleteChat: (ChatSummary) -> Unit,
+    onOpenApp: () -> Unit,
+    onClose: () -> Unit,
+) {
+    val title = stringResource(R.string.share_title)
+    val receivedLabel = stringResource(R.string.share_received_label)
+    val openChat = stringResource(R.string.share_open_chat)
+    val close = stringResource(R.string.share_close)
 
     Column(
         modifier = Modifier
             .fillMaxSize()
-            .verticalScroll(rememberScrollState())
             .padding(OAssistDimens.ScreenContentPadding),
         verticalArrangement = Arrangement.spacedBy(OAssistDimens.SectionSpacing),
     ) {
@@ -377,125 +599,22 @@ private fun ShareScreen(
                 .fillMaxWidth()
                 .oassistHeading(),
         )
-
-        if (payload.isEmpty) {
-            OAssistPanel(title = empty, showTitle = true) {
-                Text(
-                    text = empty,
-                    style = MaterialTheme.typography.bodyLarge,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-            }
-        } else {
-            OAssistPanel(title = receivedLabel, showTitle = true) {
-                if (textToShow.isNotEmpty()) {
-                    Text(
-                        text = textToShow,
-                        style = MaterialTheme.typography.bodyLarge,
-                        color = MaterialTheme.colorScheme.onSurface,
-                    )
-                }
-                if (payload.imageUris.isNotEmpty()) {
-                    Text(
-                        text = imagesCount,
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                    val context = LocalContext.current
-                    val imageDesc = stringResource(R.string.share_image_attached)
-                    payload.imageUris.take(SHARE_MAX_IMAGES).forEach { uri ->
-                        var thumbBase64 by remember(uri) { mutableStateOf<String?>(null) }
-                        LaunchedEffect(uri) {
-                            thumbBase64 = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
-                                runCatching {
-                                    context.contentResolver.openInputStream(uri)?.use { it.readBytes() }
-                                }.getOrNull()?.let { bytes ->
-                                    ru.outsideproarts.oassist.core.provider.ImageCodec.fromBytes(bytes)?.imageBase64
-                                }
-                            }
-                        }
-                        thumbBase64?.let { base64 ->
-                            ru.outsideproarts.oassist.core.ui.components.OAssistImageThumbnail(
-                                base64 = base64,
-                                contentDescription = imageDesc,
-                            )
-                        }
-                    }
-                }
-            }
-
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(OAssistDimens.DenseSpacing),
-            ) {
-                OutlinedTextField(
-                    value = question,
-                    onValueChange = { question = it },
-                    label = { Text(askLabel) },
-                    modifier = Modifier.weight(1f),
-                    maxLines = 3,
-                )
-                IconButton(
-                    onClick = {
-                        if (question.isNotBlank() && !isStreaming) {
-                            val net = ru.outsideproarts.oassist.core.net.NetworkHandle.get()
-                            if (net != null && !net.isOnline.value) {
-                                // Оффлайн: вопрос повторится фронтом сети (эффект выше).
-                                pendingShareRetry = question.trim()
-                                Toast.makeText(context, offlineRetryText, Toast.LENGTH_LONG).show()
-                            } else {
-                                pendingShareRetry = null
-                                ask(question.trim())
-                            }
-                        }
-                    },
-                    enabled = question.isNotBlank() && !isStreaming,
-                    modifier = Modifier.oassistTouchTarget(),
-                ) {
-                    Icon(
-                        imageVector = Icons.AutoMirrored.Filled.Send,
-                        contentDescription = sendLabel,
-                    )
-                }
-            }
-
-            if (response.isNotEmpty()) {
-                OAssistPanel(title = responseLabel, showTitle = true) {
-                    // Статистика — в сворачиваемом блоке «Ход работы», не отдельной строкой.
-                    ShareWorkBlock(
-                        thought = thought,
-                        tools = shareTools.toList(),
-                        usage = turnUsage,
-                        totals = usageTotalsState,
-                    )
-                    // Видимый текст — НЕ live region. Озвучка — через канал речи
-                    // режима SHARE; повтор — действием «Озвучить ответ» (только ответ,
-                    // без мысли и тулов).
-                    Text(
-                        text = response,
-                        style = MaterialTheme.typography.bodyLarge,
-                        color = MaterialTheme.colorScheme.onSurface,
-                        modifier = Modifier.semantics {
-                            customActions = listOf(
-                                CustomAccessibilityAction(speakLabel) {
-                                    val speech = SpeechHandle.get() ?: return@CustomAccessibilityAction false
-                                    SentenceSplitter.splitSentences(response).forEach { speech.speak(it) }
-                                    true
-                                },
-                            )
-                        },
-                    )
-                }
-            }
-        }
-
+        ShareReceivedPanel(payload = payload, compact = true)
+        ChatPickerList(
+            chats = chats,
+            onOpenChat = onOpenChat,
+            onNewChat = onNewChat,
+            onRenameChat = onRenameChat,
+            onDeleteChat = onDeleteChat,
+            includeAssistant = false,
+            modifier = Modifier.weight(1f),
+        )
         Row(
             modifier = Modifier.fillMaxWidth(),
             horizontalArrangement = Arrangement.spacedBy(OAssistDimens.ItemSpacing),
         ) {
             Button(
-                onClick = onOpenChat,
+                onClick = onOpenApp,
                 modifier = Modifier.weight(1f),
             ) {
                 Text(openChat)
@@ -510,88 +629,199 @@ private fun ShareScreen(
     }
 }
 
-/**
- * Свёрнутое по умолчанию полотно «Ход работы» шаринга: мысль, вызовы и
- * статистика (токены/cost) скрыты внутри до разворота — по паттерну WorkBlock чата.
- */
+/** Экран диалога: история чата, прикреплённый файл и поле промпта. */
 @Composable
-private fun ShareWorkBlock(
+private fun ShareConversation(
+    payload: SharePayload,
+    chatTitle: String,
+    isSaved: Boolean,
+    turns: List<StoredTurn>,
+    activeUserMsg: String?,
     thought: String,
-    tools: List<ru.outsideproarts.oassist.core.agent.AgentToolEvent>,
+    response: String,
+    tools: List<AgentToolEvent>,
     usage: ru.outsideproarts.oassist.core.model.ProviderUsage?,
-    totals: ru.outsideproarts.oassist.core.model.UsageTotalsState,
+    isStreaming: Boolean,
+    question: String,
+    onQuestionChange: (String) -> Unit,
+    onSend: () -> Unit,
+    onBack: () -> Unit,
+    onSaveChat: () -> Unit,
+    onDeleteChat: () -> Unit,
 ) {
-    if (thought.isBlank() && tools.isEmpty() && usage == null) return
-    val title = stringResource(R.string.share_work_title)
-    val expandedState = stringResource(R.string.share_work_expanded)
-    val collapsedState = stringResource(R.string.share_work_collapsed)
-    var expanded by remember { mutableStateOf(false) }
-    val state = if (expanded) expandedState else collapsedState
-    val toggleLabel = "$title. $state"
-    val actionLabel = if (expanded) {
-        stringResource(R.string.share_action_collapse)
-    } else {
-        stringResource(R.string.share_action_expand)
-    }
+    val backLabel = stringResource(R.string.share_back)
+    val askLabel = stringResource(R.string.share_ask_label)
+    val sendLabel = stringResource(R.string.share_send)
+    val speakLabel = stringResource(R.string.share_speak_answer)
+    val saveLabel = stringResource(R.string.share_save_chat)
+    val deleteLabel = stringResource(R.string.share_delete_chat)
 
-    OAssistPanel(title = title) {
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .padding(OAssistDimens.ScreenContentPadding),
+        verticalArrangement = Arrangement.spacedBy(OAssistDimens.SectionSpacing),
+    ) {
         Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .oassistTouchTarget()
-                .semantics {
-                    stateDescription = state
-                    customActions = listOf(
-                        CustomAccessibilityAction(toggleLabel) {
-                            expanded = !expanded
-                            true
-                        },
-                    )
-                },
+            modifier = Modifier.fillMaxWidth(),
             verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.SpaceBetween,
         ) {
+            IconButton(onClick = onBack, modifier = Modifier.oassistTouchTarget()) {
+                Icon(
+                    imageVector = Icons.AutoMirrored.Filled.ArrowBack,
+                    contentDescription = backLabel,
+                )
+            }
             Text(
-                text = title,
-                style = MaterialTheme.typography.titleMedium,
+                text = chatTitle.ifBlank { stringResource(ru.outsideproarts.oassist.core.ui.R.string.chats_new) },
+                style = MaterialTheme.typography.headlineSmall,
                 color = MaterialTheme.colorScheme.onSurface,
                 modifier = Modifier
                     .weight(1f)
                     .oassistHeading(),
             )
+            if (turns.isNotEmpty() || activeUserMsg != null) {
+                TextButton(
+                    onClick = if (isSaved) onDeleteChat else onSaveChat,
+                    modifier = Modifier.oassistTouchTarget(),
+                ) {
+                    Text(if (isSaved) deleteLabel else saveLabel)
+                }
+            }
+        }
+
+        LazyColumn(
+            modifier = Modifier
+                .weight(1f)
+                .fillMaxWidth(),
+            verticalArrangement = Arrangement.spacedBy(OAssistDimens.ItemSpacing),
+        ) {
+            items(turns) { turn ->
+                ChatMessageBubble(
+                    isUser = true,
+                    answer = turn.userText,
+                    audio = turn.userAudio,
+                    speakLabel = speakLabel,
+                )
+                val speakTurn: (() -> Unit)? = if (turn.answer.isNotBlank()) {
+                    {
+                        SpeechHandle.get()?.let { speech ->
+                            SentenceSplitter.splitSentences(turn.answer).forEach { speech.speak(it) }
+                        }
+                    }
+                } else {
+                    null
+                }
+                ChatMessageBubble(
+                    isUser = false,
+                    answer = turn.answer,
+                    thought = turn.thought,
+                    tools = turn.tools,
+                    usage = turn.usage,
+                    onSpeak = speakTurn,
+                    speakLabel = speakLabel,
+                )
+            }
+            if (activeUserMsg != null) {
+                item {
+                    ChatMessageBubble(isUser = true, answer = activeUserMsg.orEmpty(), speakLabel = speakLabel)
+                }
+                item {
+                    val speakTurn: (() -> Unit)? = if (response.isNotBlank()) {
+                        {
+                            SpeechHandle.get()?.let { speech ->
+                                SentenceSplitter.splitSentences(response).forEach { speech.speak(it) }
+                            }
+                        }
+                    } else {
+                        null
+                    }
+                    ChatMessageBubble(
+                        isUser = false,
+                        answer = response,
+                        thought = thought,
+                        tools = tools.map {
+                            StoredTool(it.name, it.output, it.isError, it.images)
+                        },
+                        usage = usage,
+                        onSpeak = speakTurn,
+                        speakLabel = speakLabel,
+                    )
+                }
+            }
+        }
+
+        ShareReceivedPanel(payload = payload, compact = true)
+
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(OAssistDimens.DenseSpacing),
+        ) {
+            OutlinedTextField(
+                value = question,
+                onValueChange = onQuestionChange,
+                label = { Text(askLabel) },
+                modifier = Modifier.weight(1f),
+                maxLines = 3,
+            )
             IconButton(
-                onClick = { expanded = !expanded },
-                modifier = Modifier.semantics { contentDescription = actionLabel },
+                onClick = onSend,
+                enabled = question.isNotBlank() && !isStreaming,
+                modifier = Modifier.oassistTouchTarget(),
             ) {
                 Icon(
-                    imageVector = if (expanded) Icons.Default.ExpandLess else Icons.Default.ExpandMore,
-                    contentDescription = null,
+                    imageVector = Icons.AutoMirrored.Filled.Send,
+                    contentDescription = sendLabel,
                 )
             }
         }
-        if (expanded) {
-            ru.outsideproarts.oassist.core.ui.components.OAssistUsageLine(usage = usage)
-            ru.outsideproarts.oassist.core.ui.components.OAssistUsageTotalsLine(totals = totals)
-            if (thought.isNotBlank()) {
-                Text(
-                    text = thought.take(2000),
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-            }
-            tools.takeLast(20).forEach { tool ->
-                val out = tool.output
-                val line = if (out.isNullOrBlank()) {
-                    "…"
-                } else {
-                    tool.name + ": " + out.take(500)
+    }
+}
+
+/** Что получено: текст, количество изображений и миниатюры (компактно). */
+@Composable
+private fun ShareReceivedPanel(payload: SharePayload, compact: Boolean) {
+    val receivedLabel = stringResource(R.string.share_received_label)
+    val imagesCount = stringResource(R.string.share_images_count, payload.imageUris.size)
+    val imageDesc = stringResource(R.string.share_image_attached)
+    val textToShow = payload.text?.trim().orEmpty()
+
+    OAssistPanel(title = receivedLabel, showTitle = true) {
+        if (textToShow.isNotEmpty()) {
+            Text(
+                text = if (compact) textToShow.take(500) else textToShow,
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurface,
+            )
+        }
+        if (payload.imageUris.isNotEmpty()) {
+            Text(
+                text = imagesCount,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            val context = LocalContext.current
+            payload.imageUris.take(SHARE_MAX_IMAGES).forEach { uri ->
+                var thumbBase64 by remember(uri) { mutableStateOf<String?>(null) }
+                LaunchedEffect(uri) {
+                    thumbBase64 = withContext(Dispatchers.IO) {
+                        runCatching {
+                            context.contentResolver.openInputStream(uri)?.use { it.readBytes() }
+                        }.getOrNull()?.let { bytes -> ImageCodec.fromBytes(bytes)?.imageBase64 }
+                    }
                 }
-                Text(
-                    text = line,
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
+                thumbBase64?.let { base64 ->
+                    OAssistImageThumbnail(base64 = base64, contentDescription = imageDesc)
+                }
             }
+        }
+        if (payload.otherUris.isNotEmpty()) {
+            Text(
+                text = payload.otherUris.joinToString("\n") { it.toString() },
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
         }
     }
 }

@@ -11,8 +11,8 @@ import ru.outsideproarts.oassist.core.model.ApprovalState
 import ru.outsideproarts.oassist.core.model.ProviderUsage
 import ru.outsideproarts.oassist.core.model.mergeUsage
 import ru.outsideproarts.oassist.core.provider.ChatChunk
-import ru.outsideproarts.oassist.core.provider.ChatMessage
-import ru.outsideproarts.oassist.core.provider.ChatRole
+import ru.outsideproarts.oassist.core.model.ChatMessage
+import ru.outsideproarts.oassist.core.model.ChatRole
 import ru.outsideproarts.oassist.core.provider.ModelClient
 import ru.outsideproarts.oassist.core.provider.openai.ToolFunctionSchemaDto
 import ru.outsideproarts.oassist.core.provider.openai.ToolSchemaDto
@@ -57,9 +57,9 @@ class AgentLoop(
         history: List<ChatMessage>,
         userMessage: String,
         /** Голосовое приложение PTT к user-ходу (null — текстовый вопрос). */
-        audio: ru.outsideproarts.oassist.core.provider.AudioPart? = null,
+        audio: ru.outsideproarts.oassist.core.model.AudioPart? = null,
         /** Образы к user-сообщению (Share-вложения, скриншоты). Null — без образов. */
-        images: List<ru.outsideproarts.oassist.core.provider.ImagePart>? = null,
+        images: List<ru.outsideproarts.oassist.core.model.ImagePart>? = null,
         /** Сообщения завершённого хода (assistant с toolCalls → TOOL → финальный assistant), без system/user. */
         onTurnMessages: ((List<ChatMessage>) -> Unit)? = null,
     ): Flow<ChatChunk> = flow {
@@ -71,7 +71,7 @@ class AgentLoop(
         }
         val messages = buildList {
             systemPrompt?.let { add(ChatMessage(ChatRole.SYSTEM, it)) }
-            addAll(history)
+            addAll(trimHistoryAudio(history))
             add(ChatMessage(ChatRole.USER, userText, audio = audio, images = userImages))
         }.toMutableList()
         val turnStart = messages.size
@@ -151,7 +151,7 @@ class AgentLoop(
                     role = ChatRole.ASSISTANT,
                     content = contentSb.toString(),
                     toolCalls = toolCalls.map { tc ->
-                        ru.outsideproarts.oassist.core.provider.ToolCallRef(
+                        ru.outsideproarts.oassist.core.model.ToolCallRef(
                             id = tc.id,
                             name = tc.name,
                             argumentsJson = tc.argumentsJson,

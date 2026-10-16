@@ -19,11 +19,11 @@ import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
-import ru.outsideproarts.oassist.core.provider.ChatMessage
-import ru.outsideproarts.oassist.core.provider.ChatRole
+import ru.outsideproarts.oassist.core.model.ChatMessage
+import ru.outsideproarts.oassist.core.model.ChatRole
 import ru.outsideproarts.oassist.core.provider.ModelClient
 import ru.outsideproarts.oassist.core.provider.ProviderJson
-import ru.outsideproarts.oassist.core.provider.ToolCallRef
+import ru.outsideproarts.oassist.core.model.ToolCallRef
 
 class OpenAiResponsesTest {
 
@@ -90,7 +90,7 @@ class OpenAiResponsesTest {
                 ChatRole.TOOL,
                 "снимок",
                 toolCallId = "call_1",
-                images = listOf(ru.outsideproarts.oassist.core.provider.ImagePart(imageBase64 = "AAAA")),
+                images = listOf(ru.outsideproarts.oassist.core.model.ImagePart(imageBase64 = "AAAA")),
             ),
         )
 

@@ -8,7 +8,7 @@ import ru.outsideproarts.oassist.core.model.ModelCapability
 import ru.outsideproarts.oassist.core.model.ModelInfo
 import ru.outsideproarts.oassist.core.model.ModelProtocol
 import ru.outsideproarts.oassist.core.provider.ChatChunk
-import ru.outsideproarts.oassist.core.provider.ChatMessage
+import ru.outsideproarts.oassist.core.model.ChatMessage
 import ru.outsideproarts.oassist.core.provider.EndpointConfig
 import ru.outsideproarts.oassist.core.provider.ModelClient
 import ru.outsideproarts.oassist.core.provider.ProviderAuth

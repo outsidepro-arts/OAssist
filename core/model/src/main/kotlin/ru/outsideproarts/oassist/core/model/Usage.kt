@@ -4,6 +4,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
+import kotlinx.serialization.Serializable
 
 /**
  * Каноническая статистика использования одного round-trip'а к модели.
@@ -15,6 +16,7 @@ import kotlinx.coroutines.flow.update
  * стандартные API OpenAI/Anthropic/Gemini её не отдают — null значит «неизвестно»,
  * а не «бесплатно».
  */
+@Serializable
 data class ProviderUsage(
     val inputTokens: Long? = null,
     val outputTokens: Long? = null,

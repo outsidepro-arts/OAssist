@@ -344,4 +344,7 @@
     <string name="mode_share_extras">Поведение отправки</string>
     <string name="mode_share_action">Что делать с контентом</string>
     <string name="mode_share_show_in_chat">Показывать в чате</string>
+    <string name="mode_chats_title">Диалоги</string>
+    <string name="mode_chats_autosave">Автоматически сохранять чаты</string>
+    <string name="mode_chats_autosave_hint">Новый диалог сразу попадает в список чатов. При выключении диалог сохраняется кнопкой «Сохранить чат»</string>
 </resources>

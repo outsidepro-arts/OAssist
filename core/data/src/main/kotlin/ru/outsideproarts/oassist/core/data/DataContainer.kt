@@ -2,6 +2,9 @@ package ru.outsideproarts.oassist.core.data
 
 import android.content.Context
 import androidx.room.Room
+import java.io.File
+import ru.outsideproarts.oassist.core.data.chat.ChatMediaStore
+import ru.outsideproarts.oassist.core.data.chat.ChatRepository
 import ru.outsideproarts.oassist.core.data.db.OAssistDatabase
 import ru.outsideproarts.oassist.core.data.mcp.McpConfigStore
 import ru.outsideproarts.oassist.core.data.mcp.McpServerRepository
@@ -65,6 +68,14 @@ class DataContainer(
 
     val skills: SkillStore by lazy {
         FileSkillStore(deviceContext)
+    }
+
+    val chatMedia: ChatMediaStore by lazy {
+        ChatMediaStore(File(credentialContext.filesDir, "chats"))
+    }
+
+    val chats: ChatRepository by lazy {
+        ChatRepository(database, chatMedia)
     }
 
     val database: OAssistDatabase by lazy {

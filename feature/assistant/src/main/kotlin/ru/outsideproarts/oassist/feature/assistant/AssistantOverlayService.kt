@@ -50,8 +50,8 @@ import ru.outsideproarts.oassist.core.model.ApprovalDecision
 import ru.outsideproarts.oassist.core.model.ApprovalRequest
 import ru.outsideproarts.oassist.core.model.AssistMode
 import ru.outsideproarts.oassist.core.provider.ChatChunk
-import ru.outsideproarts.oassist.core.provider.ChatMessage
-import ru.outsideproarts.oassist.core.provider.ChatRole
+import ru.outsideproarts.oassist.core.model.ChatMessage
+import ru.outsideproarts.oassist.core.model.ChatRole
 import ru.outsideproarts.oassist.core.provider.ProviderError
 import ru.outsideproarts.oassist.core.provider.collectSafe
 import ru.outsideproarts.oassist.core.provider.isEarlyRetryable
@@ -97,8 +97,14 @@ class AssistantOverlayService : LifecycleService(), SavedStateRegistryOwner {
 
     private var answer by mutableStateOf("")
     private var thought by mutableStateOf("")
-    private val toolEvents = mutableStateListOf<AgentToolEvent>()
-    private var turnUsage by mutableStateOf<ru.outsideproarts.oassist.core.model.ProviderUsage?>(null)
+private val toolEvents = mutableStateListOf<AgentToolEvent>()
+private var turnUsage by mutableStateOf<ru.outsideproarts.oassist.core.model.ProviderUsage?>(null)
+
+/** Ходы текущей сессии для закреплённого диалога «Ассистент» (перезапись целиком). */
+private val sessionTurns = mutableListOf<ru.outsideproarts.oassist.core.model.StoredTurn>()
+
+/** Транскрипт текущего хода (assistant/tool пары) — для сохранённого диалога. */
+private var turnTranscript: List<ChatMessage> = emptyList()
     private var sttPreview by mutableStateOf("")
     private var isStreaming by mutableStateOf(false)
     private var expanded by mutableStateOf(false)
@@ -226,7 +232,7 @@ class AssistantOverlayService : LifecycleService(), SavedStateRegistryOwner {
         val session = AssistSessionStore.getOrCreate()
         intent?.getStringExtra(EXTRA_SCREEN_CONTEXT)?.let { session.screenContext = it }
         intent?.getStringExtra(EXTRA_SCREEN_IMAGE)?.let {
-            session.screenImage = ru.outsideproarts.oassist.core.provider.ImagePart(imageBase64 = it)
+            session.screenImage = ru.outsideproarts.oassist.core.model.ImagePart(imageBase64 = it)
         }
         if (!sessionActive) {
             if (showOverlay && !Settings.canDrawOverlays(this)) {
@@ -535,6 +541,7 @@ class AssistantOverlayService : LifecycleService(), SavedStateRegistryOwner {
         thought = ""
         toolEvents.clear()
         turnUsage = null
+        turnTranscript = emptyList()
         hintText = null
         speech?.stop()
         turnJob?.cancel()
@@ -589,6 +596,7 @@ class AssistantOverlayService : LifecycleService(), SavedStateRegistryOwner {
                         images = screenImage?.let { listOf(it) },
                         onTurnMessages = { turn ->
                             session.appendTurn(ChatMessage(ChatRole.USER, text), turn)
+                            turnTranscript = turn
                         },
                     ),
                     agent = agent,
@@ -700,11 +708,42 @@ class AssistantOverlayService : LifecycleService(), SavedStateRegistryOwner {
                 }
                 execute(voiceFlow.onTurnFinished(continueDialog))
             } finally {
+                persistAssistantTurn(text)
                 isStreaming = false
                 srKeepFocusable = false
                 refreshOverlayFocusable()
             }
         }
+    }
+
+    /**
+     * Сохранить ход в закреплённый диалог «Ассистент»: вся сессия пишется
+     * перезаписью (новая сессия — новый набор ходов). Пустой ход не пишется:
+     * случайно открытый оверлей не затирает сохранённую историю.
+     */
+    private fun persistAssistantTurn(userText: String) {
+        if (thought.isBlank() && answer.isBlank() && toolEvents.isEmpty()) return
+        val stored = ru.outsideproarts.oassist.core.model.StoredTurn(
+            userText = userText,
+            thought = thought,
+            tools = toolEvents.map {
+                ru.outsideproarts.oassist.core.model.StoredTool(
+                    name = it.name,
+                    output = it.output,
+                    isError = it.isError,
+                    images = it.images,
+                )
+            },
+            answer = answer,
+            usage = turnUsage,
+            turn = turnTranscript.ifEmpty {
+                if (answer.isNotBlank()) listOf(ChatMessage(ChatRole.ASSISTANT, answer)) else emptyList()
+            },
+        )
+        sessionTurns.add(stored)
+        val repo = ru.outsideproarts.oassist.core.data.chat.ChatHandle.get() ?: return
+        val snapshot = sessionTurns.toList()
+        serviceScope.launch { repo.replaceAssistantTurns(snapshot) }
     }
 
     private fun onSpeakAnswer() {

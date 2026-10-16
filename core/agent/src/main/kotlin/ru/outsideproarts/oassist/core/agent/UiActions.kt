@@ -15,7 +15,7 @@ import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.withTimeoutOrNull
 import ru.outsideproarts.oassist.core.device.NoopExecutor
 import ru.outsideproarts.oassist.core.provider.ImageCodec
-import ru.outsideproarts.oassist.core.provider.ImagePart
+import ru.outsideproarts.oassist.core.model.ImagePart
 import ru.outsideproarts.oassist.core.device.PrivExecutor
 import java.util.ArrayDeque
 

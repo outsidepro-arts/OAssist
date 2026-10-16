@@ -185,9 +185,6 @@ private fun OAssistApp(
                 val modeConfigs by graph.providers.observeModeConfigs()
                     .collectAsStateWithLifecycle(initialValue = emptyList())
                 val chatConfig = modeConfigs.find { it.mode == AssistMode.CHAT }
-                val providers by graph.providers.observeProviders()
-                    .collectAsStateWithLifecycle(initialValue = emptyList())
-                val chatProvider = providers.find { it.id == chatConfig?.providerId }
                 val context = LocalContext.current
                 // Флаг AUDIO_IN — только ручной Switch capabilities модели.
                 var chatModels by remember { mutableStateOf(emptyList<ru.outsideproarts.oassist.core.model.ModelInfo>()) }
@@ -198,20 +195,21 @@ private fun OAssistApp(
                 }
                 val chatAudioIn = chatModels.find { it.id == chatConfig?.modelId }
                     ?.capabilities?.contains(ru.outsideproarts.oassist.core.model.ModelCapability.AUDIO_IN) == true
-                val chatVision = chatModels.find { it.id == chatConfig?.modelId }
-                    ?.capabilities?.contains(ru.outsideproarts.oassist.core.model.ModelCapability.VISION) == true
                 ChatScreen(
-                    sendMessage = { userMsg, history, audio ->
-                        val profile = chatProvider
+                    sendMessage = { mode, userMsg, history, audio, onTurnMessages ->
+                        val config = graph.providers.observeModeConfigs().first()
+                            .find { it.mode == mode }
+                        val profile = graph.providers.observeProviders().first()
+                            .find { it.id == config?.providerId }
                             ?: throw ru.outsideproarts.oassist.core.provider.ProviderError.NotConfigured(
                                 ru.outsideproarts.oassist.core.provider.ProviderError.NotConfigured.Reason.PROVIDER_MISSING,
                             )
-                        val modelId = chatConfig?.modelId?.takeIf { it.isNotBlank() }
+                        val modelId = config?.modelId?.takeIf { it.isNotBlank() }
                             ?: throw ru.outsideproarts.oassist.core.provider.ProviderError.NotConfigured(
                                 ru.outsideproarts.oassist.core.provider.ProviderError.NotConfigured.Reason.MODEL_MISSING,
                             )
-                        // Озвучка режима CHAT применяется перед каждым стримом.
-                        graph.applyModeTts(chatConfig?.effectiveTts() ?: ru.outsideproarts.oassist.core.model.TtsConfig.DEFAULT)
+                        // Озвучка режима применяется перед каждым стримом.
+                        graph.applyModeTts(config?.effectiveTts() ?: ru.outsideproarts.oassist.core.model.TtsConfig.DEFAULT)
                         val client = graph.modelClientFor(profile)
                         val prefs = graph.data.toolConfigs.snapshot()
                         val toolRegistry = ru.outsideproarts.oassist.core.agent.ToolCatalog.createRegistry(
@@ -231,25 +229,30 @@ private fun OAssistApp(
                             graph.privilegeExecutor(),
                             graph.searchActions,
                         )
+                        val visionEnabled = config?.providerId
+                            ?.let { graph.providers.observeModelCatalog(it).first()?.models }
+                            .orEmpty()
+                            .find { it.id == modelId }
+                            ?.capabilities
+                            ?.contains(ru.outsideproarts.oassist.core.model.ModelCapability.VISION) == true
                         val agent = ru.outsideproarts.oassist.core.agent.AgentLoop(
                             client,
                             toolRegistry,
                             approvalPolicy = graph.approvalPolicy,
                             events = graph.narratorEvents,
-                            visionEnabled = chatVision,
-                            sessionScope = ru.outsideproarts.oassist.core.model.AssistMode.CHAT.name,
+                            visionEnabled = visionEnabled,
+                            sessionScope = mode.name,
                             permissionRequester = graph.permissionRequester,
                             screenLocked = { graph.keyguardLockState.isLocked() },
                         )
                         ru.outsideproarts.oassist.core.agent.AgentSession(
                             chunks = agent.stream(
                                 modelId = modelId,
-                                systemPrompt = graph.buildSystemPrompt(
-                                    ru.outsideproarts.oassist.core.model.AssistMode.CHAT,
-                                ),
+                                systemPrompt = graph.buildSystemPrompt(mode),
                                 history = history,
                                 userMessage = userMsg,
                                 audio = audio,
+                                onTurnMessages = onTurnMessages,
                             ),
                             agent = agent,
                         )

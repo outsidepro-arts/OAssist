@@ -17,7 +17,7 @@ import ru.outsideproarts.oassist.core.model.ToolAccess
 import ru.outsideproarts.oassist.core.model.ToolCategory
 import ru.outsideproarts.oassist.core.model.ToolGroups
 import ru.outsideproarts.oassist.core.provider.ChatChunk
-import ru.outsideproarts.oassist.core.provider.ChatMessage
+import ru.outsideproarts.oassist.core.model.ChatMessage
 import ru.outsideproarts.oassist.core.provider.ModelClient
 import ru.outsideproarts.oassist.core.provider.openai.ToolSchemaDto
 

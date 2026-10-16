@@ -3,7 +3,7 @@ package ru.outsideproarts.oassist.core.agent
 import kotlinx.serialization.json.JsonObject
 import ru.outsideproarts.oassist.core.model.PrivilegeLevel
 import ru.outsideproarts.oassist.core.model.ToolGroups
-import ru.outsideproarts.oassist.core.provider.ImagePart
+import ru.outsideproarts.oassist.core.model.ImagePart
 
 /** Описание инструмента для передачи в LLM (OpenAI function calling). */
 data class ToolSchema(

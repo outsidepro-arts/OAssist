@@ -346,4 +346,7 @@
     <string name="mode_share_extras">Share behavior</string>
     <string name="mode_share_action">What to do with content</string>
     <string name="mode_share_show_in_chat">Show in chat</string>
+    <string name="mode_chats_title">Chats</string>
+    <string name="mode_chats_autosave">Automatically save chats</string>
+    <string name="mode_chats_autosave_hint">A new chat is added to the chat list right away. When off, save it with the "Save chat" button</string>
 </resources>

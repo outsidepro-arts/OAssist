@@ -4,6 +4,7 @@ import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.util.Base64
 import java.io.ByteArrayOutputStream
+import ru.outsideproarts.oassist.core.model.ImagePart
 
 /**
  * Кодирование изображений в [ImagePart] (даунскейл + JPEG) и обратно для UI-превью.

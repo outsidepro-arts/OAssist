@@ -118,6 +118,8 @@ data class ModeConfig(
     val stt: SttConfig? = null,
     /** Звуковое сопровождение действий агента; null — legacy, трактуется как включено. */
     val soundEnabled: Boolean? = null,
+    /** Автосохранение новых диалогов в список чатов; null — legacy, трактуется как включено. */
+    val autoSaveChats: Boolean? = null,
 ) {
     companion object {
         fun default(mode: AssistMode): ModeConfig = when (mode) {
@@ -134,6 +136,9 @@ data class ModeConfig(
     fun effectiveStt(): SttConfig = stt ?: SttConfig.DEFAULT
     /** Звуковое сопровождение с учётом старых конфигов без поля [soundEnabled]: дефолт — включено. */
     fun effectiveSoundEnabled(): Boolean = soundEnabled ?: true
+
+    /** Автосохранение диалогов по умолчанию для [autoSaveChats]: null — включено. */
+    fun effectiveAutoSaveChats(): Boolean = autoSaveChats ?: true
 }
 
 /** Возможности модели — из ответа провайдера или пробы, правятся вручную. */

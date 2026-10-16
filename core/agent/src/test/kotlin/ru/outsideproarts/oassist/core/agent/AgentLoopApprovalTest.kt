@@ -30,7 +30,7 @@ class AgentLoopApprovalTest {
         override suspend fun fetchModels(): List<ModelInfo> = emptyList()
         override fun chatCompletionStream(
             modelId: String,
-            messages: List<ru.outsideproarts.oassist.core.provider.ChatMessage>,
+            messages: List<ru.outsideproarts.oassist.core.model.ChatMessage>,
             tools: List<ToolSchemaDto>,
         ): Flow<ChatChunk> = flowOf(*(rounds.removeFirstOrNull() ?: listOf(ChatChunk.Finish("stop"))).toTypedArray())
     }

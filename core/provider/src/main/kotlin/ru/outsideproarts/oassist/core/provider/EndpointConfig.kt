@@ -3,6 +3,8 @@ package ru.outsideproarts.oassist.core.provider
 import io.ktor.client.request.HttpRequestBuilder
 import io.ktor.client.request.headers
 import ru.outsideproarts.oassist.core.data.secret.SecretStore
+import ru.outsideproarts.oassist.core.model.ChatMessage
+import ru.outsideproarts.oassist.core.model.ChatRole
 import ru.outsideproarts.oassist.core.model.ModelProtocol
 import ru.outsideproarts.oassist.core.model.ProviderProfile
 

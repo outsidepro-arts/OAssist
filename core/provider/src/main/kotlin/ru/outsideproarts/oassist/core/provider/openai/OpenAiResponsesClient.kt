@@ -26,8 +26,8 @@ import ru.outsideproarts.oassist.core.model.ModelInfo
 import ru.outsideproarts.oassist.core.model.ProviderUsage
 import ru.outsideproarts.oassist.core.model.mergeUsage
 import ru.outsideproarts.oassist.core.provider.ChatChunk
-import ru.outsideproarts.oassist.core.provider.ChatMessage
-import ru.outsideproarts.oassist.core.provider.ChatRole
+import ru.outsideproarts.oassist.core.model.ChatMessage
+import ru.outsideproarts.oassist.core.model.ChatRole
 import ru.outsideproarts.oassist.core.provider.EndpointConfig
 import ru.outsideproarts.oassist.core.provider.ImageCodec
 import ru.outsideproarts.oassist.core.provider.ModelClient
@@ -310,7 +310,7 @@ class OpenAiResponsesClient internal constructor(
             })
         }
 
-        private fun userImagesItem(text: String, images: List<ru.outsideproarts.oassist.core.provider.ImagePart>): JsonElement =
+        private fun userImagesItem(text: String, images: List<ru.outsideproarts.oassist.core.model.ImagePart>): JsonElement =
             buildJsonObject {
                 put("role", "user")
                 put("content", buildJsonArray {

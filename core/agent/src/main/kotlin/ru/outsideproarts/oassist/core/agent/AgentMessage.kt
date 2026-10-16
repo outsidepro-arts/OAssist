@@ -10,7 +10,7 @@ data class AgentToolEvent(
     val name: String,
     val output: String? = null,
     val isError: Boolean = false,
-    val images: List<ru.outsideproarts.oassist.core.provider.ImagePart> = emptyList(),
+    val images: List<ru.outsideproarts.oassist.core.model.ImagePart> = emptyList(),
 )
 
 /** Три проекции ответа агента — раздельные сущности для UI и синтеза. */

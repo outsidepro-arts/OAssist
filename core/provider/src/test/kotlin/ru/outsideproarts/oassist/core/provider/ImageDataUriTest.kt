@@ -2,6 +2,7 @@ package ru.outsideproarts.oassist.core.provider
 
 import org.junit.Assert.assertEquals
 import org.junit.Test
+import ru.outsideproarts.oassist.core.model.ImagePart
 
 class ImageDataUriTest {
 

@@ -1,6 +1,6 @@
 package ru.outsideproarts.oassist.core.agent
 
-import ru.outsideproarts.oassist.core.provider.ChatMessage
+import ru.outsideproarts.oassist.core.model.ChatMessage
 
 /** Образы вырезаны из истории: модель должна знать, что картинка была. */
 const val IMAGE_REMOVED_NOTE = "[изображение удалено из истории]"
