@@ -6,6 +6,7 @@ import android.content.Intent
 import android.os.Bundle
 import android.service.notification.NotificationListenerService
 import android.service.notification.StatusBarNotification
+import kotlinx.coroutines.delay
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -37,19 +38,29 @@ fun formatNotifications(items: List<NotifyItem>): String {
 /**
  * Операции над уведомлениями через пассивный NotificationListenerService.
  * Сервис поставляется приложением ([serviceProvider]); если доступ не выдан —
- * явная ошибка с подсказкой.
+ * явная ошибка с подсказкой. Доступ выдан, а сервис ещё не биндится (старт
+ * процесса, протухшее подключение после переустановки) — переподключение
+ * через [requestRebind] и короткое ожидание, без ложного «доступ не выдан».
  */
 class NotifyActions(
     private val serviceProvider: () -> NotificationListenerService?,
+    private val accessGranted: () -> Boolean = { false },
+    private val requestRebind: () -> Unit = {},
+    private val connectTimeoutMs: Long = NOTIFY_CONNECT_TIMEOUT_MS,
+    private val connectPollMs: Long = NOTIFY_CONNECT_POLL_MS,
 ) {
 
-    private fun serviceOrError(): Result<NotificationListenerService> {
-        val service = serviceProvider()
-            ?: return Result.failure(IllegalStateException(SERVICE_DISABLED_MESSAGE))
-        return Result.success(service)
+    private suspend fun serviceOrError(): Result<NotificationListenerService> {
+        serviceProvider()?.let { return Result.success(it) }
+        if (!accessGranted()) {
+            return Result.failure(IllegalStateException(SERVICE_DISABLED_MESSAGE))
+        }
+        val connected = awaitReconnected(connectTimeoutMs, connectPollMs, { requestRebind() }, serviceProvider)
+            ?: return Result.failure(IllegalStateException(SERVICE_NOT_CONNECTED_MESSAGE))
+        return Result.success(connected)
     }
 
-    fun list(): ToolResult {
+    suspend fun list(): ToolResult {
         val service = serviceOrError().getOrElse { return ToolResult(false, it.message ?: "Сервис недоступен") }
         return runCatching {
             val items = service.activeNotifications
@@ -61,7 +72,7 @@ class NotifyActions(
         }.getOrElse { ToolResult(false, "Не удалось прочитать уведомления: ${it.message}") }
     }
 
-    fun open(key: String): ToolResult {
+    suspend fun open(key: String): ToolResult {
         val service = serviceOrError().getOrElse { return ToolResult(false, it.message ?: "Сервис недоступен") }
         val sbn = service.activeNotifications?.find { it.key == key }
             ?: return ToolResult(false, "Уведомление не найдено — обновите список")
@@ -74,7 +85,7 @@ class NotifyActions(
         }.getOrElse { ToolResult(false, "Не удалось открыть уведомление: ${it.message}") }
     }
 
-    fun clear(key: String): ToolResult {
+    suspend fun clear(key: String): ToolResult {
         val service = serviceOrError().getOrElse { return ToolResult(false, it.message ?: "Сервис недоступен") }
         val sbn = service.activeNotifications?.find { it.key == key }
         if (sbn != null && isOwnNotification(sbn.packageName, service.packageName)) {
@@ -87,7 +98,7 @@ class NotifyActions(
     }
 
     /** Ответить на уведомление текстом (через первое действие с RemoteInput). */
-    fun reply(key: String, text: String): ToolResult {
+    suspend fun reply(key: String, text: String): ToolResult {
         val service = serviceOrError().getOrElse { return ToolResult(false, it.message ?: "Сервис недоступен") }
         val trimmed = text.trim().take(MAX_REPLY_CHARS)
         if (trimmed.isEmpty()) return ToolResult(false, "Пустой текст ответа")
@@ -120,7 +131,12 @@ class NotifyActions(
 
     companion object {
         const val SERVICE_DISABLED_MESSAGE =
-            "Доступ к уведомлениям не выдан — включите его в системных настройках"
+            "Доступ к уведомлениям не выдан — включите его в системных настройках " +
+                "(если выдавали ранее — система могла отозвать доступ при очистке фоновых, включите заново)"
+        const val SERVICE_NOT_CONNECTED_MESSAGE =
+            "Доступ к уведомлениям выдан, но сервис уведомлений ещё не подключился — повторите через пару секунд; " +
+                "не помогает — откройте приложение OAssist (подключение восстановится) и разрешите ему автозапуск " +
+                "и фоновую работу: менеджер питания приостанавливает сервисы"
         private const val MAX_ITEMS = 20
 
         /** Свои уведомления OAssist (FGS-заглушки, сессия ассистента) скрыты от notify-тулов. */
@@ -129,3 +145,6 @@ class NotifyActions(
         const val MAX_REPLY_CHARS = 500
     }
 }
+
+private const val NOTIFY_CONNECT_TIMEOUT_MS = 2_500L
+private const val NOTIFY_CONNECT_POLL_MS = 100L

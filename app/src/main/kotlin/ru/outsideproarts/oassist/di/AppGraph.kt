@@ -124,14 +124,55 @@ class AppGraph private constructor(context: Context) {
             },
             privProvider = { privilegeExecutor() },
             overlayControl = { ru.outsideproarts.oassist.core.agent.OverlayControl.get() },
+            accessGranted = {
+                ru.outsideproarts.oassist.a11y.OAssistAccessibilityService.isEnabled(appContext)
+            },
+            requestReconnect = { reassertAccessibilityService() },
         )
+    }
+
+    /**
+     * Пере-заявка нашего сервиса доступности: тогл компоненты в secure-настройках
+     * (единственный рычаг без участия пользователя — система перестаёт держать
+     * привязку в фоне). Выключение обязательно возвращается — NonCancellable.
+     */
+    private suspend fun reassertAccessibilityService() {
+        val priv = privilegeExecutor()
+        val key = ru.outsideproarts.oassist.core.agent.ScreenCurtain.ENABLED_ACCESSIBILITY_SERVICES
+        val current = priv.getSetting("secure", key)
+            .getOrNull()?.takeIf { it.isNotBlank() } ?: return
+        val component = android.content.ComponentName(
+            appContext,
+            ru.outsideproarts.oassist.a11y.OAssistAccessibilityService::class.java,
+        ).flattenToString()
+        val (without, removed) =
+            ru.outsideproarts.oassist.core.agent.removeServiceComponent(current, component)
+        if (!removed) return
+        if (priv.putSetting("secure", key, without).isFailure) return
+        kotlinx.coroutines.delay(REASSERT_SETTLE_MS)
+        kotlinx.coroutines.withContext(kotlinx.coroutines.NonCancellable) {
+            runCatching { priv.putSetting("secure", key, current) }
+        }
     }
 
     /** Операции над уведомлениями через пассивный NotificationListenerService. */
     val notifyActions: ru.outsideproarts.oassist.core.agent.NotifyActions by lazy {
-        ru.outsideproarts.oassist.core.agent.NotifyActions {
-            ru.outsideproarts.oassist.notify.OAssistNotificationListener.instance
-        }
+        ru.outsideproarts.oassist.core.agent.NotifyActions(
+            serviceProvider = {
+                ru.outsideproarts.oassist.notify.OAssistNotificationListener.instance
+            },
+            accessGranted = {
+                ru.outsideproarts.oassist.notify.OAssistNotificationListener.isEnabled(appContext)
+            },
+            requestRebind = {
+                android.service.notification.NotificationListenerService.requestRebind(
+                    android.content.ComponentName(
+                        appContext,
+                        ru.outsideproarts.oassist.notify.OAssistNotificationListener::class.java,
+                    ),
+                )
+            },
+        )
     }
 
     /** Привилегии M5.1: Shizuku (UserService) > Root (su) > Noop (явный отказ). */
@@ -491,6 +532,7 @@ class AppGraph private constructor(context: Context) {
 
     companion object {
         private const val MCP_LIST_TIMEOUT_MS = 20_000L
+        private const val REASSERT_SETTLE_MS = 400L
 
         @Volatile
         // Контексты уровня приложения, а не Activity/Service: синглтон безопасен.

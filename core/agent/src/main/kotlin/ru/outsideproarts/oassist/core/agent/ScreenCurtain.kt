@@ -30,14 +30,16 @@ fun isMostlyBlack(pixels: IntArray, blackRatio: Double = 0.98): Boolean {
 
 /** Удаление компоненты из строки `enabled_accessibility_services`; флаг — было ли что удалять. */
 fun removeServiceComponent(services: String, component: String): Pair<String, Boolean> {
+    val target = normalizeServiceComponent(component)
     val parts = services.split(':').filter { it.isNotBlank() }
-    val kept = parts.filter { !it.equals(component, ignoreCase = true) }
+    val kept = parts.filter { normalizeServiceComponent(it) != target }
     return kept.joinToString(":") to (kept.size != parts.size)
 }
 
-/** Возврат компоненты в строку `enabled_accessibility_services` (без дублей). */
+/** Возврат компоненты в строку `enabled_accessibility_services` (без дублей в любой нотации). */
 fun addServiceComponent(services: String, component: String): String {
-    val parts = services.split(':').filter { it.isNotBlank() && !it.equals(component, ignoreCase = true) }
+    if (enabledServicesContain(services, component)) return services
+    val parts = services.split(':').filter { it.isNotBlank() }
     return (parts + component).joinToString(":")
 }
 

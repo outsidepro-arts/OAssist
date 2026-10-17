@@ -40,7 +40,7 @@ class M52ToolsTest {
 
     @Test
     fun `notify_reply при пустом listener честно падает fail-closed`() {
-        val tool = NotifyReplyTool(NotifyActions { null })
+        val tool = NotifyReplyTool(NotifyActions(serviceProvider = { null }))
         assertEquals(ToolGroups.key(ToolCategory.COMMUNICATION, ToolAccess.WRITE), tool.groupKey)
         val args = buildJsonObject {
             put("key", "k")
@@ -53,7 +53,7 @@ class M52ToolsTest {
 
     @Test
     fun `notify_reply валидирует аргументы`() {
-        val tool = NotifyReplyTool(NotifyActions { null })
+        val tool = NotifyReplyTool(NotifyActions(serviceProvider = { null }))
         val noKey = runBlocking { tool.execute(buildJsonObject { put("text", "x") }) }
         assertFalse(noKey.success)
         val noText = runBlocking { tool.execute(buildJsonObject { put("key", "k") }) }
@@ -62,7 +62,7 @@ class M52ToolsTest {
 
     @Test
     fun `reply подтверждает текст`() {
-        val tool = NotifyReplyTool(NotifyActions { null })
+        val tool = NotifyReplyTool(NotifyActions(serviceProvider = { null }))
         val args = buildJsonObject {
             put("key", "k")
             put("text", "созвон переносим")

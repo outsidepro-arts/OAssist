@@ -70,4 +70,24 @@ class ScreenCurtainTest {
         )
         assertEquals(result, addServiceComponent(result, TALKBACK_SERVICE_COMPONENT))
     }
+
+    @Test
+    fun removeServiceComponent_matchesShortNotationEntry() {
+        val services = "com.google.android.marvin.talkback/.TalkBackService:" +
+            "ru.outsideproarts.oassist/.a11y.OAssistAccessibilityService"
+
+        val (result, removed) = removeServiceComponent(services, TALKBACK_SERVICE_COMPONENT)
+
+        assertTrue(removed)
+        assertEquals("ru.outsideproarts.oassist/.a11y.OAssistAccessibilityService", result)
+    }
+
+    @Test
+    fun addServiceComponent_deduplicatesAcrossNotations() {
+        val services = "com.google.android.marvin.talkback/.TalkBackService"
+
+        val result = addServiceComponent(services, TALKBACK_SERVICE_COMPONENT)
+
+        assertEquals(services, result)
+    }
 }

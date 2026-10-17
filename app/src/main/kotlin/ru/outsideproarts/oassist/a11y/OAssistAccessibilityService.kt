@@ -17,6 +17,11 @@ class OAssistAccessibilityService : AccessibilityService() {
         instance = this
     }
 
+    override fun onRebind(intent: android.content.Intent?) {
+        instance = this
+        super.onRebind(intent)
+    }
+
     override fun onAccessibilityEvent(event: AccessibilityEvent?) {
         // Пассивный режим: события игнорируются, модель их не видит.
     }
@@ -40,10 +45,10 @@ class OAssistAccessibilityService : AccessibilityService() {
             val enabled = Settings.Secure.getString(
                 context.contentResolver,
                 Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES,
-            ) ?: return false
+            )
             val component = ComponentName(context, OAssistAccessibilityService::class.java)
-                .flattenToShortString()
-            return enabled.split(':').any { it == component }
+                .flattenToString()
+            return ru.outsideproarts.oassist.core.agent.enabledServicesContain(enabled, component)
         }
     }
 }

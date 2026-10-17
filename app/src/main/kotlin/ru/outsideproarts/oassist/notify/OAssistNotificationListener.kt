@@ -19,6 +19,12 @@ class OAssistNotificationListener : NotificationListenerService() {
 
     override fun onListenerDisconnected() {
         if (instance === this) instance = null
+        // Контракт API: requestRebind — единственный безопасный вызов в этом состоянии.
+        runCatching {
+            NotificationListenerService.requestRebind(
+                ComponentName(this, OAssistNotificationListener::class.java),
+            )
+        }
     }
 
     override fun onNotificationPosted(sbn: StatusBarNotification?) {
@@ -40,8 +46,8 @@ class OAssistNotificationListener : NotificationListenerService() {
             val enabled = Settings.Secure.getString(
                 context.contentResolver,
                 "enabled_notification_listeners",
-            ) ?: return false
-            return enabled.split(':').any { it == flat }
+            )
+            return ru.outsideproarts.oassist.core.agent.enabledServicesContain(enabled, flat)
         }
     }
 }

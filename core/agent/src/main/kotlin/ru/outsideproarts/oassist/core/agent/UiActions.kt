@@ -32,14 +32,22 @@ class UiActions(
     private val serviceProvider: () -> AccessibilityService?,
     private val privProvider: suspend () -> PrivExecutor = { NoopExecutor() },
     private val overlayControl: () -> OverlayControl? = { null },
+    private val accessGranted: () -> Boolean = { false },
+    private val requestReconnect: suspend () -> Unit = {},
+    private val connectTimeoutMs: Long = A11Y_CONNECT_TIMEOUT_MS,
+    private val connectPollMs: Long = A11Y_CONNECT_POLL_MS,
 ) {
 
     private val curtain = ScreenCurtain(privProvider)
 
-    private fun serviceOrError(): Result<AccessibilityService> {
-        val service = serviceProvider()
-            ?: return Result.failure(IllegalStateException(SERVICE_DISABLED_MESSAGE))
-        return Result.success(service)
+    private suspend fun serviceOrError(): Result<AccessibilityService> {
+        serviceProvider()?.let { return Result.success(it) }
+        if (!accessGranted()) {
+            return Result.failure(IllegalStateException(SERVICE_DISABLED_MESSAGE))
+        }
+        val connected = awaitReconnected(connectTimeoutMs, connectPollMs, requestReconnect, serviceProvider)
+            ?: return Result.failure(IllegalStateException(SERVICE_NOT_CONNECTED_MESSAGE))
+        return Result.success(connected)
     }
 
     /** Скрыть наш оверлей на время координатного жеста: панель перехватывает тапы по приложению. */
@@ -89,7 +97,7 @@ class UiActions(
     suspend fun snapshot(): Result<UiSnapshotResult> = overlayHidden(settleMs = SNAPSHOT_SETTLE_MS) { snapshotDirect() }
 
     @Suppress("DEPRECATION")
-    private fun snapshotDirect(): Result<UiSnapshotResult> {
+    private suspend fun snapshotDirect(): Result<UiSnapshotResult> {
         val service = serviceOrError().getOrElse { return Result.failure(it) }
         val pick = targetRoot(service)
         val root = pick.root
@@ -128,7 +136,7 @@ class UiActions(
         }
     }
 
-    fun setText(index: Int, text: String): ToolResult = performOnNode(index, "ввести текст") { node ->
+    suspend fun setText(index: Int, text: String): ToolResult = performOnNode(index, "ввести текст") { node ->
         if (!node.isEditable && node.className?.toString() != "android.widget.EditText") return@performOnNode false
         node.performAction(AccessibilityNodeInfo.ACTION_FOCUS)
         val args = Bundle().apply {
@@ -230,7 +238,7 @@ class UiActions(
     )
 
     /** Центр узла из свежего снимка — для фолбэка тапов. */
-    private fun nodeCenter(index: Int): Pair<Int, Int>? {
+    private suspend fun nodeCenter(index: Int): Pair<Int, Int>? {
         val node = snapshotDirect().getOrNull()?.nodes?.find { it.index == index } ?: return null
         val b = node.bounds
         return ((b.left + b.right) / 2) to ((b.top + b.bottom) / 2)
@@ -261,14 +269,14 @@ class UiActions(
         }
     }
 
-    private fun performOnNode(
+    private suspend fun performOnNode(
         index: Int,
         verb: String,
         action: (AccessibilityNodeInfo) -> Boolean,
     ): ToolResult = performOnFreshNode(index, verb, action)
 
     @Suppress("DEPRECATION")
-    private fun performOnFreshNode(
+    private suspend fun performOnFreshNode(
         index: Int,
         verb: String,
         action: (AccessibilityNodeInfo) -> Boolean,
@@ -502,7 +510,12 @@ class UiActions(
     }
     companion object {
         const val SERVICE_DISABLED_MESSAGE =
-            "Сервис доступности OAssist выключен — включите его в системных настройках"
+            "Сервис доступности OAssist выключен — включите его в системных настройках " +
+                "(если включали ранее — очистка фоновых могла сбросить доступ, включите заново)"
+        const val SERVICE_NOT_CONNECTED_MESSAGE =
+            "Сервис доступности OAssist включён, но ещё не подключился — откройте приложение OAssist, " +
+                "подключение восстановится; если не помогает — разрешите OAssist автозапуск и фоновую работу " +
+                "в настройках системы"
         private const val SHOW_NODES = 250
         private const val MAX_CANDIDATES = 1000
         private const val MAX_DEPTH = 32
@@ -514,3 +527,6 @@ class UiActions(
         private const val POLL_MS = 500L
     }
 }
+
+private const val A11Y_CONNECT_TIMEOUT_MS = 2_500L
+private const val A11Y_CONNECT_POLL_MS = 100L
