@@ -117,6 +117,8 @@ private var turnTranscript: List<ChatMessage> = emptyList()
      * события анонсов глотаются (прецедент M9 — диалог подтверждения).
      */
     private var srKeepFocusable = false
+    /** Поле ввода в фокусе — окну нужен фокус, иначе IME не придёт. */
+    private var inputFocused = false
     private var listening = false
 
     private var sttLanguage: String = "ru-RU"
@@ -536,7 +538,8 @@ private var turnTranscript: List<ChatMessage> = emptyList()
         pendingBye = false
         pendingApproval = null
         srKeepFocusable = false
-        setInputFocusable(false)
+        inputFocused = false
+        refreshOverlayFocusable()
         answer = ""
         thought = ""
         toolEvents.clear()
@@ -808,7 +811,10 @@ private var turnTranscript: List<ChatMessage> = emptyList()
                             onMicToggle = { execute(voiceFlow.onPlayPause()) },
                             onClose = { stopSelf() },
                             onSpeakAnswer = ::onSpeakAnswer,
-                            onInputFocusChanged = { focused -> setInputFocusable(focused) },
+                            onInputFocusChanged = { focused ->
+                                inputFocused = focused
+                                refreshOverlayFocusable()
+                            },
                         )
                     }
                 }
@@ -844,7 +850,9 @@ private var turnTranscript: List<ChatMessage> = emptyList()
      */
     private fun refreshOverlayFocusable() {
         if (!showOverlay) return
-        setInputFocusable(pendingApproval != null || (isStreaming && srKeepFocusable))
+        setInputFocusable(
+            inputFocused || pendingApproval != null || (isStreaming && srKeepFocusable),
+        )
     }
 
     /** Поле ввода требует фокуса окна — иначе IME не придёт; снаружи окно остаётся нефокусируемым. */

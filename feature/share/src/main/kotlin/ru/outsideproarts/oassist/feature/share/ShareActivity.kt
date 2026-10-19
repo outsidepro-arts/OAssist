@@ -14,6 +14,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.Send
@@ -38,6 +39,9 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.text.input.KeyboardCapitalization
+import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.text.input.TextFieldValue
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
@@ -153,7 +157,7 @@ private fun ShareFlow(payload: SharePayload) {
     var pendingSwitch by remember { mutableStateOf<(() -> Unit)?>(null) }
     var deleteAsk by remember { mutableStateOf(false) }
 
-    var question by remember { mutableStateOf("") }
+    var question by remember { mutableStateOf(TextFieldValue("")) }
     var activeUserMsg by remember { mutableStateOf<String?>(null) }
     var thought by remember { mutableStateOf("") }
     var response by remember { mutableStateOf("") }
@@ -490,15 +494,15 @@ private fun ShareFlow(payload: SharePayload) {
             question = question,
             onQuestionChange = { question = it },
             onSend = {
-                if (question.isNotBlank() && !isStreaming) {
+                if (question.text.isNotBlank() && !isStreaming) {
                     val net = ru.outsideproarts.oassist.core.net.NetworkHandle.get()
                     if (net != null && !net.isOnline.value) {
-                        pendingShareRetry = question.trim()
+                        pendingShareRetry = question.text.trim()
                         Toast.makeText(context, offlineRetryText, Toast.LENGTH_LONG).show()
                     } else {
                         pendingShareRetry = null
-                        ask(question.trim())
-                        question = ""
+                        ask(question.text.trim())
+                        question = TextFieldValue("")
                     }
                 }
             },
@@ -642,8 +646,8 @@ private fun ShareConversation(
     tools: List<AgentToolEvent>,
     usage: ru.outsideproarts.oassist.core.model.ProviderUsage?,
     isStreaming: Boolean,
-    question: String,
-    onQuestionChange: (String) -> Unit,
+    question: TextFieldValue,
+    onQuestionChange: (TextFieldValue) -> Unit,
     onSend: () -> Unit,
     onBack: () -> Unit,
     onSaveChat: () -> Unit,
@@ -764,10 +768,14 @@ private fun ShareConversation(
                 label = { Text(askLabel) },
                 modifier = Modifier.weight(1f),
                 maxLines = 3,
+                keyboardOptions = KeyboardOptions(
+                    keyboardType = KeyboardType.Text,
+                    capitalization = KeyboardCapitalization.Sentences,
+                ),
             )
             IconButton(
                 onClick = onSend,
-                enabled = question.isNotBlank() && !isStreaming,
+                enabled = question.text.isNotBlank() && !isStreaming,
                 modifier = Modifier.oassistTouchTarget(),
             ) {
                 Icon(

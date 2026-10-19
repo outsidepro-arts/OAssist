@@ -16,6 +16,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.Send
 import androidx.compose.material.icons.filled.ExpandLess
@@ -49,6 +50,9 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.text.input.KeyboardCapitalization
+import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.semantics.CustomAccessibilityAction
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.customActions
@@ -182,7 +186,7 @@ fun ChatScreen(
     val timelineEntries = remember { mutableStateListOf<Narrator.TimelineEntry>() }
     val emptyTotals = remember { kotlinx.coroutines.flow.MutableStateFlow(ru.outsideproarts.oassist.core.model.UsageTotalsState()) }
     val usageTotalsState by (usageTotals ?: emptyTotals).collectAsState()
-    var input by remember { mutableStateOf("") }
+    var input by remember { mutableStateOf(TextFieldValue("")) }
     /** Живой preview распознавания — НЕ в поле ввода, уходит сразу в сообщение. */
     var sttPreview by remember { mutableStateOf("") }
     var isStreaming by remember { mutableStateOf(false) }
@@ -636,7 +640,7 @@ fun ChatScreen(
         override fun onFinal(text: String) {
             sttPreview = ""
             if (text.isNotBlank()) {
-                input = ""
+                input = TextFieldValue("")
                 send(text)
             }
         }
@@ -920,6 +924,10 @@ fun ChatScreen(
                     label = { Text(inputLabel) },
                     modifier = Modifier.weight(1f),
                     maxLines = 4,
+                    keyboardOptions = KeyboardOptions(
+                        keyboardType = KeyboardType.Text,
+                        capitalization = KeyboardCapitalization.Sentences,
+                    ),
                 )
                 val actionContent: String
                 val actionIcon = when {
@@ -931,7 +939,7 @@ fun ChatScreen(
                         actionContent = stopLabel
                         Icons.Default.Stop
                     }
-                    input.isBlank() -> {
+                    input.text.isBlank() -> {
                         actionContent = holdHintText
                         Icons.Default.Mic
                     }
@@ -955,9 +963,9 @@ fun ChatScreen(
                             toggleSttMic()
                             return@IconButton
                         }
-                        if (input.isNotBlank()) {
-                            val userMsg = input.trim()
-                            input = ""
+                        if (input.text.isNotBlank()) {
+                            val userMsg = input.text.trim()
+                            input = TextFieldValue("")
                             sttPreview = ""
                             send(userMsg)
                         } else {
@@ -966,10 +974,10 @@ fun ChatScreen(
                     },
                     modifier = Modifier
                         .oassistTouchTarget()
-                        .pointerInput(input.isBlank(), isStreaming, capturing) {
+                        .pointerInput(input.text.isBlank(), isStreaming, capturing) {
                             detectTapGestures(
                                 onPress = {
-                                    if (input.isBlank() && !isStreaming && !capturing && startHold()) {
+                                    if (input.text.isBlank() && !isStreaming && !capturing && startHold()) {
                                         val downAt = System.currentTimeMillis()
                                         tryAwaitRelease()
                                         lastHoldEnd = System.currentTimeMillis()
@@ -986,7 +994,7 @@ fun ChatScreen(
                 ) {
                     Icon(
                         imageVector = actionIcon,
-                        contentDescription = if (input.isBlank() && !isStreaming && !capturing) {
+                        contentDescription = if (input.text.isBlank() && !isStreaming && !capturing) {
                             // Подсказка холда вслух; имя «Голосовой ввод» — в toggle-пути.
                             "$micLabel. $actionContent"
                         } else {

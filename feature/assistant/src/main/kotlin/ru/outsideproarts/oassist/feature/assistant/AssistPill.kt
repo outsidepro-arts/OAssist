@@ -8,7 +8,8 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
-import androidx.compose.foundation.text.KeyboardActions
+import androidx.compose.foundation.gestures.awaitEachGesture
+import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.Send
@@ -33,10 +34,15 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.platform.LocalFocusManager
+import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.CustomAccessibilityAction
 import androidx.compose.ui.semantics.customActions
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.text.input.KeyboardCapitalization
+import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.unit.dp
 import ru.outsideproarts.oassist.core.a11y.AnnouncerHost
 import ru.outsideproarts.oassist.core.a11y.FlowAnnouncer
@@ -87,8 +93,10 @@ fun AssistPill(
     val expandLabel = stringResource(R.string.assistant_action_expand)
     val collapseLabel = stringResource(R.string.assistant_action_collapse)
 
-    var question by remember { mutableStateOf("") }
+    var question by remember { mutableStateOf(TextFieldValue("")) }
     var dragAccum by remember { mutableStateOf(0f) }
+    val focusManager = LocalFocusManager.current
+    val keyboardController = LocalSoftwareKeyboardController.current
 
     Surface(
         modifier = modifier,
@@ -181,15 +189,21 @@ fun AssistPill(
                     label = { Text(askLabel) },
                     modifier = Modifier
                         .weight(1f)
-                        .onFocusChanged { onInputFocusChanged(it.isFocused) },
+                        .onFocusChanged { onInputFocusChanged(it.isFocused) }
+                        .pointerInput(Unit) {
+                            awaitEachGesture {
+                                awaitFirstDown(requireUnconsumed = false)
+                                do {
+                                    val event = awaitPointerEvent()
+                                } while (event.changes.any { it.pressed })
+                                keyboardController?.show()
+                            }
+                        },
                     maxLines = 3,
-                    keyboardOptions = KeyboardOptions.Default,
-                    keyboardActions = KeyboardActions(onDone = {
-                        if (question.isNotBlank() && !isStreaming) {
-                            onSend(question.trim())
-                            question = ""
-                        }
-                    }),
+                    keyboardOptions = KeyboardOptions(
+                        keyboardType = KeyboardType.Text,
+                        capitalization = KeyboardCapitalization.Sentences,
+                    ),
                 )
                 IconButton(
                     onClick = onMicToggle,
@@ -204,12 +218,13 @@ fun AssistPill(
                 }
                 IconButton(
                     onClick = {
-                        if (question.isNotBlank() && !isStreaming) {
-                            onSend(question.trim())
-                            question = ""
+                        if (question.text.isNotBlank() && !isStreaming) {
+                            onSend(question.text.trim())
+                            question = TextFieldValue("")
+                            focusManager.clearFocus()
                         }
                     },
-                    enabled = question.isNotBlank() && !isStreaming,
+                    enabled = question.text.isNotBlank() && !isStreaming,
                     modifier = Modifier.oassistTouchTarget(),
                 ) {
                     Icon(

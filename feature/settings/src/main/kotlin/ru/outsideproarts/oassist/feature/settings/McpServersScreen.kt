@@ -257,27 +257,33 @@ private fun McpServerEditor(
             OutlinedTextField(
                 value = name,
                 onValueChange = { name = it },
-                label = { Text(stringResource(R.string.mcp_name)) },
+                label = {
+                    Text(
+                        text = stringResource(R.string.mcp_name),
+                        modifier = Modifier.semantics { contentDescription = nameLabel },
+                    )
+                },
                 singleLine = true,
                 keyboardOptions = KeyboardOptions(autoCorrectEnabled = false),
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .semantics { contentDescription = nameLabel },
+                modifier = Modifier.fillMaxWidth(),
             )
 
             val urlLabel = stringResource(R.string.field_mcp_url)
             OutlinedTextField(
                 value = url,
                 onValueChange = { url = it },
-                label = { Text(stringResource(R.string.mcp_url)) },
+                label = {
+                    Text(
+                        text = stringResource(R.string.mcp_url),
+                        modifier = Modifier.semantics { contentDescription = urlLabel },
+                    )
+                },
                 singleLine = true,
                 keyboardOptions = KeyboardOptions(
                     keyboardType = KeyboardType.Uri,
                     autoCorrectEnabled = false,
                 ),
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .semantics { contentDescription = urlLabel },
+                modifier = Modifier.fillMaxWidth(),
             )
 
             val bearerLabel = stringResource(R.string.field_mcp_bearer)
@@ -289,11 +295,12 @@ private fun McpServerEditor(
                 },
                 label = {
                     Text(
-                        if (hasSavedBearer) {
+                        text = if (hasSavedBearer) {
                             maskedLabel
                         } else {
                             stringResource(R.string.mcp_bearer)
                         },
+                        modifier = Modifier.semantics { contentDescription = bearerLabel },
                     )
                 },
                 singleLine = true,
@@ -319,9 +326,7 @@ private fun McpServerEditor(
                         )
                     }
                 },
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .semantics { contentDescription = bearerLabel },
+                modifier = Modifier.fillMaxWidth(),
             )
             if (hasSavedBearer && !clearBearer) {
                 Row(horizontalArrangement = Arrangement.spacedBy(OAssistDimens.DenseSpacing)) {

@@ -220,7 +220,7 @@ private fun SkillEditor(
     var name by remember { mutableStateOf(initial?.name ?: "") }
     var title by remember { mutableStateOf(initial?.title ?: "") }
     var body by remember { mutableStateOf(initial?.body ?: "") }
-    val nameBad = name.isNotBlank() && !SkillInfo.NAME_PATTERN.matches(name)
+    val nameBad = name.isNotBlank() && !SkillInfo.NAME_PATTERN.matches(name.trim())
     val canSave = !nameBad && name.isNotBlank() && body.isNotBlank()
 
     AlertDialog(
@@ -234,8 +234,13 @@ private fun SkillEditor(
                     value = name,
                     // Имя навыка — идентификатор: однострочный редактор
                     // без автокоррекции и заглавных.
-                    onValueChange = { name = it.trim() },
-                    label = { Text(stringResource(R.string.skills_name)) },
+                    onValueChange = { name = it },
+                    label = {
+                        Text(
+                            text = stringResource(R.string.skills_name),
+                            modifier = Modifier.semantics { contentDescription = skillNameLabel },
+                        )
+                    },
                     singleLine = true,
                     keyboardOptions = KeyboardOptions(
                         autoCorrectEnabled = false,
@@ -248,18 +253,19 @@ private fun SkillEditor(
                     } else {
                         null
                     },
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .semantics { contentDescription = skillNameLabel },
+                    modifier = Modifier.fillMaxWidth(),
                 )
                 OutlinedTextField(
                     value = title,
                     onValueChange = { title = it },
-                    label = { Text(stringResource(R.string.skills_heading)) },
+                    label = {
+                        Text(
+                            text = stringResource(R.string.skills_heading),
+                            modifier = Modifier.semantics { contentDescription = skillTitleLabel },
+                        )
+                    },
                     singleLine = true,
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .semantics { contentDescription = skillTitleLabel },
+                    modifier = Modifier.fillMaxWidth(),
                 )
                 OutlinedTextField(
                     value = body,
@@ -271,7 +277,7 @@ private fun SkillEditor(
         },
         confirmButton = {
             TextButton(
-                onClick = { onSave(name, title.ifBlank { name }, body) },
+                onClick = { onSave(name.trim(), title.trim().ifBlank { name.trim() }, body) },
                 enabled = canSave,
             ) {
                 Text(stringResource(R.string.action_save))

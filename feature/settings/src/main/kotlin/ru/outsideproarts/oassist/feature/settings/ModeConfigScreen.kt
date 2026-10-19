@@ -261,16 +261,19 @@ fun ModeConfigScreen(
                     // ID модели — однострочный редактор без автокоррекции:
                     // клавиатура не должна править идентификатор.
                     onValueChange = { modelId = it },
-                    label = { Text(selectModelLabel) },
+                    label = {
+                        Text(
+                            text = selectModelLabel,
+                            modifier = Modifier.semantics { contentDescription = modelIdLabel },
+                        )
+                    },
                     singleLine = true,
                     keyboardOptions = KeyboardOptions(
                         autoCorrectEnabled = false,
                         capitalization = KeyboardCapitalization.None,
                     ),
                     placeholder = { Text(stringResource(R.string.mode_model_manual)) },
-                    modifier = Modifier
-                        .weight(1f)
-                        .semantics { contentDescription = modelIdLabel },
+                    modifier = Modifier.weight(1f),
                 )
                 OutlinedButton(
                     onClick = {
@@ -1016,12 +1019,15 @@ private fun SttSection(
     OutlinedTextField(
         value = language,
         onValueChange = onLanguageChange,
-        label = { Text(stringResource(R.string.mode_stt_language)) },
+        label = {
+            Text(
+                text = stringResource(R.string.mode_stt_language),
+                modifier = Modifier.semantics { contentDescription = sttLangLabel },
+            )
+        },
         singleLine = true,
         keyboardOptions = KeyboardOptions(autoCorrectEnabled = false),
-        modifier = Modifier
-            .fillMaxWidth()
-            .semantics { contentDescription = sttLangLabel },
+        modifier = Modifier.fillMaxWidth(),
     )
 }
 

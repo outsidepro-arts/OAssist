@@ -144,12 +144,15 @@ fun ProviderEditScreen(
             OutlinedTextField(
                 value = name,
                 onValueChange = { name = it },
-                label = { Text(stringResource(R.string.provider_name)) },
+                label = {
+                    Text(
+                        text = stringResource(R.string.provider_name),
+                        modifier = Modifier.semantics { contentDescription = nameLabel },
+                    )
+                },
                 singleLine = true,
                 keyboardOptions = KeyboardOptions(autoCorrectEnabled = false),
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .semantics { contentDescription = nameLabel },
+                modifier = Modifier.fillMaxWidth(),
             )
 
             OAssistSectionHeading(text = stringResource(R.string.provider_kind))
@@ -198,15 +201,18 @@ fun ProviderEditScreen(
             OutlinedTextField(
                 value = baseUrl,
                 onValueChange = { baseUrl = it },
-                label = { Text(stringResource(R.string.provider_base_url)) },
+                label = {
+                    Text(
+                        text = stringResource(R.string.provider_base_url),
+                        modifier = Modifier.semantics { contentDescription = baseUrlLabel },
+                    )
+                },
                 singleLine = true,
                 keyboardOptions = KeyboardOptions(
                     keyboardType = KeyboardType.Uri,
                     autoCorrectEnabled = false,
                 ),
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .semantics { contentDescription = baseUrlLabel },
+                modifier = Modifier.fillMaxWidth(),
             )
 
             val apiKeyLabel = stringResource(R.string.field_provider_key)
@@ -218,11 +224,12 @@ fun ProviderEditScreen(
                 },
                 label = {
                     Text(
-                        if (hasSavedKey) {
+                        text = if (hasSavedKey) {
                             maskedLabel
                         } else {
                             stringResource(R.string.provider_api_key)
                         },
+                        modifier = Modifier.semantics { contentDescription = apiKeyLabel },
                     )
                 },
                 singleLine = true,
@@ -248,9 +255,7 @@ fun ProviderEditScreen(
                         )
                     }
                 },
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .semantics { contentDescription = apiKeyLabel },
+                modifier = Modifier.fillMaxWidth(),
             )
             if (hasSavedKey && !clearApiKey) {
                 Row(horizontalArrangement = Arrangement.spacedBy(OAssistDimens.DenseSpacing)) {
