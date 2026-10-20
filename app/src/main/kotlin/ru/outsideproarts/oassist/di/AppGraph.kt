@@ -416,6 +416,8 @@ class AppGraph private constructor(context: Context) {
         )
         ru.outsideproarts.oassist.core.speech.SpeechHandle.register(object : ru.outsideproarts.oassist.core.speech.SpeechHandle {
             override fun speak(sentence: String) = speechOutput.speak(sentence)
+            override suspend fun speakWhenReady(text: String): Boolean =
+                speechOutput.speakWhenReady(text)
             override fun stop() = speechOutput.stop()
             override val speaking: kotlinx.coroutines.flow.StateFlow<Boolean>
                 get() = speechOutput.speaking

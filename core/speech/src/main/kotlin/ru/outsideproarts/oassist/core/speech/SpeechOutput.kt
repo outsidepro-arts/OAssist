@@ -390,6 +390,46 @@ class SpeechOutput(
     }
 
     /**
+     * Озвучить фразу, дождавшись готовности движка: после смены движка/голоса
+     * инстанс `TextToSpeech` пересоздаётся, и фраза, отданная сразу, молча
+     * теряется (`speak` требует `ready`). Здесь ждём инициализацию (с таймаутом)
+     * и только потом говорим.
+     *
+     * Канал — текущий: `SYSTEM_TTS` — звук, `SCREEN_READER` — анонс экранному
+     * чтецу (звука нет, фразу читает TalkBack), `OFF`/`ONLINE_TTS` — не озвучиваем.
+     *
+     * @return true — фраза отдана движку/анонсеру; false — канал не озвучивает
+     *   или движок не поднялся за [timeoutMs].
+     */
+    suspend fun speakWhenReady(text: String, timeoutMs: Long = 5_000L): Boolean {
+        val clean = text.trim()
+        if (clean.isEmpty()) return false
+        when (channel) {
+            SpeechOutputChannel.SCREEN_READER -> {
+                screenReader.announce(clean)
+                return true
+            }
+            SpeechOutputChannel.OFF, SpeechOutputChannel.ONLINE_TTS -> return false
+            SpeechOutputChannel.SYSTEM_TTS -> Unit
+        }
+        ensureTts()
+        val engine = tts ?: return false
+        if (!ready.value) {
+            val ok = withTimeoutOrNull(timeoutMs) { ready.first { it } } ?: false
+            if (!ok) return false
+        }
+        // Пока ждали, движок могли пересоздать (смена движка) — говорит актуальный.
+        val live = tts?.takeIf { it === engine } ?: return false
+        val params = Bundle().apply {
+            putFloat(TextToSpeech.Engine.KEY_PARAM_VOLUME, volume)
+        }
+        val utteranceId = "oassist-${System.nanoTime()}"
+        utteranceStarted(utteranceId)
+        live.speak(clean, TextToSpeech.QUEUE_ADD, params, utteranceId)
+        return true
+    }
+
+    /**
      * Якорь для анонсов скринридера (аналог TeamTalk `announcerObject`):
      * View, от которого постится `TYPE_ANNOUNCEMENT`. В чате — decorView
      * Activity, в оверлее — окно панели, `null` — отвязать (не держать View).

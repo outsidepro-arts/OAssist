@@ -41,11 +41,13 @@ import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.paneTitle
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.stateDescription
+import androidx.compose.ui.unit.dp
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.ui.text.input.KeyboardCapitalization
 import kotlinx.coroutines.launch
 import ru.outsideproarts.oassist.core.a11y.oassistDropdownClassName
 import ru.outsideproarts.oassist.core.a11y.oassistHeading
+import ru.outsideproarts.oassist.core.a11y.oassistMergedContent
 import ru.outsideproarts.oassist.core.a11y.oassistRole
 import ru.outsideproarts.oassist.core.a11y.oassistSlider
 import ru.outsideproarts.oassist.core.a11y.oassistSwitchRow
@@ -62,10 +64,12 @@ import ru.outsideproarts.oassist.core.model.SpeechOutputChannel
 import ru.outsideproarts.oassist.core.model.SttConfig
 import ru.outsideproarts.oassist.core.model.SttEngine
 import ru.outsideproarts.oassist.core.model.TtsConfig
+import ru.outsideproarts.oassist.core.speech.SpeechHandle
 import ru.outsideproarts.oassist.core.speech.VoiceInfo
 import ru.outsideproarts.oassist.core.speech.TtsEngineInfo
 import ru.outsideproarts.oassist.core.speech.voiceLanguageTags
 import ru.outsideproarts.oassist.core.ui.OAssistDimens
+import ru.outsideproarts.oassist.core.ui.components.OAssistLiveStatus
 import ru.outsideproarts.oassist.core.ui.components.OAssistPanel
 import ru.outsideproarts.oassist.core.ui.components.OAssistSectionHeading
 import ru.outsideproarts.oassist.core.ui.components.OAssistSwitchRow
@@ -122,6 +126,18 @@ fun ModeConfigScreen(
     var ttsVoiceLocale by remember { mutableStateOf("") }
     var ttsToolCalls by remember { mutableStateOf(baseTts.speakToolCalls) }
     var ttsNarrative by remember { mutableStateOf(baseTts.narrative) }
+    // Текущая озвучка режима (в т.ч. несохранённые правки) — её сохраняем
+    // и по ней же предпрослушиваем пример.
+    val currentTts = TtsConfig(
+        channel = ttsChannel,
+        rate = ttsRate,
+        pitch = ttsPitch,
+        volume = ttsVolume,
+        enginePackage = ttsEngine.ifBlank { null },
+        voiceName = ttsVoice.ifBlank { null },
+        speakToolCalls = ttsToolCalls,
+        narrative = ttsNarrative,
+    )
     var soundEnabled by remember { mutableStateOf(config.effectiveSoundEnabled()) }
     var autoSaveChats by remember { mutableStateOf(config.effectiveAutoSaveChats()) }
     val baseStt = config.effectiveStt()
@@ -519,6 +535,7 @@ fun ModeConfigScreen(
                 onNarrativeChange = { ttsNarrative = it },
                 voiceExpanded = voiceExpanded,
                 onVoiceExpandedChange = { voiceExpanded = it },
+                sampleConfig = currentTts,
                 onState = onState,
                 offState = offState,
             )
@@ -594,16 +611,7 @@ fun ModeConfigScreen(
                             } else {
                                 config.share
                             },
-                            tts = TtsConfig(
-                                channel = ttsChannel,
-                                rate = ttsRate,
-                                pitch = ttsPitch,
-                                volume = ttsVolume,
-                                enginePackage = ttsEngine.ifBlank { null },
-                                voiceName = ttsVoice.ifBlank { null },
-                                speakToolCalls = ttsToolCalls,
-                                narrative = ttsNarrative,
-                            ),
+                            tts = currentTts,
                             stt = SttConfig(
                                 engine = sttEngine,
                                 language = sttLanguage.ifBlank { SttConfig.DEFAULT.language },
@@ -660,6 +668,8 @@ private fun TtsSection(
     onNarrativeChange: (Boolean) -> Unit,
     voiceExpanded: Boolean,
     onVoiceExpandedChange: (Boolean) -> Unit,
+    /** Озвучка, которую предпрослушиваем (с учётом несохранённых правок). */
+    sampleConfig: TtsConfig,
     onState: String,
     offState: String,
 ) {
@@ -874,6 +884,8 @@ private fun TtsSection(
         onChange = onVolumeChange,
     )
 
+    TtsSample(config = sampleConfig)
+
     TtsSwitch(
         title = stringResource(R.string.mode_tts_tool_calls),
         subtitle = stringResource(R.string.mode_tts_tool_calls_hint),
@@ -892,6 +904,65 @@ private fun TtsSection(
     )
 }
 
+/**
+ * Предпрослушивание синтеза: применяет текущие настройки озвучки режима
+ * (движок, голос, тембр, канал) и произносит тестовую фразу.
+ * Канал уважается как есть: системный синтезатор — звуком, экранный чтец —
+ * анонсом TalkBack (звука нет).
+ */
+@Composable
+private fun TtsSample(config: TtsConfig) {
+    val scope = rememberCoroutineScope()
+    var busy by remember { mutableStateOf(false) }
+    var status by remember { mutableStateOf("") }
+    var statusIsError by remember { mutableStateOf(false) }
+    val phrase = stringResource(R.string.mode_tts_sample_phrase)
+    val spokenText = stringResource(R.string.mode_tts_sample_spoken)
+    val readerText = stringResource(R.string.mode_tts_sample_reader)
+    val offText = stringResource(R.string.mode_tts_sample_off)
+    val unavailableText = stringResource(R.string.mode_tts_sample_unavailable)
+    val preparingText = stringResource(R.string.mode_tts_sample_preparing)
+
+    OutlinedButton(
+        onClick = {
+            if (busy) return@OutlinedButton
+            if (config.channel == SpeechOutputChannel.OFF) {
+                status = offText
+                statusIsError = true
+                return@OutlinedButton
+            }
+            busy = true
+            status = preparingText
+            statusIsError = false
+            scope.launch {
+                val handle = SpeechHandle.get()
+                val spoken = if (handle == null) {
+                    false
+                } else {
+                    handle.applyTts(config)
+                    handle.speakWhenReady(phrase)
+                }
+                busy = false
+                statusIsError = !spoken
+                status = when {
+                    !spoken -> unavailableText
+                    config.channel == SpeechOutputChannel.SCREEN_READER -> readerText
+                    else -> spokenText
+                }
+            }
+        },
+        enabled = !busy,
+        modifier = Modifier.oassistTouchTarget(),
+    ) {
+        Text(stringResource(R.string.mode_tts_sample))
+    }
+    OAssistLiveStatus(
+        text = status,
+        horizontalPadding = 0.dp,
+        assertive = statusIsError,
+    )
+}
+
 @Composable
 private fun TtsSlider(
     label: String,
@@ -902,7 +973,14 @@ private fun TtsSlider(
 ) {
     val valueText = "%.2f".format(value)
     val stepIncrement = (range.endInclusive - range.start) / 20f
-    Column(modifier = Modifier.fillMaxWidth()) {
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            // Лейбл и ползунок — один узел TalkBack (ContentGrouping).
+            // Иначе между ползунком и следующим элементом остаётся отдельный
+            // «текстовый лейбл» — лишний свайп в навигации.
+            .oassistMergedContent(),
+    ) {
         Text(
             text = "$label: $valueText",
             style = MaterialTheme.typography.bodyLarge,

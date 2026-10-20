@@ -133,6 +133,13 @@
     <string name="mode_tts_tool_calls_hint">Только комментарием агента («ищу контакт…»); тип инструмента не зачитывается</string>
     <string name="mode_tts_narrative">Рассказывать о работе</string>
     <string name="mode_tts_narrative_hint">Шаги агента — через экранный чтец и ленту</string>
+    <string name="mode_tts_sample">Прослушать пример</string>
+    <string name="mode_tts_sample_phrase">Это тестовое сообщение для проверки синтеза речи</string>
+    <string name="mode_tts_sample_preparing">Готовим синтезатор…</string>
+    <string name="mode_tts_sample_spoken">Пример озвучен</string>
+    <string name="mode_tts_sample_reader">Пример прочитан экранным читецом</string>
+    <string name="mode_tts_sample_off">Канал озвучки выключен — включите его, чтобы услышать пример</string>
+    <string name="mode_tts_sample_unavailable">Синтезатор недоступен — проверьте движок и голос</string>
     <string name="mode_sounds_title">Звуки действий</string>
     <string name="mode_sounds_enabled">Звуковое сопровождение действий агента</string>
     <string name="mode_sounds_hint">Короткие звуки на отправку, размышления, инструменты, запросы и ошибки</string>

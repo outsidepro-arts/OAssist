@@ -33,6 +33,7 @@ import androidx.compose.ui.semantics.liveRegion
 import androidx.compose.ui.semantics.paneTitle
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.stateDescription
+import androidx.compose.ui.unit.Dp
 import androidx.compose.material3.Icon
 import ru.outsideproarts.oassist.core.a11y.oassistCheckboxRow
 import ru.outsideproarts.oassist.core.a11y.oassistHeading
@@ -258,12 +259,14 @@ fun OAssistCheckboxRow(
 /**
  * Статус, объявляемый экранным чтецу при изменении (LiveRegionMode.Polite).
  * Подходит для транзиентных статусов, не для накапливающегося текста.
+ * [horizontalPadding] — 0.dp для экранов, где текст уже внутри панели с отступами.
  */
 @Composable
 fun OAssistLiveStatus(
     text: String,
     modifier: Modifier = Modifier,
     assertive: Boolean = false,
+    horizontalPadding: Dp = OAssistDimens.ScreenPadding,
 ) {
     if (text.isBlank()) return
     Text(
@@ -275,7 +278,7 @@ fun OAssistLiveStatus(
             .semantics {
                 liveRegion = if (assertive) LiveRegionMode.Assertive else LiveRegionMode.Polite
             }
-            .padding(horizontal = OAssistDimens.ScreenPadding, vertical = OAssistDimens.DenseSpacing),
+            .padding(horizontal = horizontalPadding, vertical = OAssistDimens.DenseSpacing),
     )
 }
 
