@@ -468,6 +468,11 @@ fun ModeConfigScreen(
                     onState = onState,
                     offState = offState,
                 )
+                Text(
+                    text = stringResource(R.string.mode_assistant_show_overlay_hint),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
             }
             if (mode == AssistMode.SHARE) {
                 OAssistSectionHeading(text = stringResource(R.string.mode_share_extras))

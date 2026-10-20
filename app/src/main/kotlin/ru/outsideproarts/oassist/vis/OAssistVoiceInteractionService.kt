@@ -66,6 +66,15 @@ class OAssistVoiceInteractionSession(
             }.getOrDefault(true)
         }
         if (showOverlay && !Settings.canDrawOverlays(context)) return false
+        if (!showOverlay) {
+            // Notification-режим требует видимых уведомлений — иначе сессия «призрачная»:
+            // откатываемся в трамплин AssistActivity, где запрашивается POST_NOTIFICATIONS.
+            val notificationsEnabled = runCatching {
+                context.getSystemService(android.app.NotificationManager::class.java)
+                    ?.areNotificationsEnabled()
+            }.getOrNull() ?: true
+            if (!notificationsEnabled) return false
+        }
         if (context.checkSelfPermission(Manifest.permission.RECORD_AUDIO) !=
             PackageManager.PERMISSION_GRANTED
         ) {

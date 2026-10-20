@@ -340,6 +340,7 @@
     <string name="mode_assistant_autoclose">Закрывать панель после ответа</string>
     <string name="mode_assistant_screenshot">Прикреплять контекст экрана</string>
     <string name="mode_assistant_show_overlay">Показывать панель поверх экрана</string>
+    <string name="mode_assistant_show_overlay_hint">Уведомление сервиса остаётся в обоих режимах — этого требует Android. Без панели управление сессией идёт из уведомления, требуется разрешение на уведомления.</string>
     <string name="mode_assistant_continue_dialog">Продолжать диалог автоматически</string>
     <string name="mode_share_extras">Поведение отправки</string>
     <string name="mode_share_action">Что делать с контентом</string>

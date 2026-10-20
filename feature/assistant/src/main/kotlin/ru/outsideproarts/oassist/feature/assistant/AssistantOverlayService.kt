@@ -283,6 +283,9 @@ private var turnTranscript: List<ChatMessage> = emptyList()
         }.getOrNull() ?: return
         sttLanguage = config.effectiveStt().language
         continueDialog = config.assistant?.continueDialog ?: false
+        // showOverlay фиксируется при старте сессии: решение «окно или уведомление» структурное,
+        // переключение посреди сессии смешивало бы два UI (панель + живое уведомление).
+        showOverlay = config.assistant?.showOverlay ?: true
         soundEnabled = config.effectiveSoundEnabled()
     }
 
@@ -563,7 +566,6 @@ private var turnTranscript: List<ChatMessage> = emptyList()
                     return@launch
                 }
         continueDialog = config.assistant?.continueDialog ?: false
-        showOverlay = config.assistant?.showOverlay ?: true
         soundEnabled = config.effectiveSoundEnabled()
                 val autoSpeak = config.assistant?.autoSpeak ?: true
                 val tts = config.effectiveTts()

@@ -1,6 +1,7 @@
 package ru.outsideproarts.oassist.feature.assistant
 
 import android.Manifest
+import android.app.NotificationManager
 import android.app.assist.AssistStructure
 import android.graphics.Bitmap
 import android.content.Intent
@@ -52,6 +53,15 @@ class AssistActivity : AppCompatActivity() {
             overlayLauncher.launch(overlayIntent)
             return
         }
+        if (!overlayNeeded && !notificationsEnabled()) {
+            // Notification-режим без уведомлений = «призрачная сессия» без UI: не стартуем.
+            if (android.os.Build.VERSION.SDK_INT >= 33) {
+                notificationLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
+            } else {
+                openNotificationSettings()
+            }
+            return
+        }
         ensureMicAndStart()
     }
 
@@ -71,6 +81,34 @@ class AssistActivity : AppCompatActivity() {
     ) {
         // Отказ не блокирует окно: текстовый ввод остаётся, сервис покажет подсказку.
         startServiceAndStartOverlay()
+    }
+
+    private val notificationLauncher = registerForActivityResult(
+        ActivityResultContracts.RequestPermission(),
+    ) { granted ->
+        when {
+            notificationsEnabled() -> ensureMicAndStart()
+            // Выдали, но уведомления выключены в настройках приложения — отправляем туда.
+            granted -> openNotificationSettings()
+            else -> {
+                Toast.makeText(this, R.string.assistant_notifications_required, Toast.LENGTH_LONG).show()
+                finish()
+            }
+        }
+    }
+
+    private fun notificationsEnabled(): Boolean =
+        getSystemService(NotificationManager::class.java)?.areNotificationsEnabled() ?: true
+
+    private fun openNotificationSettings() {
+        Toast.makeText(this, R.string.assistant_notifications_required, Toast.LENGTH_LONG).show()
+        runCatching {
+            startActivity(
+                Intent(Settings.ACTION_APP_NOTIFICATION_SETTINGS)
+                    .putExtra(Settings.EXTRA_APP_PACKAGE, packageName),
+            )
+        }
+        finish()
     }
 
     private fun ensureMicAndStart() {

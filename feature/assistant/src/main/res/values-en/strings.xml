@@ -44,4 +44,5 @@
     <string name="assistant_fgs_text">Assistant overlay is active</string>
     <string name="assistant_permission_needed">Permission required</string>
     <string name="assistant_permission_grant">Grant</string>
+    <string name="assistant_notifications_required">Notification mode requires notification permission</string>
 </resources>
