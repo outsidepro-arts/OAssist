@@ -62,4 +62,18 @@ class ToolGroupsTest {
     fun `неизвестный тул — fail-closed`() {
         assertEquals(ToolGroups.UNKNOWN, ToolGroups.groupOf("no_such_tool"))
     }
+
+    @Test
+    fun `все скриншоты экрана — чтение экрана`() {
+        val screen = ToolGroups.key(ToolCategory.SCREEN_UI, ToolAccess.READ)
+        listOf("ui_get_screen", "ui_screenshot", "ui_screenshot_region", "ui_screenshot_node", "ui_wait_for")
+            .forEach { assertEquals("тул $it", screen, ToolGroups.groupOf(it)) }
+    }
+
+    @Test
+    fun `скриншоты области и узла известны каталогу`() {
+        listOf("ui_screenshot_region", "ui_screenshot_node").forEach {
+            assertTrue("тул $it не в knownToolNames", it in ToolGroups.knownToolNames)
+        }
+    }
 }

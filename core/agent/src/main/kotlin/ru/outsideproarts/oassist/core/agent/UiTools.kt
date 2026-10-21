@@ -259,3 +259,95 @@ class UiScreenshotTool(private val ui: UiActions) : Tool {
 
     override suspend fun execute(arguments: JsonObject): ToolResult = ui.screenshot()
 }
+
+/**
+ * Снимок области экрана. Дешевле полного кадра, когда интересует один блок
+ * (поле с ошибкой, цена, заголовок) — в модель уходит ровно одна картинка.
+ * Координаты — из `ui_get_screen`, выход за пределы окна отклоняется.
+ */
+class UiScreenshotRegionTool(private val ui: UiActions) : Tool {
+    override val schema = ToolSchema(
+        name = "ui_screenshot_region",
+        description = "Скриншот прямоугольной области экрана в модель: координаты как в ui_get_screen " +
+            "(нужна модель с поддержкой изображений). Дешевле ui_screenshot, когда нужен один блок.",
+        parameters = buildJsonObject {
+            put("type", "object")
+            put("properties", buildJsonObject {
+                put("left", buildJsonObject {
+                    put("type", "integer")
+                    put("description", "X левого края области")
+                })
+                put("top", buildJsonObject {
+                    put("type", "integer")
+                    put("description", "Y верхнего края области")
+                })
+                put("right", buildJsonObject {
+                    put("type", "integer")
+                    put("description", "X правого края области")
+                })
+                put("bottom", buildJsonObject {
+                    put("type", "integer")
+                    put("description", "Y нижнего края области")
+                })
+            })
+            put("required", kotlinx.serialization.json.buildJsonArray {
+                add(kotlinx.serialization.json.JsonPrimitive("left"))
+                add(kotlinx.serialization.json.JsonPrimitive("top"))
+                add(kotlinx.serialization.json.JsonPrimitive("right"))
+                add(kotlinx.serialization.json.JsonPrimitive("bottom"))
+            })
+        },
+    )
+
+    override fun describeForConfirmation(arguments: JsonObject): String {
+        val l = arguments["left"]?.jsonPrimitive?.content ?: "?"
+        val t = arguments["top"]?.jsonPrimitive?.content ?: "?"
+        val r = arguments["right"]?.jsonPrimitive?.content ?: "?"
+        val b = arguments["bottom"]?.jsonPrimitive?.content ?: "?"
+        return "Скриншот области экрана [$l,$t-$r,$b]"
+    }
+
+    override suspend fun execute(arguments: JsonObject): ToolResult {
+        val left = arguments["left"]?.jsonPrimitive?.content?.toIntOrNull()
+        val top = arguments["top"]?.jsonPrimitive?.content?.toIntOrNull()
+        val right = arguments["right"]?.jsonPrimitive?.content?.toIntOrNull()
+        val bottom = arguments["bottom"]?.jsonPrimitive?.content?.toIntOrNull()
+        if (left == null || top == null || right == null || bottom == null) {
+            return ToolResult(false, "Нужны left/top/right/bottom")
+        }
+        return ui.screenshotRegion(left, top, right, bottom)
+    }
+}
+
+/**
+ * Снимок одного элемента по индексу из `ui_get_screen`. Выгоднее области: модели не нужно
+ * угадывать координаты — она уже видит прямоугольник узла в снимке экрана.
+ */
+class UiScreenshotNodeTool(private val ui: UiActions) : Tool {
+    override val schema = ToolSchema(
+        name = "ui_screenshot_node",
+        description = "Скриншот элемента экрана по индексу из ui_get_screen в модель " +
+            "(нужна модель с поддержкой изображений). Сначала вызови ui_get_screen.",
+        parameters = buildJsonObject {
+            put("type", "object")
+            put("properties", buildJsonObject {
+                put("index", buildJsonObject {
+                    put("type", "integer")
+                    put("description", "Индекс узла из снимка ui_get_screen")
+                })
+            })
+            put("required", kotlinx.serialization.json.buildJsonArray { add(kotlinx.serialization.json.JsonPrimitive("index")) })
+        },
+    )
+
+    override fun describeForConfirmation(arguments: JsonObject): String {
+        val index = arguments["index"]?.jsonPrimitive?.content ?: "?"
+        return "Скриншот элемента экрана №$index"
+    }
+
+    override suspend fun execute(arguments: JsonObject): ToolResult {
+        val index = arguments["index"]?.jsonPrimitive?.content?.toIntOrNull()
+            ?: return ToolResult(false, "Не указан index")
+        return ui.screenshotNode(index)
+    }
+}

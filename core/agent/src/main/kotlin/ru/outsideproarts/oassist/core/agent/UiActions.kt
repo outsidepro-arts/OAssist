@@ -345,33 +345,98 @@ class UiActions(
         return Walk(refs, out, total)
     }
 
-    private fun findByIndex(root: AccessibilityNodeInfo, index: Int, screenHeight: Int): AccessibilityNodeInfo? {
+    /** Узел снимка вместе с живой ссылкой — нужен и для действия, и для снимка элемента. */
+    private class NodeHit(val node: UiNode, val info: AccessibilityNodeInfo)
+
+    private fun findNodeByIndex(
+        root: AccessibilityNodeInfo,
+        index: Int,
+        screenHeight: Int,
+    ): NodeHit? {
         // Индексы соответствуют показанному снапшоту: тот же BFS + selectPositions.
         val walk = collectCandidates(root)
-        val shown = selectPositions(walk.nodes, SHOW_NODES, screenHeight)
-        val pos = shown.getOrNull(index) ?: return null
-        return walk.refs[pos]
+        val pos = selectPositions(walk.nodes, SHOW_NODES, screenHeight).getOrNull(index) ?: return null
+        return NodeHit(walk.nodes[pos].copy(index = index), walk.refs[pos])
     }
 
-    /**
+    private fun findByIndex(root: AccessibilityNodeInfo, index: Int, screenHeight: Int): AccessibilityNodeInfo? =
+        findNodeByIndex(root, index, screenHeight)?.info
+
+/**
      * Скриншот текущего окна (панель ассистента скрыта). При чёрном кадре — best-effort
      * снятие шторки TalkBack на момент снимка (нужны Shizuku/root) с восстановлением;
      * не вышло — честное предупреждение, не тихий пустой кадр.
      */
     suspend fun screenshot(): ToolResult = overlayHidden(settleMs = SNAPSHOT_SETTLE_MS) {
-        val first = captureShot()
-        val shot = first.getOrElse { return@overlayHidden screenshotError(it) }
-        if (!shot.black) return@overlayHidden shot.toResult()
-        val restore = curtain.suspendTalkbackForShot() ?: return@overlayHidden shot.toResult(blackNote = true)
+        val shot = captureShot(null).getOrElse { return@overlayHidden screenshotError(it) }
+        val name = shot.title?.takeIf { it.isNotBlank() } ?: "экран"
+        shot.toResult("Снимок окна «$name»")
+    }
+
+    /**
+     * Снимок прямоугольной области экрана в экранных координатах (как у `ui_get_screen`).
+     * Любой выход за пределы окна — честная ошибка без кадра: обрезанный кадр модель
+     * приняла бы за запрошенную область и сделала бы выводы по чужому содержимому.
+     */
+    suspend fun screenshotRegion(left: Int, top: Int, right: Int, bottom: Int): ToolResult =
+        overlayHidden(settleMs = SNAPSHOT_SETTLE_MS) {
+            if (left >= right || top >= bottom) {
+                return@overlayHidden ToolResult(false, "Некорректная область: нужно left < right и top < bottom")
+            }
+            val service = serviceOrError().getOrElse {
+                return@overlayHidden ToolResult(false, it.message ?: "Сервис недоступен")
+            }
+            val window = targetWindow(service)
+                ?: return@overlayHidden ToolResult(false, "Нет активного окна для снимка")
+            val win = Rect().also { window.getBoundsInScreen(it) }
+            if (win.width() <= 0 || win.height() <= 0) {
+                return@overlayHidden ToolResult(false, "У окна нет размеров — снимок невозможен")
+            }
+            if (left < win.left || top < win.top || right > win.right || bottom > win.bottom) {
+                return@overlayHidden ToolResult(
+                    false,
+                    "Область [$left,$top-$right,$bottom] выходит за пределы окна " +
+                        "[${win.left},${win.top}-${win.right},${win.bottom}] — уточни координаты по ui_get_screen",
+                )
+            }
+            val shot = captureShot(Rect(left, top, right, bottom)).getOrElse {
+                return@overlayHidden screenshotError(it)
+            }
+            shot.toResult("Снимок области [$left,$top-$right,$bottom]")
+        }
+
+    /**
+     * Снимок элемента интерфейса по индексу из `ui_get_screen`. Индекс протухает, поэтому
+     * снимок перечитывается; если элемента уже нет — честная подсказка перечитать список,
+     * а не снимок соседнего узла, который модель приняла бы за запрошенный.
+     */
+    suspend fun screenshotNode(index: Int): ToolResult = overlayHidden(settleMs = SNAPSHOT_SETTLE_MS) {
+        val service = serviceOrError().getOrElse {
+            return@overlayHidden ToolResult(false, it.message ?: "Сервис недоступен")
+        }
+        val root = targetRoot(service).root
+            ?: return@overlayHidden ToolResult(false, "Нет активного окна для снимка")
+        val screenHeight = runCatching { service.resources.displayMetrics.heightPixels }.getOrDefault(0)
         try {
-            val second = captureShot().getOrNull()
-            return@overlayHidden if (second != null && !second.black) {
-                second.toResult(liftedCurtain = true)
-            } else {
-                shot.toResult(blackNote = true, liftedCurtain = true)
+            val hit = findNodeByIndex(root, index, screenHeight)
+                ?: return@overlayHidden ToolResult(
+                    false,
+                    "Узел №$index не найден на экране — вызови ui_get_screen заново и возьми индекс оттуда",
+                )
+            try {
+                val bounds = Rect()
+                hit.info.getBoundsInScreen(bounds)
+                if (bounds.width() <= 0 || bounds.height() <= 0) {
+                    return@overlayHidden ToolResult(false, "Узел №$index имеет нулевые размеры — снимок невозможен")
+                }
+                val shot = captureShot(bounds).getOrElse { return@overlayHidden screenshotError(it) }
+                val name = hit.node.label ?: hit.node.className.substringAfterLast('.')
+                shot.toResult("Снимок элемента №$index «$name»")
+            } finally {
+                hit.info.recycle()
             }
         } finally {
-            restore()
+            root.recycle()
         }
     }
 
@@ -381,14 +446,18 @@ class UiActions(
         val width: Int,
         val height: Int,
         val black: Boolean,
+        val liftedCurtain: Boolean = false,
+        val clipped: Boolean = false,
     ) {
-        fun toResult(blackNote: Boolean = false, liftedCurtain: Boolean = false): ToolResult {
-            val name = title?.takeIf { it.isNotBlank() } ?: "экран"
-            val sb = StringBuilder("Снимок окна «$name» (${width}×$height) — изображение приложено.")
+        fun toResult(subject: String): ToolResult {
+            val sb = StringBuilder("$subject (${width}×$height) — изображение приложено.")
+            if (clipped) {
+                sb.append("\nОбласть выходит за границы кадра — снимок обрезан по видимой части.")
+            }
             if (liftedCurtain) {
                 sb.append("\nШторка скринридера была временно снята для снимка и восстановлена.")
             }
-            if (blackNote) {
+            if (black) {
                 sb.append("\nКадр почти чёрный: возможно, шторка скринридера или защищённое окно — снимок может быть пустым.")
             }
             return ToolResult(true, sb.toString(), images = listOf(part))
@@ -397,22 +466,55 @@ class UiActions(
 
     private class ScreenshotException(val code: Int) : Exception("screenshot error $code")
 
-    private suspend fun captureShot(): Result<Shot> {
+    /**
+     * Снимок окна, при [bounds] (экранные координаты) обрезанный по этой области.
+     * При чёрном кадре — одна попытка снять шторку скринридера (нужны Shizuku/root)
+     * с восстановлением в `finally`; не вышло — кадр отдаётся как есть с честной пометкой.
+     */
+    private suspend fun captureShot(bounds: Rect?): Result<Shot> {
+        val frame = captureFrame().getOrElse { return Result.failure(it) }
+        if (!frame.black) return finishFrame(frame, bounds)
+        val restore = curtain.suspendTalkbackForShot() ?: return finishFrame(frame, bounds)
+        return try {
+            val second = captureFrame().getOrNull()
+            finishFrame(if (second != null && !second.black) second else frame, bounds, liftedCurtain = true)
+        } finally {
+            restore()
+        }
+    }
+
+    /** Кадр окна до сжатия: границы окна нужны, чтобы перевести экранные координаты в координаты кадра. */
+    private class Frame(val bitmap: Bitmap, val window: Rect?, val title: String?, val black: Boolean)
+
+    private suspend fun captureFrame(): Result<Frame> {
         val service = serviceOrError().getOrElse { return Result.failure(it) }
         val window = targetWindow(service)
         val bounds = Rect()
         window?.getBoundsInScreen(bounds)
+        val winBounds = bounds.takeIf { window != null && it.width() > 0 && it.height() > 0 }
         val raw = if (Build.VERSION.SDK_INT >= 34 && window != null) {
             takeWindowShot(service, window.id)
         } else {
             takeDisplayShot(service)
         }
         val bitmap = raw.getOrElse { return Result.failure(it) }
-        val cropped = cropTo(bitmap, bounds.takeIf { window != null && it.width() > 0 && it.height() > 0 })
-        val black = probeBlack(cropped)
+        val cropped = cropTo(bitmap, winBounds)
+        return Result.success(Frame(cropped, winBounds, window?.title?.toString(), probeBlack(cropped)))
+    }
+
+    /** Сжатие кадра в JPEG; [bounds] (экранные координаты) переводится в координаты кадра и вырезается. */
+    private fun finishFrame(frame: Frame, bounds: Rect?, liftedCurtain: Boolean = false): Result<Shot> {
+        val requested = bounds?.let { b ->
+            frame.window?.let { w -> Rect(b.left - w.left, b.top - w.top, b.right - w.left, b.bottom - w.top) }
+        }
+        val cropped = cropTo(frame.bitmap, requested)
+        val clipped = requested != null &&
+            (cropped.width != requested.width() || cropped.height != requested.height())
         val part = runCatching { ImageCodec.fromBitmap(cropped) }
             .getOrElse { return Result.failure(IllegalStateException("не удалось сжать снимок")) }
-        return Result.success(Shot(part, window?.title?.toString(), cropped.width, cropped.height, black))
+        return Result.success(
+            Shot(part, frame.title, cropped.width, cropped.height, frame.black, liftedCurtain, clipped),
+        )
     }
 
     @Suppress("DEPRECATION")

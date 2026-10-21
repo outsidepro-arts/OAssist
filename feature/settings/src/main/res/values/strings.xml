@@ -224,8 +224,12 @@
     <string name="tool_clipboard_copy_desc">Копирование текста в буфер обмена</string>
     <string name="tool_ui_get_screen_title">Снимок экрана</string>
     <string name="tool_ui_get_screen_desc">Чтение элементов экрана для агента</string>
-    <string name="tool_ui_screenshot_title">Скриншот окна</string>
+<string name="tool_ui_screenshot_title">Скриншот окна</string>
     <string name="tool_ui_screenshot_desc">Скриншот текущего окна в модель (нужна модель с поддержкой изображений)</string>
+    <string name="tool_ui_screenshot_region_title">Скриншот области</string>
+    <string name="tool_ui_screenshot_region_desc">Снимок прямоугольной области экрана в модель по координатам из снимка экрана</string>
+    <string name="tool_ui_screenshot_node_title">Скриншот элемента</string>
+    <string name="tool_ui_screenshot_node_desc">Снимок одного элемента экрана в модель по индексу из снимка экрана</string>
     <string name="tool_ui_click_title">Нажатия</string>
     <string name="tool_ui_click_desc">Нажатие на элементы экрана</string>
     <string name="tool_ui_long_click_title">Долгие нажатия</string>

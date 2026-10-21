@@ -56,6 +56,8 @@ object ToolCatalog {
         ClipboardCopyTool(actions),
         UiGetScreenTool(ui),
         UiScreenshotTool(ui),
+        UiScreenshotRegionTool(ui),
+        UiScreenshotNodeTool(ui),
         UiClickTool(ui),
         UiLongClickTool(ui),
         UiSetTextTool(ui),

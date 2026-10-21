@@ -225,8 +225,12 @@
     <string name="tool_clipboard_copy_desc">Copy text to the clipboard</string>
     <string name="tool_ui_get_screen_title">Screen snapshot</string>
     <string name="tool_ui_get_screen_desc">Read on-screen elements for the agent</string>
-    <string name="tool_ui_screenshot_title">Window screenshot</string>
+<string name="tool_ui_screenshot_title">Window screenshot</string>
     <string name="tool_ui_screenshot_desc">Screenshot of the current window to the model (vision-capable model required)</string>
+    <string name="tool_ui_screenshot_region_title">Region screenshot</string>
+    <string name="tool_ui_screenshot_region_desc">Screenshot of a screen area to the model, by coordinates from the screen snapshot</string>
+    <string name="tool_ui_screenshot_node_title">Element screenshot</string>
+    <string name="tool_ui_screenshot_node_desc">Screenshot of a single screen element to the model, by index from the screen snapshot</string>
     <string name="tool_ui_click_title">Taps</string>
     <string name="tool_ui_click_desc">Tap on-screen elements</string>
     <string name="tool_ui_long_click_title">Long presses</string>
