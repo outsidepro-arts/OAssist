@@ -34,6 +34,7 @@ class DeviceActions(
 ) {
 
     fun launchApp(packageName: String): ToolResult {
+        bgStartBlocked()?.let { return it }
         val intent = context.packageManager.getLaunchIntentForPackage(packageName)
             ?: return ToolResult(false, "Приложение '$packageName' не найдено")
         intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
@@ -128,6 +129,7 @@ class DeviceActions(
         } catch (e: Exception) {
             return ToolResult(false, "Не удалось проверить activity: ${e.message}")
         }
+        bgStartBlocked()?.let { return it }
         return runCatching {
             val intent = Intent().apply {
                 setComponent(component)
@@ -206,6 +208,7 @@ class DeviceActions(
     }
 
     fun openWeb(url: String): ToolResult {
+        bgStartBlocked()?.let { return it }
         val normalized = if (url.startsWith("http://") || url.startsWith("https://")) url else "https://$url"
         val intent = Intent(Intent.ACTION_VIEW, Uri.parse(normalized)).apply {
             addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
@@ -217,7 +220,47 @@ class DeviceActions(
     }
 
 
-    fun setAlarm(hour: Int, minute: Int, label: String?): ToolResult {
+    /**
+     * Есть ли у системы activity, которая отвечает на intent (как `startActivity` с DEFAULT-категорией).
+     * Без обработчика `startActivity` бросает исключение, а у OEM-часов это может молча не сработать —
+     * поэтому проверяем заранее и возвращаем честную ошибку.
+     */
+    private fun hasHandler(intent: Intent): Boolean =
+        context.packageManager.resolveActivity(intent, PackageManager.MATCH_DEFAULT_ONLY) != null
+
+    /**
+     * Pre-flight против тихой блокировки HyperOS/MIUI (опа 10021): `startActivity` из фона
+     * молча отбрасывается (START_ABORTED без исключения) — вместо ложного успеха честная ошибка.
+     */
+    private fun bgStartBlocked(): ToolResult? =
+        if (BgStartGuard.isBlocked(context, AppVisibility.isForeground)) {
+            ToolResult(false, BgStartGuard.blockedMessage(context.packageName))
+        } else {
+            null
+        }
+
+    /** Обработчики действия (SET_ALARM/SET_TIMER) — для текста ошибки модели. */
+    private fun listClockHandlers(action: String): List<ClockHandler> =
+        context.packageManager.queryIntentActivities(Intent(action), PackageManager.MATCH_DEFAULT_ONLY)
+            .mapNotNull { info ->
+                val pkg = info.activityInfo?.packageName ?: return@mapNotNull null
+                ClockHandler(pkg, info.loadLabel(context.packageManager).toString())
+            }
+            .distinctBy { it.packageName }
+            .sortedBy { it.label }
+
+    /**
+     * [packageName] не-blank → адресный запрос: пакет обязан уметь действие,
+     * иначе ошибка со списком обработчиков (без молчаливой подмены).
+     * Иначе — дефолтный резолв; нет обработчика — тоже ошибка со списком.
+     */
+    private fun clockHandlerError(action: String, packageName: String?, intent: Intent): ToolResult {
+        val handlers = listClockHandlers(intent.action ?: return ToolResult(false, "Не задано действие"))
+        val requested = packageName?.takeIf { it.isNotBlank() }
+        return ToolResult(false, noClockHandlerError(action, requested, handlers))
+    }
+
+    fun setAlarm(hour: Int, minute: Int, label: String?, packageName: String? = null): ToolResult {
         val intent = Intent(AlarmClock.ACTION_SET_ALARM).apply {
             putExtra(AlarmClock.EXTRA_HOUR, hour)
             putExtra(AlarmClock.EXTRA_MINUTES, minute)
@@ -225,6 +268,9 @@ class DeviceActions(
             putExtra(AlarmClock.EXTRA_SKIP_UI, true)
             addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
         }
+        if (!packageName.isNullOrBlank()) intent.setPackage(packageName)
+        if (!hasHandler(intent)) return clockHandlerError("ставить будильники", packageName, intent)
+        bgStartBlocked()?.let { return it }
         return runCatching {
             context.startActivity(intent)
             val labelText = label?.let { " с меткой '$it'" } ?: ""
@@ -233,6 +279,7 @@ class DeviceActions(
     }
 
     fun openSettings(action: String?): ToolResult {
+        bgStartBlocked()?.let { return it }
         val intent = when (action) {
             "wifi" -> Intent(Settings.ACTION_WIFI_SETTINGS)
             "bluetooth" -> Intent(Settings.ACTION_BLUETOOTH_SETTINGS)
@@ -262,6 +309,7 @@ class DeviceActions(
         if (!hasPermission(Manifest.permission.CALL_PHONE)) {
             return noPermissionResult(Manifest.permission.CALL_PHONE)
         }
+        bgStartBlocked()?.let { return it }
         val intent = Intent(Intent.ACTION_CALL, Uri.parse("tel:$number")).apply {
             addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
         }
@@ -410,7 +458,7 @@ class DeviceActions(
         }.getOrElse { ToolResult(false, "Не удалось добавить событие: ${it.message}") }
     }
 
-    fun setTimer(seconds: Int, label: String?): ToolResult {
+    fun setTimer(seconds: Int, label: String?, packageName: String? = null): ToolResult {
         if (seconds <= 0) return ToolResult(false, "Длительность таймера должна быть положительной")
         val intent = Intent(AlarmClock.ACTION_SET_TIMER).apply {
             putExtra(AlarmClock.EXTRA_LENGTH, seconds)
@@ -418,6 +466,9 @@ class DeviceActions(
             putExtra(AlarmClock.EXTRA_SKIP_UI, true)
             addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
         }
+        if (!packageName.isNullOrBlank()) intent.setPackage(packageName)
+        if (!hasHandler(intent)) return clockHandlerError("запускать таймеры", packageName, intent)
+        bgStartBlocked()?.let { return it }
         return runCatching {
             context.startActivity(intent)
             ToolResult(true, "Таймер на $seconds с. запущен")
@@ -444,6 +495,7 @@ class DeviceActions(
     // --- M2.7: интент-хвосты ---
 
     fun openNavigation(query: String?, latitude: Double?, longitude: Double?): ToolResult {
+        bgStartBlocked()?.let { return it }
         val uri = when {
             latitude != null && longitude != null -> Uri.parse("geo:$latitude,$longitude?q=$latitude,$longitude")
             !query.isNullOrBlank() -> {
@@ -467,6 +519,7 @@ class DeviceActions(
     }
 
     fun shareText(text: String): ToolResult {
+        bgStartBlocked()?.let { return it }
         if (text.isBlank()) return ToolResult(false, "Не указан text")
         val intent = Intent(Intent.ACTION_SEND).apply {
             type = "text/plain"

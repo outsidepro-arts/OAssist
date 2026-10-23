@@ -247,32 +247,43 @@ class WebSearchTool(private val search: SearchActions) : Tool {
     }
 }
 
+/** Схема вынесена наверх: контракт проверяется в JVM-тестах без DeviceActions/Context. */
+internal fun alarmSetSchema() = ToolSchema(
+    name = "alarm_set",
+    description = "Установить будильник. Используй когда пользователь просит поставить будильник или напоминание.",
+    parameters = buildJsonObject {
+        put("type", "object")
+        put("properties", buildJsonObject {
+            put("hour", buildJsonObject {
+                put("type", "integer")
+                put("description", "Час (0-23)")
+            })
+            put("minute", buildJsonObject {
+                put("type", "integer")
+                put("description", "Минуты (0-59)")
+            })
+            put("label", buildJsonObject {
+                put("type", "string")
+                put("description", "Метка будильника (необязательно)")
+            })
+            put("package", buildJsonObject {
+                put("type", "string")
+                put(
+                    "description",
+                    "Имя пакета приложения часов (например com.android.deskclock), если пользователь просил " +
+                        "конкретное или известно из app_list/памяти. Без пакета используется приложение по умолчанию.",
+                )
+            })
+        })
+        put("required", kotlinx.serialization.json.buildJsonArray {
+            add(kotlinx.serialization.json.JsonPrimitive("hour"))
+            add(kotlinx.serialization.json.JsonPrimitive("minute"))
+        })
+    },
+)
+
 class AlarmSetTool(private val actions: DeviceActions) : Tool {
-    override val schema = ToolSchema(
-        name = "alarm_set",
-        description = "Установить будильник. Используй когда пользователь просит поставить будильник или напоминание.",
-        parameters = buildJsonObject {
-            put("type", "object")
-            put("properties", buildJsonObject {
-                put("hour", buildJsonObject {
-                    put("type", "integer")
-                    put("description", "Час (0-23)")
-                })
-                put("minute", buildJsonObject {
-                    put("type", "integer")
-                    put("description", "Минуты (0-59)")
-                })
-                put("label", buildJsonObject {
-                    put("type", "string")
-                    put("description", "Метка будильника (необязательно)")
-                })
-            })
-            put("required", kotlinx.serialization.json.buildJsonArray {
-                add(kotlinx.serialization.json.JsonPrimitive("hour"))
-                add(kotlinx.serialization.json.JsonPrimitive("minute"))
-            })
-        },
-    )
+    override val schema = alarmSetSchema()
 
     override suspend fun execute(arguments: JsonObject): ToolResult {
         val hour = arguments["hour"]?.jsonPrimitive?.content?.toIntOrNull()
@@ -280,7 +291,8 @@ class AlarmSetTool(private val actions: DeviceActions) : Tool {
         val minute = arguments["minute"]?.jsonPrimitive?.content?.toIntOrNull()
             ?: return ToolResult(false, "Не указан minute")
         val label = arguments["label"]?.jsonPrimitive?.content
-        return actions.setAlarm(hour, minute, label)
+        val packageName = arguments["package"]?.jsonPrimitive?.content
+        return actions.setAlarm(hour, minute, label, packageName)
     }
 }
 
@@ -502,31 +514,44 @@ class CalendarAddTool(private val actions: DeviceActions) : Tool {
     }
 }
 
-class TimerSetTool(private val actions: DeviceActions) : Tool {
-    override val schema = ToolSchema(
-        name = "timer_set",
-        description = "Запустить таймер. Используй когда пользователь просит засечь время.",
-        parameters = buildJsonObject {
-            put("type", "object")
-            put("properties", buildJsonObject {
-                put("seconds", buildJsonObject {
-                    put("type", "integer")
-                    put("description", "Длительность в секундах")
-                })
-                put("label", buildJsonObject {
-                    put("type", "string")
-                    put("description", "Метка таймера (необязательно)")
-                })
+/** Схема вынесена наверх: контракт проверяется в JVM-тестах без DeviceActions/Context. */
+internal fun timerSetSchema() = ToolSchema(
+    name = "timer_set",
+    description = "Запустить таймер. Используй когда пользователь просит засечь время.",
+    parameters = buildJsonObject {
+        put("type", "object")
+        put("properties", buildJsonObject {
+            put("seconds", buildJsonObject {
+                put("type", "integer")
+                put("description", "Длительность в секундах")
             })
-            put("required", kotlinx.serialization.json.buildJsonArray { add(kotlinx.serialization.json.JsonPrimitive("seconds")) })
-        },
-    )
+            put("label", buildJsonObject {
+                put("type", "string")
+                put("description", "Метка таймера (необязательно)")
+            })
+            put("package", buildJsonObject {
+                put("type", "string")
+                put(
+                    "description",
+                    "Имя пакета приложения часов (например com.android.deskclock), если пользователь просил " +
+                        "конкретное или известно из app_list/памяти. Без пакета используется приложение по умолчанию. " +
+                        "Пакет должен уметь таймеры — иначе ошибка со списком доступных приложений.",
+                )
+            })
+        })
+        put("required", kotlinx.serialization.json.buildJsonArray { add(kotlinx.serialization.json.JsonPrimitive("seconds")) })
+    },
+)
+
+class TimerSetTool(private val actions: DeviceActions) : Tool {
+    override val schema = timerSetSchema()
 
     override suspend fun execute(arguments: JsonObject): ToolResult {
         val seconds = arguments["seconds"]?.jsonPrimitive?.content?.toIntOrNull()
             ?: return ToolResult(false, "Не указан seconds")
         val label = arguments["label"]?.jsonPrimitive?.content
-        return actions.setTimer(seconds, label)
+        val packageName = arguments["package"]?.jsonPrimitive?.content
+        return actions.setTimer(seconds, label, packageName)
     }
 }
 

@@ -14,6 +14,13 @@
     <string name="assistant_access_root_subtitle">Привилегии su, если нет Shizuku</string>
     <string name="assistant_access_on">Включён</string>
     <string name="assistant_access_off">Выключен</string>
+    <string name="assistant_access_bg_start">Запуск в фоне (MIUI/HyperOS)</string>
+    <string name="assistant_access_bg_start_subtitle">Разрешение системы на запуск окон из фона: установка будильников, открытие приложений</string>
+    <string name="bg_start_dialog_title">Требуется разрешение системы</string>
+    <string name="bg_start_dialog_text">HyperOS/MIUI блокирует запуск приложений из фона. Без разрешения ассистент не сможет ставить будильники и открывать приложения.\n\nВыполните в терминале:\n%1$s\n\nИли нажмите «Выполнить через Shizuku», если он доступен.</string>
+    <string name="bg_start_dialog_fix">Выполнить через Shizuku</string>
+    <string name="bg_start_dialog_fix_done">Разрешение выдано</string>
+    <string name="bg_start_dialog_fix_error">Не удалось выдать разрешение: %1$s</string>
     <string name="settings_language_title">Язык</string>
     <string name="settings_language_subtitle">Язык интерфейса и речи</string>
     <string name="settings_language_system">Системный</string>

@@ -202,6 +202,24 @@ class AppGraph private constructor(context: Context) {
         return noopExecutor
     }
 
+    /**
+     * Self-heal MIUI/HyperOS: `appops set <pkg> 10021 allow` через Shizuku/root.
+     * Ровно то, что лечит блокировку фонового startActivity (опа 10021).
+     */
+    suspend fun fixBgStart(): Result<Unit> {
+        val priv = privilegeExecutor()
+        if (priv.level == ru.outsideproarts.oassist.core.model.PrivilegeLevel.NONE) {
+            return Result.failure(IllegalStateException("Нет Shizuku или root"))
+        }
+        val cmd = ru.outsideproarts.oassist.core.agent.BgStartGuard.fixCommand(appContext.packageName)
+        val exec = priv.exec(cmd).getOrElse { return Result.failure(it) }
+        return if (exec.exitCode == 0) {
+            Result.success(Unit)
+        } else {
+            Result.failure(IllegalStateException("appops set: exit=${exec.exitCode}"))
+        }
+    }
+
     /** Чтение веба: статика (Ktor) + дорендер (WebView). */
     val searchActions: ru.outsideproarts.oassist.core.agent.SearchActions by lazy {
         ru.outsideproarts.oassist.core.agent.SearchActions(

@@ -293,6 +293,16 @@ private fun OAssistApp(
                         runCatching { graph.shizukuExecutor.isPermissionGranted() }.getOrDefault(false)
                     }
                 }
+                val bgStartVisible = remember { ru.outsideproarts.oassist.core.agent.BgStartGuard.isMiui() }
+                var bgStartAllowed by remember { mutableStateOf(true) }
+                val bgStartCommand = remember {
+                    ru.outsideproarts.oassist.core.agent.BgStartGuard.instruction(context.packageName)
+                }
+                androidx.compose.runtime.LaunchedEffect(accessVersion) {
+                    bgStartAllowed = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+                        !ru.outsideproarts.oassist.core.agent.BgStartGuard.isOpRestricted(context)
+                    }
+                }
                 AssistantAccessScreen(
                     isAccessibilityEnabled = a11yEnabled,
                     onOpenAccessibilitySettings = {
@@ -313,6 +323,19 @@ private fun OAssistApp(
                         runCatching { graph.shizukuExecutor.requestPermission() }
                     },
                     isRootAvailable = rootAvailable,
+                    bgStartVisible = bgStartVisible,
+                    bgStartAllowed = bgStartAllowed,
+                    bgStartCommand = bgStartCommand,
+                    canFixBgStart = shizukuGranted || rootAvailable,
+                    onFixBgStart = {
+                        val result = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+                            graph.fixBgStart()
+                        }
+                        bgStartAllowed = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+                            !ru.outsideproarts.oassist.core.agent.BgStartGuard.isOpRestricted(context)
+                        }
+                        result.exceptionOrNull()?.message
+                    },
                     onBack = { navController.popBackStack() },
                 )
             }

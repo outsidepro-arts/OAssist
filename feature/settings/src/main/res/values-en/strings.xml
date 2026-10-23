@@ -14,6 +14,13 @@
     <string name="assistant_access_root_subtitle">su privileges when Shizuku is unavailable</string>
     <string name="assistant_access_on">Enabled</string>
     <string name="assistant_access_off">Disabled</string>
+    <string name="assistant_access_bg_start">Background launch (MIUI/HyperOS)</string>
+    <string name="assistant_access_bg_start_subtitle">System permission to start windows from background: setting alarms, opening apps</string>
+    <string name="bg_start_dialog_title">System permission required</string>
+    <string name="bg_start_dialog_text">HyperOS/MIUI blocks starting apps from background. Without this permission the assistant cannot set alarms or open apps.\n\nRun in a terminal:\n%1$s\n\nOr tap «Run via Shizuku» if available.</string>
+    <string name="bg_start_dialog_fix">Run via Shizuku</string>
+    <string name="bg_start_dialog_fix_done">Permission granted</string>
+    <string name="bg_start_dialog_fix_error">Failed to grant permission: %1$s</string>
     <string name="settings_language_title">Language</string>
     <string name="settings_language_subtitle">Interface and speech language</string>
     <string name="settings_language_system">System</string>

@@ -20,6 +20,10 @@
     <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />
     <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
 
+    <!-- alarm_set / timer_set: часы (AOSP DeskClock HandleApiCalls) защищены этим разрешением
+         на уровне activity — без объявления в манифесте вызов не резолвится. normal, выдаётся при установке. -->
+    <uses-permission android:name="com.android.alarm.permission.SET_ALARM" />
+
     <!-- device_state: чтение Wi-Fi (normal-разрешение, выдачи не требует) -->
     <uses-permission android:name="android.permission.ACCESS_WIFI_STATE" />
 
@@ -35,6 +39,13 @@
         <intent>
             <action android:name="android.intent.action.MAIN" />
             <category android:name="android.intent.category.LAUNCHER" />
+        </intent>
+        <!-- alarm_set / timer_set: видимость обработчиков для resolveActivity (API 30+) -->
+        <intent>
+            <action android:name="android.intent.action.SET_ALARM" />
+        </intent>
+        <intent>
+            <action android:name="android.intent.action.SET_TIMER" />
         </intent>
         <!-- M5.1: видимость приложения Shizuku для запроса разрешения -->
         <package android:name="moe.shizuku.privileged.api" />
