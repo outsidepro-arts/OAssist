@@ -94,7 +94,9 @@ object ToolGroups {
         "notify_list",
         "notify_open", "notify_clear",
         "ui_get_screen", "ui_screenshot", "ui_screenshot_region", "ui_screenshot_node", "ui_wait_for",
+        "ui_get_actions",
         "ui_click", "ui_long_click", "ui_set_text", "ui_scroll", "ui_swipe", "ui_global",
+        "ui_perform_action",
         "voice_listen_start", "voice_listen_stop",
         "location_get",
         "device_info", "device_state",
@@ -121,9 +123,11 @@ object ToolGroups {
         "notify_list" -> key(ToolCategory.NOTIFICATIONS, ToolAccess.READ)
         "notify_open", "notify_clear" ->
             key(ToolCategory.NOTIFICATIONS, ToolAccess.WRITE)
-        "ui_get_screen", "ui_screenshot", "ui_screenshot_region", "ui_screenshot_node", "ui_wait_for" ->
+        "ui_get_screen", "ui_screenshot", "ui_screenshot_region", "ui_screenshot_node", "ui_wait_for",
+        "ui_get_actions" ->
             key(ToolCategory.SCREEN_UI, ToolAccess.READ)
-        "ui_click", "ui_long_click", "ui_set_text", "ui_scroll", "ui_swipe", "ui_global" ->
+        "ui_click", "ui_long_click", "ui_set_text", "ui_scroll", "ui_swipe", "ui_global",
+        "ui_perform_action" ->
             key(ToolCategory.SCREEN_UI, ToolAccess.WRITE)
         "voice_listen_start", "voice_listen_stop" ->
             key(ToolCategory.MICROPHONE, ToolAccess.READ)

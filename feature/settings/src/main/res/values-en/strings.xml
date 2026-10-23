@@ -252,6 +252,10 @@
     <string name="tool_ui_global_desc">Back/Home/Recents buttons</string>
     <string name="tool_ui_wait_for_title">Wait for text</string>
     <string name="tool_ui_wait_for_desc">Wait until text appears on screen</string>
+    <string name="tool_ui_get_actions_title">Element actions</string>
+    <string name="tool_ui_get_actions_desc">Hidden on-screen element actions: reply, forward, expand a menu</string>
+    <string name="tool_ui_perform_action_title">Perform action</string>
+    <string name="tool_ui_perform_action_desc">Perform a hidden on-screen element action by its index</string>
     <string name="tool_notify_list_title">Notification list</string>
     <string name="tool_notify_list_desc">Read active notifications</string>
     <string name="tool_notify_open_title">Open notifications</string>

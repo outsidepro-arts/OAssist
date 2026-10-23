@@ -168,6 +168,70 @@ class UiActions(
         return performOnFreshNode(target.index, "прокрутить") { it.performAction(action) }
     }
 
+    /**
+     * Список скрытых действий узла по индексу снимка (`ui_get_actions`).
+     * Узел ищется свежим обходом (индексы протухают), оверлей не прячем —
+     * как у `click`, действие привязано к узлу, а не к координатам.
+     */
+    suspend fun nodeActions(index: Int): ToolResult {
+        val service = serviceOrError().getOrElse { return ToolResult(false, it.message ?: "Сервис недоступен") }
+        val root = targetRoot(service).root
+            ?: return ToolResult(false, "Нет активного окна")
+        val screenH = runCatching { service.resources.displayMetrics.heightPixels }.getOrDefault(0)
+        return try {
+            val hit = findNodeByIndex(root, index, screenH)
+                ?: return ToolResult(false, "Узел №$index не найден на экране — вызови ui_get_screen заново и возьми индекс оттуда")
+            try {
+                val label = hit.node.label ?: hit.node.className.substringAfterLast('.')
+                ToolResult(true, formatNodeActions(index, label, hiddenActions(actionListOf(hit.info))))
+            } finally {
+                hit.info.recycle()
+            }
+        } finally {
+            root.recycle()
+        }
+    }
+
+    /**
+     * Выполнить скрытое действие узла по индексам снимка и списка (`ui_perform_action`).
+     * Список действий пересчитывается на свежей ноде: индексы между вызовами
+     * могли сдвинуться — тогда честная ошибка с актуальным списком для самовосстановления.
+     */
+    suspend fun performNodeAction(index: Int, actionIndex: Int): ToolResult {
+        val service = serviceOrError().getOrElse { return ToolResult(false, it.message ?: "Сервис недоступен") }
+        val root = targetRoot(service).root
+            ?: return ToolResult(false, "Нет активного окна")
+        val screenH = runCatching { service.resources.displayMetrics.heightPixels }.getOrDefault(0)
+        return try {
+            val hit = findNodeByIndex(root, index, screenH)
+                ?: return ToolResult(false, "Узел №$index не найден на экране — вызови ui_get_screen заново и возьми индекс оттуда")
+            try {
+                val label = hit.node.label ?: hit.node.className.substringAfterLast('.')
+                val actions = hiddenActions(actionListOf(hit.info))
+                val action = actions.getOrNull(actionIndex)
+                    ?: return ToolResult(
+                        false,
+                        "Действия №$actionIndex у элемента №$index сейчас нет — вот актуальный список:\n" +
+                            formatNodeActions(index, label, actions),
+                    )
+                val name = actionName(action)
+                if (hit.info.performAction(action.id)) {
+                    ToolResult(true, "Выполнено действие $name (элемент №$index)")
+                } else {
+                    ToolResult(
+                        false,
+                        "Не удалось выполнить действие $name (элемент №$index) — возможно, элемент устарел " +
+                            "или действию нужны аргументы; перечитай ui_get_screen и повтори",
+                    )
+                }
+            } finally {
+                hit.info.recycle()
+            }
+        } finally {
+            root.recycle()
+        }
+    }
+
     suspend fun globalAction(action: String): ToolResult {
         val service = serviceOrError().getOrElse { return ToolResult(false, it.message ?: "Сервис недоступен") }
         val global = when (action.lowercase()) {
@@ -302,6 +366,11 @@ class UiActions(
 
     private class Walk(val refs: List<AccessibilityNodeInfo>, val nodes: List<UiNode>, val total: Int)
 
+    /** Сырые действия ноды для pure-фильтра [hiddenActions] (Android-слой только перевод). */
+    private fun actionListOf(node: AccessibilityNodeInfo): List<UiNodeAction> =
+        runCatching { node.actionList.orEmpty() }.getOrDefault(emptyList())
+            .mapIndexed { i, action -> UiNodeAction(i, action.id, action.label?.toString()) }
+
     private fun collectCandidates(root: AccessibilityNodeInfo): Walk {
         val refs = mutableListOf<AccessibilityNodeInfo>()
         val out = mutableListOf<UiNode>()
@@ -312,7 +381,8 @@ class UiActions(
             val (node, depth) = queue.removeFirst()
             val text = node.text?.toString()
             val desc = node.contentDescription?.toString()
-            val actionable = node.isClickable || node.isEditable || node.isScrollable ||
+            val hasHidden = actionListOf(node).any { isHiddenAction(it.id, it.label) }
+            val actionable = node.isClickable || node.isEditable || node.isScrollable || hasHidden ||
                 node.className?.toString() == "android.widget.EditText"
             val informative = !text.isNullOrBlank() || !desc.isNullOrBlank()
             if ((actionable || informative) && depth > 0) {
@@ -331,6 +401,7 @@ class UiActions(
                             editable = node.isEditable,
                             scrollable = node.isScrollable,
                             bounds = UiRect(bounds.left, bounds.top, bounds.right, bounds.bottom),
+                            hasActions = hasHidden,
                         ),
                     )
                 }

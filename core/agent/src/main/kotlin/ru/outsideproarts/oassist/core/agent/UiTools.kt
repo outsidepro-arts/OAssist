@@ -13,7 +13,8 @@ import kotlinx.serialization.json.put
 class UiGetScreenTool(private val ui: UiActions) : Tool {
     override val schema = ToolSchema(
         name = "ui_get_screen",
-        description = "Снимок экрана: список элементов с индексами, текстами и координатами. Вызывай перед нажатиями.",
+        description = "Снимок экрана: список элементов с индексами, текстами и координатами. " +
+            "Вызывай перед нажатиями. Флаг has_actions — у элемента есть скрытые действия (ui_get_actions).",
         parameters = buildJsonObject {
             put("type", "object")
             put("properties", buildJsonObject { })
@@ -349,5 +350,84 @@ class UiScreenshotNodeTool(private val ui: UiActions) : Tool {
         val index = arguments["index"]?.jsonPrimitive?.content?.toIntOrNull()
             ?: return ToolResult(false, "Не указан index")
         return ui.screenshotNode(index)
+    }
+}
+
+/**
+ * Список скрытых действий элемента по индексу из `ui_get_screen` (у узлов
+ * с флагом `has_actions`). Сами действия не выполняются — для этого
+ * [UiPerformActionTool]: два шага, как снимок → нажатие.
+ */
+class UiGetActionsTool(private val ui: UiActions) : Tool {
+    override val schema = ToolSchema(
+        name = "ui_get_actions",
+        description = "Скрытые действия элемента по индексу из ui_get_screen — для элементов с флагом " +
+            "has_actions (например «Ответить», «Переслать», долгое нажатие, раскрытие). " +
+            "Выбранное действие выполни через ui_perform_action.",
+        parameters = buildJsonObject {
+            put("type", "object")
+            put("properties", buildJsonObject {
+                put("index", buildJsonObject {
+                    put("type", "integer")
+                    put("description", "Индекс узла из снимка ui_get_screen")
+                })
+            })
+            put("required", kotlinx.serialization.json.buildJsonArray { add(kotlinx.serialization.json.JsonPrimitive("index")) })
+        },
+    )
+
+    override fun describeForConfirmation(arguments: JsonObject): String {
+        val index = arguments["index"]?.jsonPrimitive?.content ?: "?"
+        return "Показать действия элемента экрана №$index"
+    }
+
+    override suspend fun execute(arguments: JsonObject): ToolResult {
+        val index = arguments["index"]?.jsonPrimitive?.content?.toIntOrNull()
+            ?: return ToolResult(false, "Не указан index")
+        return ui.nodeActions(index)
+    }
+}
+
+/**
+ * Выполнение скрытого действия элемента по индексам из `ui_get_screen`
+ * (`index`) и `ui_get_actions` (`action_index`). Протухший индекс или
+ * сдвинувшийся список — честная ошибка с актуальным списком действий.
+ */
+class UiPerformActionTool(private val ui: UiActions) : Tool {
+    override val schema = ToolSchema(
+        name = "ui_perform_action",
+        description = "Выполнить скрытое действие элемента: index — элемент из ui_get_screen, " +
+            "action_index — действие из ui_get_actions. Например: ответить на сообщение, переслать, открыть меню.",
+        parameters = buildJsonObject {
+            put("type", "object")
+            put("properties", buildJsonObject {
+                put("index", buildJsonObject {
+                    put("type", "integer")
+                    put("description", "Индекс узла из снимка ui_get_screen")
+                })
+                put("action_index", buildJsonObject {
+                    put("type", "integer")
+                    put("description", "Индекс действия из ui_get_actions")
+                })
+            })
+            put("required", kotlinx.serialization.json.buildJsonArray {
+                add(kotlinx.serialization.json.JsonPrimitive("index"))
+                add(kotlinx.serialization.json.JsonPrimitive("action_index"))
+            })
+        },
+    )
+
+    override fun describeForConfirmation(arguments: JsonObject): String {
+        val index = arguments["index"]?.jsonPrimitive?.content ?: "?"
+        val action = arguments["action_index"]?.jsonPrimitive?.content ?: "?"
+        return "Выполнить действие №$action элемента экрана №$index"
+    }
+
+    override suspend fun execute(arguments: JsonObject): ToolResult {
+        val index = arguments["index"]?.jsonPrimitive?.content?.toIntOrNull()
+            ?: return ToolResult(false, "Не указан index")
+        val actionIndex = arguments["action_index"]?.jsonPrimitive?.content?.toIntOrNull()
+            ?: return ToolResult(false, "Не указан action_index")
+        return ui.performNodeAction(index, actionIndex)
     }
 }

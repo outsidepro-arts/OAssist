@@ -65,6 +65,8 @@ object ToolCatalog {
         UiSwipeTool(ui),
         UiGlobalTool(ui),
         UiWaitForTool(ui),
+        UiGetActionsTool(ui),
+        UiPerformActionTool(ui),
         NotifyListTool(notify),
         NotifyOpenTool(notify),
         NotifyClearTool(notify),

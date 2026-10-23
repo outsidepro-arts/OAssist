@@ -66,8 +66,21 @@ class ToolGroupsTest {
     @Test
     fun `все скриншоты экрана — чтение экрана`() {
         val screen = ToolGroups.key(ToolCategory.SCREEN_UI, ToolAccess.READ)
-        listOf("ui_get_screen", "ui_screenshot", "ui_screenshot_region", "ui_screenshot_node", "ui_wait_for")
-            .forEach { assertEquals("тул $it", screen, ToolGroups.groupOf(it)) }
+        listOf(
+            "ui_get_screen", "ui_screenshot", "ui_screenshot_region", "ui_screenshot_node",
+            "ui_wait_for", "ui_get_actions",
+        ).forEach { assertEquals("тул $it", screen, ToolGroups.groupOf(it)) }
+    }
+
+    @Test
+    fun `действия нод известны каталогу и разделены на чтение и действие`() {
+        val read = ToolGroups.key(ToolCategory.SCREEN_UI, ToolAccess.READ)
+        val write = ToolGroups.key(ToolCategory.SCREEN_UI, ToolAccess.WRITE)
+        listOf("ui_get_actions", "ui_perform_action").forEach {
+            assertTrue("тул $it не в knownToolNames", it in ToolGroups.knownToolNames)
+        }
+        assertEquals(read, ToolGroups.groupOf("ui_get_actions"))
+        assertEquals(write, ToolGroups.groupOf("ui_perform_action"))
     }
 
     @Test

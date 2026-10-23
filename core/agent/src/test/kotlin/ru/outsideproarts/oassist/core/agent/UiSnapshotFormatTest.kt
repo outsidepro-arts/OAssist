@@ -1,6 +1,7 @@
 package ru.outsideproarts.oassist.core.agent
 
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -100,5 +101,24 @@ class UiSnapshotFormatTest {
         )
         val text = formatSnapshot(nodes)
         assertEquals(1, text.lines().size)
+    }
+
+    @Test
+    fun format_hasActionsFlag_afterBaseFlags() {
+        val nodes = listOf(
+            UiNode(0, "TextView", "Привет", null, true, false, false, UiRect(0, 0, 10, 10), hasActions = true),
+            UiNode(1, "View", "x", null, false, false, false, UiRect(0, 0, 10, 10), hasActions = true),
+        )
+        val lines = formatSnapshot(nodes).lines()
+        assertEquals("[0] TextView «Привет» (clickable,has_actions) [0,0-10,10]", lines[0])
+        assertEquals("[1] View «x» (has_actions) [0,0-10,10]", lines[1])
+    }
+
+    @Test
+    fun format_noActionsFlag_withoutHiddenActions() {
+        val nodes = listOf(
+            UiNode(0, "View", "x", null, true, false, false, UiRect(0, 0, 10, 10)),
+        )
+        assertFalse(formatSnapshot(nodes).contains("has_actions"))
     }
 }

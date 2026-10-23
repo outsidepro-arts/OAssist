@@ -251,6 +251,10 @@
     <string name="tool_ui_global_desc">Кнопки Назад/Домой/Недавние</string>
     <string name="tool_ui_wait_for_title">Ожидание текста</string>
     <string name="tool_ui_wait_for_desc">Ожидание появления текста на экране</string>
+    <string name="tool_ui_get_actions_title">Действия элемента</string>
+    <string name="tool_ui_get_actions_desc">Скрытые действия элементов экрана: ответить, переслать, раскрыть меню</string>
+    <string name="tool_ui_perform_action_title">Выполнить действие</string>
+    <string name="tool_ui_perform_action_desc">Выполнение скрытого действия элемента экрана по его индексу</string>
     <string name="tool_notify_list_title">Список уведомлений</string>
     <string name="tool_notify_list_desc">Чтение активных уведомлений</string>
     <string name="tool_notify_open_title">Открытие уведомлений</string>

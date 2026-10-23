@@ -6,7 +6,13 @@ import org.junit.Test
 
 class SelectPositionsTest {
 
-    private fun node(index: Int, centerY: Int, clickable: Boolean = false, label: String? = null): UiNode =
+    private fun node(
+        index: Int,
+        centerY: Int,
+        clickable: Boolean = false,
+        label: String? = null,
+        hasActions: Boolean = false,
+    ): UiNode =
         UiNode(
             index = index,
             className = "View",
@@ -16,6 +22,7 @@ class SelectPositionsTest {
             editable = false,
             scrollable = false,
             bounds = UiRect(0, centerY - 10, 100, centerY + 10),
+            hasActions = hasActions,
         )
 
     @Test
@@ -66,5 +73,15 @@ class SelectPositionsTest {
         assertEquals(3, shown.size)
         assertTrue(shown.contains(8))
         assertTrue(shown.any { it >= 10 })
+    }
+
+    @Test
+    fun overLimit_prefersHasActions_likeActionable() {
+        val nodes = List(10) { i ->
+            node(i, centerY = 2300, hasActions = i >= 8)
+        } + List(2) { i -> node(10 + i, centerY = 100) }
+        val shown = selectPositions(nodes, 3, screenHeight = 2400)
+        assertEquals(3, shown.size)
+        assertTrue(shown.contains(8))
     }
 }
