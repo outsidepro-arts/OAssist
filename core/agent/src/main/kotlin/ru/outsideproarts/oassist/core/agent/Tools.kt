@@ -305,7 +305,7 @@ class OpenSettingsTool(private val actions: DeviceActions) : Tool {
             put("properties", buildJsonObject {
                 put("section", buildJsonObject {
                     put("type", "string")
-                    put("description", "Раздел настроек: wifi, bluetooth, display, sound, location (или пусто для общих)")
+                    put("description", "Раздел настроек: wifi, bluetooth, display, sound, location, write_settings (экран выдачи права изменения системных настроек; или пусто для общих)")
                 })
             })
         },
@@ -720,4 +720,22 @@ class DeviceStateTool(private val actions: DeviceActions) : Tool {
     )
 
     override suspend fun execute(arguments: JsonObject): ToolResult = actions.deviceState()
+}
+
+class MediaNowPlayingTool(private val media: MediaActions) : Tool {
+    override val schema = ToolSchema(
+        name = "media_now_playing",
+        description = "Что сейчас играет в системе: название, исполнитель, альбом, позиция, состояние (playing/paused). " +
+            "Читает активные медиа-сессии плееров — работает даже когда плеер не показывает уведомления. " +
+            "device_state даёт только факт «музыка играет», здесь — метаданные.",
+        parameters = buildJsonObject {
+            put("type", "object")
+            put("properties", buildJsonObject { })
+        },
+    )
+
+    override fun describeForConfirmation(arguments: JsonObject): String =
+        "Показать, что сейчас играет в системе"
+
+    override suspend fun execute(arguments: JsonObject): ToolResult = media.nowPlaying()
 }

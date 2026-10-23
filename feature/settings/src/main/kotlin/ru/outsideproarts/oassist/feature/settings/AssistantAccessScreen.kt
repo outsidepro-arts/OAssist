@@ -43,6 +43,8 @@ fun AssistantAccessScreen(
     onOpenAccessibilitySettings: () -> Unit = {},
     isNotificationEnabled: Boolean = false,
     onOpenNotificationSettings: () -> Unit = {},
+    isWriteSettingsGranted: Boolean = false,
+    onOpenWriteSettings: () -> Unit = {},
     isShizukuGranted: Boolean = false,
     onRequestShizuku: () -> Unit = {},
     isRootAvailable: Boolean = false,
@@ -101,6 +103,14 @@ fun AssistantAccessScreen(
                 onState = onState,
                 offState = offState,
                 onClick = onOpenNotificationSettings,
+            )
+            AccessRow(
+                title = stringResource(R.string.assistant_access_write_settings),
+                subtitle = stringResource(R.string.assistant_access_write_settings_subtitle),
+                enabled = isWriteSettingsGranted,
+                onState = onState,
+                offState = offState,
+                onClick = onOpenWriteSettings,
             )
             AccessRow(
                 title = stringResource(R.string.assistant_access_shizuku),

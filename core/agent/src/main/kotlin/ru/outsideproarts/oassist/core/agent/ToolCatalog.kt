@@ -30,6 +30,7 @@ object ToolCatalog {
         actions: DeviceActions,
         ui: UiActions,
         notify: NotifyActions,
+        media: MediaActions,
         webContent: WebContentActions,
         webRender: WebRenderActions,
         voiceCapture: VoiceCaptureController,
@@ -78,6 +79,7 @@ object ToolCatalog {
         MediaButtonTool(actions),
         LocationGetTool(actions),
         DeviceStateTool(actions),
+        MediaNowPlayingTool(media),
         VolumeSetTool(actions),
         DndSetTool(actions),
         BrightnessSetTool(actions),
@@ -98,6 +100,7 @@ object ToolCatalog {
         actions: DeviceActions,
         ui: UiActions,
         notify: NotifyActions,
+        media: MediaActions,
         webContent: WebContentActions,
         webRender: WebRenderActions,
         voiceCapture: VoiceCaptureController,
@@ -108,7 +111,7 @@ object ToolCatalog {
         search: SearchActions,
         externalTools: List<Tool> = emptyList(),
     ): ToolRegistry {
-        val builtIn = createTools(actions, ui, notify, webContent, webRender, voiceCapture, memory, skills, priv, search)
+        val builtIn = createTools(actions, ui, notify, media, webContent, webRender, voiceCapture, memory, skills, priv, search)
         val builtInNames = builtIn.map { it.schema.name }.toSet()
         // Внешние имена с коллизией отбрасываются: встроенные в приоритете.
         val external = externalTools.filter { it.schema.name !in builtInNames }

@@ -99,7 +99,7 @@ object ToolGroups {
         "ui_perform_action",
         "voice_listen_start", "voice_listen_stop",
         "location_get",
-        "device_info", "device_state",
+        "device_info", "device_state", "media_now_playing",
         "volume_set", "dnd_set", "brightness_set", "flashlight", "media_button",
         "alarm_set", "timer_set", "clipboard_copy",
         "web_search", "web_fetch",
@@ -132,7 +132,8 @@ object ToolGroups {
         "voice_listen_start", "voice_listen_stop" ->
             key(ToolCategory.MICROPHONE, ToolAccess.READ)
         "location_get" -> key(ToolCategory.GEOLOCATION, ToolAccess.READ)
-        "device_info", "device_state" -> key(ToolCategory.DEVICE, ToolAccess.READ)
+        "device_info", "device_state", "media_now_playing" ->
+            key(ToolCategory.DEVICE, ToolAccess.READ)
         "volume_set", "dnd_set", "brightness_set", "flashlight", "media_button",
         "alarm_set", "timer_set", "clipboard_copy",
         -> key(ToolCategory.DEVICE, ToolAccess.WRITE)

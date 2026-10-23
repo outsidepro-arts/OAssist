@@ -175,6 +175,25 @@ class AppGraph private constructor(context: Context) {
         )
     }
 
+    /** Чтение «что играет»: медиа-сессии через NotificationListener-компонент. */
+    val mediaActions: ru.outsideproarts.oassist.core.agent.MediaActions by lazy {
+        ru.outsideproarts.oassist.core.agent.MediaActions(
+            context = appContext,
+            listenerComponent = {
+                android.content.ComponentName(
+                    appContext,
+                    ru.outsideproarts.oassist.notify.OAssistNotificationListener::class.java,
+                )
+            },
+            serviceProvider = {
+                ru.outsideproarts.oassist.notify.OAssistNotificationListener.instance
+            },
+            accessGranted = {
+                ru.outsideproarts.oassist.notify.OAssistNotificationListener.isEnabled(appContext)
+            },
+        )
+    }
+
     /** Привилегии M5.1: Shizuku (UserService) > Root (su) > Noop (явный отказ). */
     val shizukuExecutor: ru.outsideproarts.oassist.core.device.ShizukuExecutor by lazy {
         ru.outsideproarts.oassist.core.device.ShizukuExecutor(appContext)
@@ -280,6 +299,7 @@ class AppGraph private constructor(context: Context) {
                 ru.outsideproarts.oassist.core.agent.DeviceActions(appContext, torchTracker, foregroundRunner),
                 uiActions,
                 notifyActions,
+                mediaActions,
                 webContentActions,
                 webRenderActions,
                 voiceCapture,

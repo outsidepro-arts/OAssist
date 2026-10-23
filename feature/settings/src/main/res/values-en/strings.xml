@@ -8,6 +8,8 @@
     <string name="assistant_access_a11y_subtitle">OAssist accessibility service: screen reading and gestures for ui tools</string>
     <string name="assistant_access_notif">Notification access</string>
     <string name="assistant_access_notif_subtitle">Read notifications for notify tools</string>
+    <string name="assistant_access_write_settings">Modify system settings</string>
+    <string name="assistant_access_write_settings_subtitle">Permission to change system settings (screen brightness etc.)</string>
     <string name="assistant_access_shizuku">Shizuku</string>
     <string name="assistant_access_shizuku_subtitle">Shell privileges for shell tools and gesture fallback</string>
     <string name="assistant_access_root">Root</string>
@@ -276,6 +278,8 @@
     <string name="tool_location_get_desc">Current device coordinates</string>
     <string name="tool_device_state_title">Device state</string>
     <string name="tool_device_state_desc">Torch, music, Wi-Fi, battery, screen, sound</string>
+    <string name="tool_media_now_playing_title">Now playing</string>
+    <string name="tool_media_now_playing_desc">Title, artist and position of the playing track (media sessions; works without player notifications)</string>
     <string name="tool_voice_listen_start_title">Start listening</string>
     <string name="tool_voice_listen_start_desc">Turn on the mic and await a voice reply</string>
     <string name="tool_voice_listen_stop_title">Stop and recognize</string>

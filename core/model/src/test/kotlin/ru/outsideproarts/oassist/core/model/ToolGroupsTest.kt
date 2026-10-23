@@ -59,6 +59,15 @@ class ToolGroupsTest {
     }
 
     @Test
+    fun `media_now_playing — чтение устройства`() {
+        assertTrue("тул не в knownToolNames", "media_now_playing" in ToolGroups.knownToolNames)
+        assertEquals(
+            ToolGroups.key(ToolCategory.DEVICE, ToolAccess.READ),
+            ToolGroups.groupOf("media_now_playing"),
+        )
+    }
+
+    @Test
     fun `неизвестный тул — fail-closed`() {
         assertEquals(ToolGroups.UNKNOWN, ToolGroups.groupOf("no_such_tool"))
     }

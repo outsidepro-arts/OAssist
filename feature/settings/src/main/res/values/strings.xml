@@ -8,6 +8,8 @@
     <string name="assistant_access_a11y_subtitle">Сервис доступности OAssist: чтение экрана и жесты для ui-инструментов</string>
     <string name="assistant_access_notif">Доступ к уведомлениям</string>
     <string name="assistant_access_notif_subtitle">Чтение уведомлений для notify-инструментов</string>
+    <string name="assistant_access_write_settings">Изменение системных настроек</string>
+    <string name="assistant_access_write_settings_subtitle">Право менять системные настройки (яркость экрана и т.п.)</string>
     <string name="assistant_access_shizuku">Shizuku</string>
     <string name="assistant_access_shizuku_subtitle">Привилегии shell для shell-инструментов и фолбэка жестов</string>
     <string name="assistant_access_root">Root</string>
@@ -275,6 +277,8 @@
     <string name="tool_location_get_desc">Текущие координаты устройства</string>
     <string name="tool_device_state_title">Состояние устройства</string>
     <string name="tool_device_state_desc">Фонарик, музыка, Wi-Fi, батарея, экран, звук</string>
+    <string name="tool_media_now_playing_title">Что играет сейчас</string>
+    <string name="tool_media_now_playing_desc">Название, исполнитель и позиция играющего трека (медиа-сессии; работает без уведомлений плеера)</string>
     <string name="tool_voice_listen_start_title">Начать слушать</string>
     <string name="tool_voice_listen_start_desc">Включить микрофон и ждать голосовой ответ</string>
     <string name="tool_voice_listen_stop_title">Остановить и распознать</string>

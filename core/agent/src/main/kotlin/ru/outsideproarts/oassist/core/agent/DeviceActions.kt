@@ -286,6 +286,10 @@ class DeviceActions(
             "display" -> Intent(Settings.ACTION_DISPLAY_SETTINGS)
             "sound" -> Intent(Settings.ACTION_SOUND_SETTINGS)
             "location" -> Intent(Settings.ACTION_LOCATION_SOURCE_SETTINGS)
+            "write_settings" -> Intent(
+                Settings.ACTION_MANAGE_WRITE_SETTINGS,
+                Uri.parse("package:${context.packageName}"),
+            )
             else -> Intent(Settings.ACTION_SETTINGS)
         }.apply { addFlags(Intent.FLAG_ACTIVITY_NEW_TASK) }
         return runCatching {
@@ -700,8 +704,9 @@ class DeviceActions(
             "Нет доступа «Не беспокоить»: выдайте его в системных настройках " +
                 "(Звук → Не беспокоить → Доступ), затем повторите"
         const val WRITE_SETTINGS_MESSAGE =
-            "Нет права изменять системные настройки: выдайте его в системных настройках " +
-                "при первом запросе, затем повторите"
+            "Нет права изменять системные настройки: выдайте его в настройках OAssist " +
+                "(раздел «Доступ» → «Изменение системных настроек»; там же откройте экран " +
+                "через open_settings с целью write_settings), затем повторите"
     }
 
     // --- M5.2: громкость, «Не беспокоить», яркость (спецдоступы, не runtime) ---

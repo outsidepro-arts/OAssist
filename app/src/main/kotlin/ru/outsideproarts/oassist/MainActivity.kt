@@ -220,6 +220,7 @@ private fun OAssistApp(
                             ),
                             graph.uiActions,
                             graph.notifyActions,
+                            graph.mediaActions,
                             graph.webContentActions,
                             graph.webRenderActions,
                             graph.voiceCapture,
@@ -284,6 +285,9 @@ private fun OAssistApp(
                 val notifEnabled = remember(accessVersion) {
                     ru.outsideproarts.oassist.notify.OAssistNotificationListener.isEnabled(context)
                 }
+                val writeSettingsGranted = remember(accessVersion) {
+                    android.provider.Settings.System.canWrite(context)
+                }
                 var shizukuGranted by remember { mutableStateOf(false) }
                 val rootAvailable = remember(accessVersion) {
                     ru.outsideproarts.oassist.core.device.RootExecutor.hasSuBinary()
@@ -316,6 +320,15 @@ private fun OAssistApp(
                         context.startActivity(
                             android.content.Intent("android.settings.ACTION_NOTIFICATION_LISTENER_SETTINGS")
                                 .addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK),
+                        )
+                    },
+                    isWriteSettingsGranted = writeSettingsGranted,
+                    onOpenWriteSettings = {
+                        context.startActivity(
+                            android.content.Intent(
+                                android.provider.Settings.ACTION_MANAGE_WRITE_SETTINGS,
+                                android.net.Uri.parse("package:${context.packageName}"),
+                            ).addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK),
                         )
                     },
                     isShizukuGranted = shizukuGranted,

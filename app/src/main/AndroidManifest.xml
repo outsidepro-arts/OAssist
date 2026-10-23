@@ -24,6 +24,11 @@
          на уровне activity — без объявления в манифесте вызов не резолвится. normal, выдаётся при установке. -->
     <uses-permission android:name="com.android.alarm.permission.SET_ALARM" />
 
+    <!-- brightness_set: спецдоступ (appop WRITE_SETTINGS) для Settings.System.canWrite().
+         Без объявления приложение не появляется в системном списке «Изменение системных настроек»
+         и яркость не регулируется никогда. -->
+    <uses-permission android:name="android.permission.WRITE_SETTINGS" />
+
     <!-- device_state: чтение Wi-Fi (normal-разрешение, выдачи не требует) -->
     <uses-permission android:name="android.permission.ACCESS_WIFI_STATE" />
 
