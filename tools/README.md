@@ -22,6 +22,24 @@ Kotlin daemon, тестовая JVM). При жёстком таймауте too
 **Никогда не запускать `assemble*`/`lint*` одним синхронным tool-call’ом** —
 он молчит дольше пары минут, harness убивает процесс, а JVM-сироты остаются.
 
+## Релиз (подписанный APK)
+
+```powershell
+.\tools\gen-keystore.ps1                 # один раз: keystore/ + keystore.properties (в .gitignore)
+.\tools\run-build.ps1 clean-orphans
+.\tools\run-build.ps1 release             # detached :app:assembleRelease (подпись из keystore.properties)
+.\tools\run-build.ps1 status              # опрос до BUILD SUCCESSFUL
+.\tools\run-build.ps1 verify-release      # apksigner verify --print-certs
+```
+
+APK: `app\build\outputs\apk\release\app-release.apk`. Пароли и ключ — только в
+`keystore.properties`/`keystore/`, в git не попадают; без них Gradle собирает
+релиз **без подписи** (с warning). Перед релизом прогнать линт:
+`.\tools\run-build.ps1 start -Task ':app:lintDebug'`.
+
+**Ключ потерял — апдейты подписать нельзя** (подпись v2/v3 приложения должна
+совпадать): бэкапить `keystore/` и `keystore.properties` вне репозитория.
+
 ## Юнит-тесты (короткие задачи)
 
 ```powershell

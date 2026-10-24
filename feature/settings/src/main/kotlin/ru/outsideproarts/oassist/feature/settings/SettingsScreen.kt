@@ -1,5 +1,6 @@
 package ru.outsideproarts.oassist.feature.settings
 
+import android.content.Context
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -25,6 +26,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.Role
 import ru.outsideproarts.oassist.core.a11y.oassistDropdownClassName
@@ -58,6 +60,8 @@ fun SettingsScreen(
     modifier: Modifier = Modifier,
 ) {
     val title = stringResource(R.string.settings_title)
+    val context = LocalContext.current
+    val appVersion = remember(context) { appVersionName(context) }
     var languageExpanded by remember { mutableStateOf(false) }
     val languageOptions = listOf(
         AppLanguage.SYSTEM to stringResource(R.string.settings_language_system),
@@ -212,7 +216,7 @@ fun SettingsScreen(
                     style = MaterialTheme.typography.bodyLarge,
                 )
                 Text(
-                    text = stringResource(R.string.app_version),
+                    text = appVersion,
                     style = MaterialTheme.typography.bodyLarge,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
@@ -234,4 +238,12 @@ fun SettingsScreen(
             }
         }
     }
+}
+
+private fun appVersionName(context: Context): String {
+    val info = runCatching {
+        @Suppress("DEPRECATION")
+        context.packageManager.getPackageInfo(context.packageName, 0)
+    }.getOrNull()
+    return info?.versionName ?: "—"
 }

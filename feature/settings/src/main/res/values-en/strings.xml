@@ -42,7 +42,6 @@
     <string name="settings_about_version">Version</string>
     <string name="settings_about_license">License</string>
     <string name="settings_about_license_value">MIT</string>
-    <string name="app_version">0.1.0</string>
 
     <string name="state_selected">selected</string>
     <string name="state_unselected">not selected</string>

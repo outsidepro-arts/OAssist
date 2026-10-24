@@ -19,6 +19,8 @@ captures/
 .env
 .env.*
 secrets.properties
+keystore/
+keystore.properties
 
 # --- OS ---
 .DS_Store
