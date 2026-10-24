@@ -20,8 +20,17 @@ import ru.outsideproarts.oassist.core.provider.openai.ToolSchemaDto
  * Аудио-вход API не умеет: голосовой ход с аудио — fail-closed исключением
  * (UI туда не доводит: без флага AUDIO_IN уходит в STT-текст).
  * Неподдерживаемых ролей у [ChatRole] нет — ветка exhaustive.
+ *
+ * [thinkingEnabled] — extended thinking включён в запросе: assistant-сообщения
+ * с [ChatMessage.reasoning] получают первый блок `thinking` с подписью —
+ * без него API отклоняет tool-use-продолжения (обязательный replay thinking-блоков).
+ * Выключенный thinking + мысли в истории → блок НЕ добавляется (API запрещает
+ * thinking-блоки при выключенном thinking).
  */
-internal fun mapAnthropicMessages(messages: List<ChatMessage>): Pair<String?, List<AnthropicMessageDto>> {
+internal fun mapAnthropicMessages(
+    messages: List<ChatMessage>,
+    thinkingEnabled: Boolean = false,
+): Pair<String?, List<AnthropicMessageDto>> {
     messages.firstOrNull { it.audio != null }?.let {
         throw ProviderError.NotSupported("audio input")
     }
@@ -35,10 +44,24 @@ internal fun mapAnthropicMessages(messages: List<ChatMessage>): Pair<String?, Li
             ChatRole.USER -> userContentDto(msg)
             ChatRole.ASSISTANT -> {
                 val calls = msg.toolCalls.orEmpty()
-                if (calls.isEmpty()) {
+                val reasoning = msg.reasoning
+                val thinkingBlock = if (
+                    thinkingEnabled && reasoning != null &&
+                    !reasoning.text.isEmpty() && reasoning.signature != null
+                ) {
+                    buildJsonObject {
+                        put("type", "thinking")
+                        put("thinking", reasoning.text)
+                        put("signature", reasoning.signature)
+                    }
+                } else {
+                    null
+                }
+                if (calls.isEmpty() && thinkingBlock == null) {
                     AnthropicMessageDto("assistant", JsonPrimitive(msg.content))
                 } else {
                     val blocks = buildList {
+                        thinkingBlock?.let { add(it) }
                         if (msg.content.isNotEmpty()) {
                             add(buildJsonObject {
                                 put("type", "text")

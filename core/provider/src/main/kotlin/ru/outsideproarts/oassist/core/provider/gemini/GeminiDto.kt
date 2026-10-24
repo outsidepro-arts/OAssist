@@ -37,6 +37,8 @@ data class GeminiPartDto(
     @SerialName("functionCall") val functionCall: GeminiFunctionCallDto? = null,
     @SerialName("functionResponse") val functionResponse: GeminiFunctionResponseDto? = null,
     @SerialName("inlineData") val inlineData: GeminiBlobDto? = null,
+    /** Часть «мышлений» (thinking-режим Gemini): в текст ответа не идёт. */
+    val thought: Boolean = false,
 )
 
 /** Бинарный парт (аудио PTT): base64 + MIME. */

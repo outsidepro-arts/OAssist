@@ -95,13 +95,24 @@ class AnthropicClient internal constructor(
         modelId: String,
         messages: List<ChatMessage>,
         tools: List<ToolSchemaDto>,
+        reasoningEnabled: Boolean,
     ): Flow<ChatChunk> = flow {
-        val (system, mapped) = mapAnthropicMessages(messages)
+        val (system, mapped) = mapAnthropicMessages(messages, thinkingEnabled = reasoningEnabled)
+        // budget_tokens обязан быть < max_tokens: при включённом thinking
+        // поднимаем потолок, иначе API 400 ("max_tokens must exceed budget").
+        val thinking = if (reasoningEnabled) {
+            AnthropicThinkingDto(type = "enabled", budgetTokens = THINKING_BUDGET_TOKENS)
+        } else {
+            null
+        }
         val requestDto = AnthropicMessagesRequest(
             model = modelId,
+            maxTokens = if (thinking != null) THINKING_MAX_TOKENS else AnthropicMessagesRequest.DEFAULT_MAX_TOKENS,
             system = system,
             messages = mapped,
             tools = mapAnthropicTools(tools),
+            stream = true,
+            thinking = thinking,
         )
         http.sse(
             request = {
@@ -183,6 +194,12 @@ class AnthropicClient internal constructor(
                                 ?.let { emit(ChatChunk.Content(it)) }
                             "input_json_delta" -> deltaEvent.delta.partialJson
                                 ?.let { acc.inputJsonDelta(deltaEvent.index, it) }
+                            // «Мысли» модели: живой поток в UI + подпись для replay.
+                            "thinking_delta" -> deltaEvent.delta.thinking
+                                ?.takeIf { it.isNotEmpty() }
+                                ?.let { emit(ChatChunk.Reasoning(it)) }
+                            "signature_delta" -> deltaEvent.delta.signature
+                                ?.let { emit(ChatChunk.Reasoning(delta = "", signature = it)) }
                             else -> {}
                         }
                     }
@@ -238,6 +255,10 @@ class AnthropicClient internal constructor(
         private const val ERROR_MESSAGE_LIMIT = 200
         private const val PROBE_TEXT = "hi"
         private const val PROBE_MAX_TOKENS = 1
+
+        /** Бюджет extended thinking; с [THINKING_MAX_TOKENS] выполняется budget < max_tokens. */
+        private const val THINKING_BUDGET_TOKENS = 4096
+        private const val THINKING_MAX_TOKENS = 8192
 
         private fun probeTool() = AnthropicToolDto(
             name = "probe",

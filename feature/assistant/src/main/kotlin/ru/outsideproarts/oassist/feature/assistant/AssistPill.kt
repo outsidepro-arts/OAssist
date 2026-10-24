@@ -1,5 +1,6 @@
 package ru.outsideproarts.oassist.feature.assistant
 
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectVerticalDragGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
@@ -50,7 +51,6 @@ import ru.outsideproarts.oassist.core.a11y.oassistCustomAction
 import ru.outsideproarts.oassist.core.a11y.oassistHeading
 import ru.outsideproarts.oassist.core.a11y.oassistStateDescription
 import ru.outsideproarts.oassist.core.a11y.oassistTouchTarget
-import ru.outsideproarts.oassist.core.agent.AgentToolEvent
 import ru.outsideproarts.oassist.core.ui.OAssistDimens
 import ru.outsideproarts.oassist.core.ui.components.OAssistLiveStatus
 import ru.outsideproarts.oassist.core.ui.components.OAssistPanel
@@ -63,8 +63,7 @@ import ru.outsideproarts.oassist.core.ui.components.OAssistPanel
 @Composable
 fun AssistPill(
     answer: String,
-    thought: String,
-    tools: List<AgentToolEvent>,
+    work: List<ru.outsideproarts.oassist.core.model.WorkEvent>,
     usage: ru.outsideproarts.oassist.core.model.ProviderUsage? = null,
     usageTotals: kotlinx.coroutines.flow.StateFlow<ru.outsideproarts.oassist.core.model.UsageTotalsState>? = null,
     statusHint: String?,
@@ -241,10 +240,15 @@ fun AssistPill(
                 val totalsState by (usageTotals ?: emptyTotals).collectAsState()
                 OAssistPanel(title = stringResource(R.string.assistant_response), showTitle = true) {
                     // Статистика живёт внутри «Хода работы» (сворачиваемо), не отдельной строкой.
-                    if (thought.isNotBlank() || tools.isNotEmpty() || usage != null) {
-                        AssistWorkBlock(thought = thought, tools = tools, usage = usage, totals = totalsState)
+                    if (work.isNotEmpty() || usage != null) {
+                        AssistWorkBlock(
+                            work = work,
+                            usage = usage,
+                            totals = totalsState,
+                            isStreaming = isStreaming,
+                        )
                     }
-                    Text(
+                    ru.outsideproarts.oassist.core.ui.markdown.MarkdownText(
                         text = answer.ifEmpty { "…" },
                         style = MaterialTheme.typography.bodyLarge,
                         color = MaterialTheme.colorScheme.onSurface,
@@ -283,29 +287,38 @@ fun AssistPill(
 
 @Composable
 private fun AssistWorkBlock(
-    thought: String,
-    tools: List<AgentToolEvent>,
+    work: List<ru.outsideproarts.oassist.core.model.WorkEvent>,
     usage: ru.outsideproarts.oassist.core.model.ProviderUsage?,
     totals: ru.outsideproarts.oassist.core.model.UsageTotalsState,
+    isStreaming: Boolean,
 ) {
     val title = stringResource(R.string.assistant_work_title)
-    var expanded by remember { mutableStateOf(false) }
+    var expanded by remember { mutableStateOf(isStreaming) }
+    // Развёрнут, пока агент думает; по Finish сворачивается (ручной тогл сохраняется).
+    androidx.compose.runtime.LaunchedEffect(isStreaming) { expanded = isStreaming }
     val state = if (expanded) {
         stringResource(R.string.assistant_work_expanded)
     } else {
         stringResource(R.string.assistant_work_collapsed)
     }
-    val actionLabel = if (expanded) {
-        stringResource(R.string.assistant_action_collapse)
-    } else {
-        stringResource(R.string.assistant_action_expand)
-    }
     OAssistPanel(title = title) {
+        // Шапка — один сливной узел TalkBack (клик по Row схлопывает детей),
+        // без пустых обёрток: «Ход работы, Свёрнут, кнопка».
         Row(
             modifier = Modifier
                 .fillMaxWidth()
                 .oassistTouchTarget()
-                .oassistStateDescription(state),
+                .oassistHeading()
+                .oassistStateDescription(state)
+                .semantics {
+                    customActions = listOf(
+                        CustomAccessibilityAction("$title. $state") {
+                            expanded = !expanded
+                            true
+                        },
+                    )
+                }
+                .clickable { expanded = !expanded },
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.SpaceBetween,
         ) {
@@ -313,46 +326,48 @@ private fun AssistWorkBlock(
                 text = title,
                 style = MaterialTheme.typography.titleMedium,
                 color = MaterialTheme.colorScheme.onSurface,
-                modifier = Modifier
-                    .weight(1f)
-                    .oassistHeading(),
+                modifier = Modifier.weight(1f),
             )
-            IconButton(
-                onClick = { expanded = !expanded },
-                modifier = Modifier.oassistTouchTarget(),
-            ) {
-                Icon(
-                    imageVector = if (expanded) Icons.Default.ExpandLess else Icons.Default.ExpandMore,
-                    contentDescription = actionLabel,
-                )
-            }
+            Icon(
+                imageVector = if (expanded) Icons.Default.ExpandLess else Icons.Default.ExpandMore,
+                contentDescription = null,
+            )
         }
         if (expanded) {
-            ru.outsideproarts.oassist.core.ui.components.OAssistUsageLine(usage = usage)
-            ru.outsideproarts.oassist.core.ui.components.OAssistUsageTotalsLine(totals = totals)
-            if (thought.isNotBlank()) {
-                Text(
-                    text = thought.take(2000),
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-            }
-            tools.takeLast(20).forEach { tool ->
-                Text(
-                    text = tool.name + (tool.output?.take(500)?.let { ": $it" } ?: "…"),
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-                if (tool.images.isNotEmpty()) {
-                    val imageDesc = stringResource(R.string.assistant_image_attached)
-                    tool.images.forEach { img ->
-                        ru.outsideproarts.oassist.core.ui.components.OAssistImageThumbnail(
-                            base64 = img.imageBase64,
-                            contentDescription = imageDesc,
+            work.takeLast(40).forEach { event ->
+                when (event) {
+                    is ru.outsideproarts.oassist.core.model.WorkEvent.Thought -> {
+                        ru.outsideproarts.oassist.core.ui.markdown.MarkdownText(
+                            text = event.text.take(4000),
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
                         )
+                    }
+                    is ru.outsideproarts.oassist.core.model.WorkEvent.Tool -> {
+                        Text(
+                            text = event.name + (event.output?.take(500)?.let { ": $it" } ?: "…"),
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = if (event.isError) {
+                                MaterialTheme.colorScheme.error
+                            } else {
+                                MaterialTheme.colorScheme.onSurfaceVariant
+                            },
+                        )
+                        if (event.images.isNotEmpty()) {
+                            val imageDesc = stringResource(R.string.assistant_image_attached)
+                            event.images.forEach { img ->
+                                ru.outsideproarts.oassist.core.ui.components.OAssistImageThumbnail(
+                                    base64 = img.imageBase64,
+                                    contentDescription = imageDesc,
+                                )
+                            }
+                        }
                     }
                 }
             }
+            // Статистика — последней строкой полотна.
+            ru.outsideproarts.oassist.core.ui.components.OAssistUsageLine(usage = usage)
+            ru.outsideproarts.oassist.core.ui.components.OAssistUsageTotalsLine(totals = totals)
         }
     }
 }

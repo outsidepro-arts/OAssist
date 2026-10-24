@@ -70,6 +70,7 @@ class ChatTitlerTest {
                 modelId: String,
                 messages: List<ChatMessage>,
                 tools: List<ToolSchemaDto>,
+                reasoningEnabled: Boolean,
             ): Flow<ChatChunk> = flowOf(ChatChunk.Content(response), ChatChunk.Finish("stop"))
         }
         return object : AgentFactory {

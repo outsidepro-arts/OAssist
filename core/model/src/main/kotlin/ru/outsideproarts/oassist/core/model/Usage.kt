@@ -80,6 +80,14 @@ private fun sumNullable(a: Double?, b: Double?): Double? = when {
     else -> a + b
 }
 
+/**
+ * Сумма статистики всех ходов диалога (для окна «Информация о чате»):
+ * склейка через [mergeUsage] — input/output/cached складываются, cost —
+ * только известные. Пусто/нет usage — null.
+ */
+fun aggregateUsage(turns: List<StoredTurn>): ProviderUsage? =
+    turns.mapNotNull { it.usage }.fold(null, ::mergeUsage)
+
 /** Срез агрегатной статистики за жизнь процесса (in-memory, без персиста). */
 data class UsageTotalsState(
     val inputTokens: Long = 0,

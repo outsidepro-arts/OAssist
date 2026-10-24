@@ -107,6 +107,8 @@ internal fun mapGeminiTools(tools: List<ToolSchemaDto>): List<GeminiToolsDto>? {
  * отдельными вызовами с синтетическими id (`call_<n>`).
  * Gemini шлёт каждый `functionCall` целым объектом в своём событии
  * (кускования `args` по событиям, как у OpenAI/Anthropic, здесь нет).
+ * Части с `thought: true` — «мысли» модели: уходят в [ChatChunk.Reasoning],
+ * иначе они утекали бы в текст ответа (мышлений-гейта на уровне API нет).
  */
 internal fun extractGeminiChunk(
     chunk: GeminiStreamChunkDto,
@@ -117,7 +119,9 @@ internal fun extractGeminiChunk(
     var finish: String? = null
     val candidate = chunk.candidates.firstOrNull()
     candidate?.content?.parts.orEmpty().forEach { part ->
-        part.text?.takeIf { it.isNotEmpty() }?.let { out += ChatChunk.Content(it) }
+        part.text?.takeIf { it.isNotEmpty() }?.let { text ->
+            out += if (part.thought) ChatChunk.Reasoning(text) else ChatChunk.Content(text)
+        }
         part.functionCall?.let { call ->
             out += ChatChunk.ToolCall(
                 id = "call_${counter++}",

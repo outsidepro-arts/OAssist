@@ -22,8 +22,10 @@ class StoredTurnTest {
             userText = "Какой статус?",
             userAudio = AudioPart(wavBase64 = "AAAA", durationSec = 2),
             userImages = listOf(ImagePart(imageBase64 = "BBBB")),
-            thought = "Смотрю…",
-            tools = listOf(StoredTool(name = "device_state", output = "torch=off")),
+            work = listOf(
+                WorkEvent.Thought("Смотрю…"),
+                WorkEvent.Tool(name = "device_state", output = "torch=off"),
+            ),
             answer = "Фонарик выключен",
             usage = ProviderUsage.of(inputTokens = 10, outputTokens = 5),
             turn = turn,

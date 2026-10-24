@@ -99,6 +99,7 @@ class OpenAiCompatibleClient internal constructor(
         modelId: String,
         messages: List<ChatMessage>,
         tools: List<ToolSchemaDto>,
+        reasoningEnabled: Boolean,
     ): Flow<ChatChunk> = flow {
         val chatUrl = URLBuilder(endpoint.baseUrl).apply {
             appendPathSegments("chat", "completions")
@@ -171,6 +172,11 @@ class OpenAiCompatibleClient internal constructor(
                     return@collect
                 }
                 val delta = chunk.choices.firstOrNull()?.delta
+                // Ход «мышлений» (DeepSeek `reasoning_content` / `reasoning` у прокси) —
+                // отдельным потоком, не в текст ответа; в том же дельте с контентом
+                // reasoning идёт первым, как у апстрима.
+                val reasoningText = delta?.reasoningContent ?: delta?.reasoning
+                if (!reasoningText.isNullOrEmpty()) emit(ChatChunk.Reasoning(reasoningText))
                 delta?.content?.let { content ->
                     if (content.isNotEmpty()) emit(ChatChunk.Content(content))
                 }

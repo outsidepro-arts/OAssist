@@ -102,6 +102,7 @@ class GeminiClient internal constructor(
         modelId: String,
         messages: List<ChatMessage>,
         tools: List<ToolSchemaDto>,
+        reasoningEnabled: Boolean,
     ): Flow<ChatChunk> = flow {
         val (system, contents) = mapGeminiContents(messages)
         val requestDto = GeminiGenerateRequest(

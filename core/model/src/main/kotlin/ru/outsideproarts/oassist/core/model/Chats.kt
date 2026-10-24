@@ -1,6 +1,7 @@
 package ru.outsideproarts.oassist.core.model
 
 import kotlinx.serialization.Serializable
+import kotlinx.serialization.SerialName
 
 /** Принадлежность чата: обычный или закреплённый «последняя сессия ассистента». */
 @Serializable
@@ -21,26 +22,40 @@ data class ChatSummary(
     val updatedAt: Long,
 )
 
-/** Результат вызова инструмента в полотне «Ход работы» сохранённого хода. */
-data class StoredTool(
-    val name: String,
-    val output: String? = null,
-    val isError: Boolean = false,
-    val images: List<ImagePart> = emptyList(),
-)
+/** Запись полотна «Ход работы» одного хода: блоки мыслей и вызовы тулов
+ *  В ХРОНОЛОГИИ появления (DeepSeek-стиль: мысли → тул → мысли → …). */
+@Serializable
+sealed interface WorkEvent {
+    /** Блок «мышлений» модели (reasoning) и/или комментария агента. */
+    @Serializable
+    @SerialName("thought")
+    data class Thought(val text: String) : WorkEvent
+
+    /** Вызов инструмента; [output] null — вызов ещё без результата (стрим идёт). */
+    @Serializable
+    @SerialName("tool")
+    data class Tool(
+        val name: String,
+        val output: String? = null,
+        val isError: Boolean = false,
+        val images: List<ImagePart> = emptyList(),
+    ) : WorkEvent
+}
 
 /**
  * Полностью сохранённый ход диалога: проекция для ленты UI + точный транскрипт
  * хода для модели. [turn] — сообщения ассистента/тулов хода (как отдаёт
  * `AgentLoop.stream(onTurnMessages)`): assistant с `toolCalls` → TOOL с `toolCallId`.
+ *
+ * [work] — хронологическое полотно (мысли + тулы в порядке появления).
+ * Legacy-ходы с `thought`+`tools` мигрируют в него при декодировании (TurnCodec).
  */
 data class StoredTurn(
     val userText: String = "",
     val userAudio: AudioPart? = null,
     val userImages: List<ImagePart> = emptyList(),
-    /** Размышления/комментарии к вызовам (в свёрнутое полотно). */
-    val thought: String = "",
-    val tools: List<StoredTool> = emptyList(),
+    /** Полотно «Ход работы» в хронологии (мыслевые блоки чередуются с тулами). */
+    val work: List<WorkEvent> = emptyList(),
     /** Основной ответ ассистента. */
     val answer: String = "",
     val usage: ProviderUsage? = null,

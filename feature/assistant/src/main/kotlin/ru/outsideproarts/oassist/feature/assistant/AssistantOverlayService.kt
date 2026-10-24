@@ -17,7 +17,6 @@ import android.view.WindowManager
 import android.widget.FrameLayout
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.platform.ComposeView
@@ -39,7 +38,6 @@ import kotlinx.coroutines.withContext
 import ru.outsideproarts.oassist.core.agent.AgentFactory
 import ru.outsideproarts.oassist.core.agent.AgentLoop
 import ru.outsideproarts.oassist.core.agent.AgentSession
-import ru.outsideproarts.oassist.core.agent.AgentToolEvent
 import ru.outsideproarts.oassist.core.agent.AssistSessionStore
 import ru.outsideproarts.oassist.core.agent.AssistVoiceEffect
 import ru.outsideproarts.oassist.core.agent.AssistVoiceFlow
@@ -96,9 +94,8 @@ class AssistantOverlayService : LifecycleService(), SavedStateRegistryOwner {
     private var mediaRouter: MediaButtonRouter? = null
 
     private var answer by mutableStateOf("")
-    private var thought by mutableStateOf("")
-private val toolEvents = mutableStateListOf<AgentToolEvent>()
-private var turnUsage by mutableStateOf<ru.outsideproarts.oassist.core.model.ProviderUsage?>(null)
+    private var workEvents by mutableStateOf<List<ru.outsideproarts.oassist.core.model.WorkEvent>>(emptyList())
+    private var turnUsage by mutableStateOf<ru.outsideproarts.oassist.core.model.ProviderUsage?>(null)
 
 /** Ходы текущей сессии для закреплённого диалога «Ассистент» (перезапись целиком). */
 private val sessionTurns = mutableListOf<ru.outsideproarts.oassist.core.model.StoredTurn>()
@@ -544,8 +541,7 @@ private var turnTranscript: List<ChatMessage> = emptyList()
         inputFocused = false
         refreshOverlayFocusable()
         answer = ""
-        thought = ""
-        toolEvents.clear()
+        workEvents = emptyList()
         turnUsage = null
         turnTranscript = emptyList()
         hintText = null
@@ -587,8 +583,7 @@ private var turnTranscript: List<ChatMessage> = emptyList()
                 val screenImage = session.screenImage
                 session.screenImage = null
                 val agent = factory.agentFor(profile, AssistMode.ASSISTANT)
-                val thoughtSb = StringBuilder()
-                val answerSb = StringBuilder()
+                val timeline = ru.outsideproarts.oassist.core.agent.WorkTimelineBuilder()
                 val agentSession = AgentSession(
                     chunks = agent.stream(
                         modelId = modelId,
@@ -611,36 +606,33 @@ private var turnTranscript: List<ChatMessage> = emptyList()
                 var sawAbrupt = false
                 val error = agentSession.chunks.collectSafe { chunk ->
                     when (chunk) {
+                        is ChatChunk.Reasoning -> {
+                            // Мысли модели: live в полотно, без озвучки (дельты частые).
+                            if (timeline.onChunk(chunk)) workEvents = timeline.work
+                        }
                         is ChatChunk.Content -> {
                             if (chunk.isToolComment) {
-                                thoughtSb.append(chunk.delta)
-                                thought = thoughtSb.toString()
-                                thoughtSpeaker.onText(thoughtSb.toString(), true)
+                                timeline.onChunk(chunk)
+                                workEvents = timeline.work
+                                thoughtSpeaker.onText(timeline.commentText, true)
                                 sounds?.playIfEnabled(AgentSound.THINKING, soundEnabled)
                             } else {
-                                answerSb.append(chunk.delta)
-                                answer = answerSb.toString()
-                                answerSpeaker.onText(answerSb.toString(), false)
+                                timeline.onChunk(chunk)
+                                answer = timeline.answerText
+                                answerSpeaker.onText(timeline.answerText, false)
                             }
                             refreshSessionNotification()
                         }
                         is ChatChunk.ToolCall -> {
                             if (chunk.name == BYE_TOOL_NAME) pendingBye = true
-                            toolEvents.add(AgentToolEvent(name = chunk.name))
+                            timeline.onChunk(chunk)
+                            workEvents = timeline.work
                             sounds?.playIfEnabled(AgentSound.TOOL_CALL, soundEnabled)
                             refreshSessionNotification()
                         }
                         is ChatChunk.ToolResult -> {
-                            val pending = toolEvents.indexOfLast {
-                                it.name == chunk.name && it.output == null
-                            }
-                            val event = AgentToolEvent(
-                                name = chunk.name,
-                                output = chunk.output,
-                                isError = chunk.isError,
-                            )
-                            if (pending >= 0) toolEvents[pending] = event
-                            else toolEvents.add(event)
+                            timeline.onChunk(chunk)
+                            workEvents = timeline.work
                         }
                         is ChatChunk.ApprovalNeeded -> {
                             sounds?.playIfEnabled(AgentSound.PERMISSION_REQUEST, soundEnabled)
@@ -672,9 +664,12 @@ private var turnTranscript: List<ChatMessage> = emptyList()
                             }
                         }
                         is ChatChunk.Finish -> {
-                            thoughtSpeaker.onFinish(thoughtSb.toString())
-                            answerSpeaker.onFinish(answerSb.toString())
-                            turnUsage = chunk.usage
+                            timeline.onChunk(chunk)
+                            thoughtSpeaker.onFinish(timeline.commentText)
+                            answerSpeaker.onFinish(timeline.answerText)
+                            turnUsage = timeline.usage
+                            answer = timeline.answerText
+                            workEvents = timeline.work
                             sounds?.playIfEnabled(AgentSound.ANSWER_READY, soundEnabled)
                             // Поток закрылся без терминатора: пометку покажем после
                             // сбора (`error` внутри своей лямбды-инициализатора
@@ -687,7 +682,7 @@ private var turnTranscript: List<ChatMessage> = emptyList()
                 if (error != null) {
                     val net = ru.outsideproarts.oassist.core.net.NetworkHandle.get()
                     if (net != null && !net.isOnline.value && error.isEarlyRetryable() &&
-                        answerSb.isEmpty() && thoughtSb.isEmpty() && toolEvents.isEmpty()
+                        timeline.isEmpty
                     ) {
                         // Упали до первого чанка без сети: ждём фронт online,
                         // тост ошибки не показываем.
@@ -727,18 +722,10 @@ private var turnTranscript: List<ChatMessage> = emptyList()
      * случайно открытый оверлей не затирает сохранённую историю.
      */
     private fun persistAssistantTurn(userText: String) {
-        if (thought.isBlank() && answer.isBlank() && toolEvents.isEmpty()) return
+        if (answer.isBlank() && workEvents.isEmpty()) return
         val stored = ru.outsideproarts.oassist.core.model.StoredTurn(
             userText = userText,
-            thought = thought,
-            tools = toolEvents.map {
-                ru.outsideproarts.oassist.core.model.StoredTool(
-                    name = it.name,
-                    output = it.output,
-                    isError = it.isError,
-                    images = it.images,
-                )
-            },
+            work = workEvents,
             answer = answer,
             usage = turnUsage,
             turn = turnTranscript.ifEmpty {
@@ -798,8 +785,7 @@ private var turnTranscript: List<ChatMessage> = emptyList()
                     }
                         AssistPill(
                             answer = answer,
-                            thought = thought,
-                            tools = toolEvents.toList(),
+                            work = workEvents,
                             usage = turnUsage,
                             usageTotals = runCatching { AgentFactory.get().usageTotals() }.getOrNull(),
                             statusHint = hintText,

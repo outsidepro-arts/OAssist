@@ -22,6 +22,16 @@ data class ResponsesRequestDto(
     /** Не сохранять ответы на стороне OpenAI (приватность); совместимые шлюзы поле игнорируют. */
     val store: Boolean? = null,
     @SerialName("max_output_tokens") val maxOutputTokens: Int? = null,
+    /** Сводка мыслей в стриме (события `response.reasoning_summary_text.delta`). */
+    val reasoning: ResponsesReasoningDto? = null,
+    /** Контекст повторного использования: encrypted reasoning-item'ы для stateless-продолжений. */
+    val include: List<String>? = null,
+)
+
+/** Без дефолта у [summary]: encodeDefaults=false не пишет равное-дефолту значение. */
+@Serializable
+data class ResponsesReasoningDto(
+    val summary: String,
 )
 
 /** Схема инструмента Responses: плоская (не `function: {...}` как в chat/completions). */

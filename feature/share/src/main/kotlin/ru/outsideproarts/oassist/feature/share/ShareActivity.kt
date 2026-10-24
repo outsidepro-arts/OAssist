@@ -50,7 +50,6 @@ import ru.outsideproarts.oassist.core.a11y.oassistHeading
 import ru.outsideproarts.oassist.core.a11y.oassistTouchTarget
 import ru.outsideproarts.oassist.core.agent.AgentFactory
 import ru.outsideproarts.oassist.core.agent.AgentSession
-import ru.outsideproarts.oassist.core.agent.AgentToolEvent
 import ru.outsideproarts.oassist.core.agent.ChatTitler
 import ru.outsideproarts.oassist.core.data.chat.ChatHandle
 import ru.outsideproarts.oassist.core.model.ApprovalDecision
@@ -59,7 +58,6 @@ import ru.outsideproarts.oassist.core.model.ChatMessage
 import ru.outsideproarts.oassist.core.model.ChatRole
 import ru.outsideproarts.oassist.core.model.ChatSummary
 import ru.outsideproarts.oassist.core.model.ImagePart
-import ru.outsideproarts.oassist.core.model.StoredTool
 import ru.outsideproarts.oassist.core.model.StoredTurn
 import ru.outsideproarts.oassist.core.provider.ChatChunk
 import ru.outsideproarts.oassist.core.provider.ImageCodec
@@ -159,9 +157,8 @@ private fun ShareFlow(payload: SharePayload) {
 
     var question by remember { mutableStateOf(TextFieldValue("")) }
     var activeUserMsg by remember { mutableStateOf<String?>(null) }
-    var thought by remember { mutableStateOf("") }
+    var workEvents by remember { mutableStateOf<List<ru.outsideproarts.oassist.core.model.WorkEvent>>(emptyList()) }
     var response by remember { mutableStateOf("") }
-    val shareTools = remember { mutableStateListOf<AgentToolEvent>() }
     var turnUsage by remember { mutableStateOf<ru.outsideproarts.oassist.core.model.ProviderUsage?>(null) }
     var isStreaming by remember { mutableStateOf(false) }
     var pendingShareRetry by remember { mutableStateOf<String?>(null) }
@@ -244,29 +241,28 @@ private fun ShareFlow(payload: SharePayload) {
         val userMsg = String.format(promptQuestionTemplate, contentDesc, query)
         activeUserMsg = userMsg
         val history = turns.flatMap { it.modelMessages() }
-        val thoughtSb = StringBuilder()
-        val sb = StringBuilder()
-        thought = ""
+        val timeline = ru.outsideproarts.oassist.core.agent.WorkTimelineBuilder()
+        workEvents = emptyList()
         response = ""
-        shareTools.clear()
         turnUsage = null
         var turnTranscript: List<ChatMessage> = emptyList()
         var turnRecorded = false
         fun recordTurn() {
             if (turnRecorded) return
             turnRecorded = true
-            if (thoughtSb.isEmpty() && sb.isEmpty() && shareTools.isEmpty()) return
+            if (timeline.isEmpty) return
             val stored = StoredTurn(
                 userText = userMsg,
                 userImages = images,
-                thought = thoughtSb.toString(),
-                tools = shareTools.toList().map {
-                    StoredTool(name = it.name, output = it.output, isError = it.isError, images = it.images)
-                },
-                answer = sb.toString(),
-                usage = turnUsage,
+                work = timeline.work,
+                answer = timeline.answerText,
+                usage = timeline.usage,
                 turn = turnTranscript.ifEmpty {
-                    if (sb.isNotBlank()) listOf(ChatMessage(ChatRole.ASSISTANT, sb.toString())) else emptyList()
+                    if (timeline.answerText.isNotBlank()) {
+                        listOf(ChatMessage(ChatRole.ASSISTANT, timeline.answerText))
+                    } else {
+                        emptyList()
+                    }
                 },
             )
             turns.add(stored)
@@ -329,33 +325,30 @@ private fun ShareFlow(payload: SharePayload) {
             val error = try {
                 session.chunks.collectSafe { chunk ->
                     when (chunk) {
+                        is ChatChunk.Reasoning -> {
+                            // Мысли модели: в полотно, без озвучки (дельты частые).
+                            if (timeline.onChunk(chunk)) workEvents = timeline.work
+                        }
                         is ChatChunk.Content -> {
                             if (chunk.isToolComment) {
-                                thoughtSb.append(chunk.delta)
-                                thought = thoughtSb.toString()
-                                thoughtSpeaker.onText(thoughtSb.toString(), true)
+                                timeline.onChunk(chunk)
+                                workEvents = timeline.work
+                                thoughtSpeaker.onText(timeline.commentText, true)
                                 sounds?.playIfEnabled(AgentSound.THINKING, soundsOn)
                             } else {
-                                sb.append(chunk.delta)
-                                response = sb.toString()
-                                answerSpeaker.onText(sb.toString(), false)
+                                timeline.onChunk(chunk)
+                                response = timeline.answerText
+                                answerSpeaker.onText(timeline.answerText, false)
                             }
                         }
                         is ChatChunk.ToolCall -> {
-                            shareTools.add(AgentToolEvent(name = chunk.name))
+                            timeline.onChunk(chunk)
+                            workEvents = timeline.work
                             sounds?.playIfEnabled(AgentSound.TOOL_CALL, soundsOn)
                         }
                         is ChatChunk.ToolResult -> {
-                            val pending = shareTools.indexOfLast {
-                                it.name == chunk.name && it.output == null
-                            }
-                            val event = AgentToolEvent(
-                                name = chunk.name,
-                                output = chunk.output,
-                                isError = chunk.isError,
-                            )
-                            if (pending >= 0) shareTools[pending] = event
-                            else shareTools.add(event)
+                            timeline.onChunk(chunk)
+                            workEvents = timeline.work
                         }
                         // В Share нет диалога подтверждений: опасные действия отклоняем сразу.
                         is ChatChunk.ApprovalNeeded -> {
@@ -363,9 +356,12 @@ private fun ShareFlow(payload: SharePayload) {
                             session.agent.resolveApproval(chunk.request.callId, ApprovalDecision.DENY)
                         }
                         is ChatChunk.Finish -> {
-                            thoughtSpeaker.onFinish(thoughtSb.toString())
-                            answerSpeaker.onFinish(sb.toString())
-                            turnUsage = chunk.usage
+                            timeline.onChunk(chunk)
+                            thoughtSpeaker.onFinish(timeline.commentText)
+                            answerSpeaker.onFinish(timeline.answerText)
+                            turnUsage = timeline.usage
+                            workEvents = timeline.work
+                            response = timeline.answerText
                             sounds?.playIfEnabled(AgentSound.ANSWER_READY, soundsOn)
                             recordTurn()
                             if (chunk.abrupt) {
@@ -388,7 +384,7 @@ private fun ShareFlow(payload: SharePayload) {
             if (error != null) {
                 val net = ru.outsideproarts.oassist.core.net.NetworkHandle.get()
                 if (net != null && !net.isOnline.value && error.isEarlyRetryable() &&
-                    thoughtSb.isEmpty() && sb.isEmpty() && shareTools.isEmpty()
+                    timeline.isEmpty
                 ) {
                     // Упали до первого чанка без сети: ждём фронт online.
                     pendingShareRetry = query
@@ -486,9 +482,8 @@ private fun ShareFlow(payload: SharePayload) {
             isSaved = chatId != null,
             turns = turns,
             activeUserMsg = activeUserMsg,
-            thought = thought,
+            workEvents = workEvents,
             response = response,
-            tools = shareTools.toList(),
             usage = turnUsage,
             isStreaming = isStreaming,
             question = question,
@@ -559,7 +554,17 @@ private fun ShareFlow(payload: SharePayload) {
             onConfirm = {
                 deleteAsk = false
                 val id = chatId
+                // Удалённый разговор не должен остаться открытым: состояние
+                // чистится до «Нового чата», панель вложенной части остаётся.
                 chatId = null
+                chatTitle = ""
+                titleLocked = false
+                turns.clear()
+                activeUserMsg = null
+                workEvents = emptyList()
+                response = ""
+                turnUsage = null
+                pendingShareRetry = null
                 if (id != null) {
                     val repo = ChatHandle.get()
                     if (repo != null) {
@@ -641,9 +646,8 @@ private fun ShareConversation(
     isSaved: Boolean,
     turns: List<StoredTurn>,
     activeUserMsg: String?,
-    thought: String,
+    workEvents: List<ru.outsideproarts.oassist.core.model.WorkEvent>,
     response: String,
-    tools: List<AgentToolEvent>,
     usage: ru.outsideproarts.oassist.core.model.ProviderUsage?,
     isStreaming: Boolean,
     question: TextFieldValue,
@@ -719,8 +723,7 @@ private fun ShareConversation(
                 ChatMessageBubble(
                     isUser = false,
                     answer = turn.answer,
-                    thought = turn.thought,
-                    tools = turn.tools,
+                    work = turn.work,
                     usage = turn.usage,
                     onSpeak = speakTurn,
                     speakLabel = speakLabel,
@@ -743,11 +746,9 @@ private fun ShareConversation(
                     ChatMessageBubble(
                         isUser = false,
                         answer = response,
-                        thought = thought,
-                        tools = tools.map {
-                            StoredTool(it.name, it.output, it.isError, it.images)
-                        },
+                        work = workEvents,
                         usage = usage,
+                        isStreaming = isStreaming,
                         onSpeak = speakTurn,
                         speakLabel = speakLabel,
                     )

@@ -230,18 +230,22 @@ private fun OAssistApp(
                             graph.privilegeExecutor(),
                             graph.searchActions,
                         )
-                        val visionEnabled = config?.providerId
+                        val modelCapabilities = config?.providerId
                             ?.let { graph.providers.observeModelCatalog(it).first()?.models }
                             .orEmpty()
                             .find { it.id == modelId }
                             ?.capabilities
+                        val visionEnabled = modelCapabilities
                             ?.contains(ru.outsideproarts.oassist.core.model.ModelCapability.VISION) == true
+                        val reasoningEnabled = modelCapabilities
+                            ?.contains(ru.outsideproarts.oassist.core.model.ModelCapability.REASONING) == true
                         val agent = ru.outsideproarts.oassist.core.agent.AgentLoop(
                             client,
                             toolRegistry,
                             approvalPolicy = graph.approvalPolicy,
                             events = graph.narratorEvents,
                             visionEnabled = visionEnabled,
+                            reasoningEnabled = reasoningEnabled,
                             sessionScope = mode.name,
                             permissionRequester = graph.permissionRequester,
                             screenLocked = { graph.keyguardLockState.isLocked() },
@@ -264,8 +268,6 @@ private fun OAssistApp(
                     soundEnabled = chatConfig?.effectiveSoundEnabled() ?: true,
                     stt = chatConfig?.effectiveStt() ?: ru.outsideproarts.oassist.core.model.SttConfig.DEFAULT,
                     audioIn = chatAudioIn,
-                    timeline = graph.narrator.timeline,
-                    usageTotals = graph.usageTotals.state,
                 )
             }
             composable("assistant_access") {

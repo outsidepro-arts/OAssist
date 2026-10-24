@@ -26,6 +26,7 @@ class AgentLoopAudioTest {
             modelId: String,
             messages: List<ChatMessage>,
             tools: List<ToolSchemaDto>,
+            reasoningEnabled: Boolean,
         ): Flow<ChatChunk> {
             seen.add(messages)
             return flowOf(ChatChunk.Content("понял"), ChatChunk.Finish("stop"))

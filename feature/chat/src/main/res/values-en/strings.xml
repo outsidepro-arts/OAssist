@@ -14,16 +14,16 @@
     <string name="chat_hold_hint">Hold the button to talk</string>
     <string name="chat_voice_short">Too short — hold longer</string>
     <string name="chat_listening">Listening…</string>
-    <string name="chat_timeline_title">Progress</string>
-    <string name="chat_timeline_empty">Nothing yet — the agent has done nothing so far.</string>
-    <string name="chat_timeline_expanded">Expanded</string>
-    <string name="chat_timeline_collapsed">Collapsed</string>
-    <string name="chat_action_expand">Expand</string>
-    <string name="chat_action_collapse">Collapse</string>
-    <string name="chat_timeline_tool_call">Running: %1$s</string>
-    <string name="chat_timeline_tool_result">Done: %1$s</string>
-    <string name="chat_work_title">Progress</string>
     <string name="chat_open_list">Chat list</string>
     <string name="chat_save">Save chat</string>
     <string name="chat_delete_current">Delete chat</string>
+    <string name="chat_info_title">Chat info</string>
+    <string name="chat_info_back">Back</string>
+    <string name="chat_info_name_label">Chat name</string>
+    <string name="chat_info_name_save">Save name</string>
+    <string name="chat_info_stats">Statistics</string>
+    <string name="chat_info_stats_empty">No statistics collected yet</string>
+    <string name="chat_info_tools">Tool call history</string>
+    <string name="chat_info_tools_empty">No tools were used</string>
+    <string name="chat_info_turn">Turn %1$d</string>
 </resources>

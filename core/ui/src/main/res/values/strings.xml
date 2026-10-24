@@ -20,6 +20,13 @@
     <string name="usage_cost">Стоимость: $%1$s</string>
     <string name="usage_totals">Всего: %1$s токенов · ходов: %2$d</string>
     <string name="usage_totals_cost">Всего: %1$s токенов · $%2$s · ходов: %3$d</string>
+    <string name="usage_input">Входные токены: %1$s</string>
+    <string name="usage_output">Выходные токены: %1$s</string>
+    <string name="usage_cached">Кэш-токены: %1$s</string>
+    <string name="usage_turns">Ходов: %1$d</string>
+    <string name="usage_line_in">Вход: %1$s</string>
+    <string name="usage_line_out">Выход: %1$s</string>
+    <string name="usage_line_cache">Кэш: %1$s</string>
 
     <string name="group_communication_write">Связь — запись</string>
     <string name="group_phone_data_read">Данные телефона — чтение</string>
@@ -64,8 +71,6 @@
     <string name="msg_work_title">Ход работы</string>
     <string name="msg_expanded">Развёрнут</string>
     <string name="msg_collapsed">Свёрнут</string>
-    <string name="msg_collapse">Свернуть</string>
-    <string name="msg_expand">Развернуть</string>
     <string name="msg_tool_call">Выполняю: %1$s</string>
     <string name="msg_tool_result">Готово: %1$s</string>
     <string name="msg_image_attached">Изображение</string>

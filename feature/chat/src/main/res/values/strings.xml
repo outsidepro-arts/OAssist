@@ -14,16 +14,16 @@
     <string name="chat_hold_hint">Удерживайте кнопку, чтобы говорить</string>
     <string name="chat_voice_short">Слишком коротко — удерживайте дольше</string>
     <string name="chat_listening">Слушаю…</string>
-    <string name="chat_timeline_title">Ход работы</string>
-    <string name="chat_timeline_empty">Пока тихо — агент ещё ничего не делал.</string>
-    <string name="chat_timeline_expanded">Развёрнут</string>
-    <string name="chat_timeline_collapsed">Свёрнут</string>
-    <string name="chat_action_expand">Развернуть</string>
-    <string name="chat_action_collapse">Свернуть</string>
-    <string name="chat_timeline_tool_call">Выполняю: %1$s</string>
-    <string name="chat_timeline_tool_result">Готово: %1$s</string>
-    <string name="chat_work_title">Ход работы</string>
     <string name="chat_open_list">Список чатов</string>
     <string name="chat_save">Сохранить чат</string>
     <string name="chat_delete_current">Удалить чат</string>
+    <string name="chat_info_title">Информация о чате</string>
+    <string name="chat_info_back">Назад</string>
+    <string name="chat_info_name_label">Название чата</string>
+    <string name="chat_info_name_save">Сохранить название</string>
+    <string name="chat_info_stats">Статистика</string>
+    <string name="chat_info_stats_empty">Статистика ещё не накоплена</string>
+    <string name="chat_info_tools">История вызовов инструментов</string>
+    <string name="chat_info_tools_empty">Инструменты не вызывались</string>
+    <string name="chat_info_turn">Ход %1$d</string>
 </resources>

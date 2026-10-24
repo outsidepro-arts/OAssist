@@ -52,6 +52,8 @@ class AgentMessageAssembler {
             }
             is ChatChunk.ApprovalNeeded,
             is ChatChunk.Finish,
+            // Мысли — отдельный поток (WorkTimelineBuilder в UI-поверхностях).
+            is ChatChunk.Reasoning,
             -> Unit
         }
     }

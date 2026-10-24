@@ -21,6 +21,7 @@ class AgentLoopTest {
             modelId: String,
             messages: List<ChatMessage>,
             tools: List<ToolSchemaDto>,
+            reasoningEnabled: Boolean,
         ): Flow<ChatChunk> {
             return flowOf(
                 ChatChunk.Content(response),
@@ -65,6 +66,7 @@ class AgentLoopTest {
                 modelId: String,
                 messages: List<ChatMessage>,
                 tools: List<ToolSchemaDto>,
+                reasoningEnabled: Boolean,
             ): Flow<ChatChunk> {
                 capturedMessages = messages
                 return flowOf(ChatChunk.Content("ok"))

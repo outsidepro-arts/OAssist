@@ -311,16 +311,20 @@ class AppGraph private constructor(context: Context) {
                 resolveMcpTools(),
             )
             val modeModelId = data.providers.modeConfig(mode).modelId
-            val visionEnabled = data.providers.observeModelCatalog(profile.id).first()
+            val modelCapabilities = data.providers.observeModelCatalog(profile.id).first()
                 ?.models?.find { it.id == modeModelId }
                 ?.capabilities
+            val visionEnabled = modelCapabilities
                 ?.contains(ru.outsideproarts.oassist.core.model.ModelCapability.VISION) == true
+            val reasoningEnabled = modelCapabilities
+                ?.contains(ru.outsideproarts.oassist.core.model.ModelCapability.REASONING) == true
             return ru.outsideproarts.oassist.core.agent.AgentLoop(
                 client,
                 tools,
                 approvalPolicy = approvalPolicy,
                 events = narratorEvents,
                 visionEnabled = visionEnabled,
+                reasoningEnabled = reasoningEnabled,
                 maxToolRounds = prefs.maxToolRounds,
                 sessionScope = mode.name,
                 permissionRequester = permissionRequester,

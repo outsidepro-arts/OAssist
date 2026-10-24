@@ -20,6 +20,13 @@
     <string name="usage_cost">Cost: $%1$s</string>
     <string name="usage_totals">Total: %1$s tokens · turns: %2$d</string>
     <string name="usage_totals_cost">Total: %1$s tokens · $%2$s · turns: %3$d</string>
+    <string name="usage_input">Input tokens: %1$s</string>
+    <string name="usage_output">Output tokens: %1$s</string>
+    <string name="usage_cached">Cached tokens: %1$s</string>
+    <string name="usage_turns">Turns: %1$d</string>
+    <string name="usage_line_in">Input: %1$s</string>
+    <string name="usage_line_out">Output: %1$s</string>
+    <string name="usage_line_cache">Cached: %1$s</string>
 
     <string name="group_communication_write">Communication — write</string>
     <string name="group_phone_data_read">Phone data — read</string>
@@ -64,8 +71,6 @@
     <string name="msg_work_title">Work trace</string>
     <string name="msg_expanded">Expanded</string>
     <string name="msg_collapsed">Collapsed</string>
-    <string name="msg_collapse">Collapse</string>
-    <string name="msg_expand">Expand</string>
     <string name="msg_tool_call">Running: %1$s</string>
     <string name="msg_tool_result">Done: %1$s</string>
     <string name="msg_image_attached">Image</string>

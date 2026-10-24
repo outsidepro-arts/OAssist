@@ -24,6 +24,7 @@ class AgentLoopUsageTest {
             modelId: String,
             messages: List<ChatMessage>,
             tools: List<ToolSchemaDto>,
+            reasoningEnabled: Boolean,
         ): Flow<ChatChunk> {
             val round = rounds[minOf(calls, rounds.size - 1)]
             calls++

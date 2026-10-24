@@ -29,6 +29,7 @@ class AgentLoopTurnMessagesTest {
             modelId: String,
             messages: List<ChatMessage>,
             tools: List<ToolSchemaDto>,
+            reasoningEnabled: Boolean,
         ): Flow<ChatChunk> =
             flowOf(*(rounds.removeFirstOrNull() ?: listOf(ChatChunk.Finish("stop"))).toTypedArray())
     }
@@ -115,6 +116,7 @@ class AgentLoopTurnMessagesTest {
                 modelId: String,
                 messages: List<ChatMessage>,
                 tools: List<ToolSchemaDto>,
+                reasoningEnabled: Boolean,
             ): Flow<ChatChunk> {
                 seen.add(messages)
                 return flowOf(
@@ -144,6 +146,7 @@ class AgentLoopTurnMessagesTest {
                 modelId: String,
                 messages: List<ChatMessage>,
                 tools: List<ToolSchemaDto>,
+                reasoningEnabled: Boolean,
             ): Flow<ChatChunk> {
                 round++
                 return if (round <= 8) {

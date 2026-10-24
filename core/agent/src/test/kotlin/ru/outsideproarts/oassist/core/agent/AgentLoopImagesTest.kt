@@ -27,6 +27,7 @@ class AgentLoopImagesTest {
             modelId: String,
             messages: List<ChatMessage>,
             tools: List<ToolSchemaDto>,
+            reasoningEnabled: Boolean,
         ): Flow<ChatChunk> {
             seenMessages.add(messages)
             return flowOf(*(rounds.removeFirstOrNull() ?: listOf(ChatChunk.Finish("stop"))).toTypedArray())

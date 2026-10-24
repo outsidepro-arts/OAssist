@@ -32,6 +32,7 @@ class AgentLoopApprovalTest {
             modelId: String,
             messages: List<ru.outsideproarts.oassist.core.model.ChatMessage>,
             tools: List<ToolSchemaDto>,
+            reasoningEnabled: Boolean,
         ): Flow<ChatChunk> = flowOf(*(rounds.removeFirstOrNull() ?: listOf(ChatChunk.Finish("stop"))).toTypedArray())
     }
 

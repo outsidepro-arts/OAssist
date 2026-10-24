@@ -14,9 +14,10 @@ import ru.outsideproarts.oassist.core.model.ChatMessage
 import ru.outsideproarts.oassist.core.model.ChatRole
 import ru.outsideproarts.oassist.core.model.ImagePart
 import ru.outsideproarts.oassist.core.model.ProviderUsage
-import ru.outsideproarts.oassist.core.model.StoredTool
+import ru.outsideproarts.oassist.core.model.ReasoningBlock
 import ru.outsideproarts.oassist.core.model.StoredTurn
 import ru.outsideproarts.oassist.core.model.ToolCallRef
+import ru.outsideproarts.oassist.core.model.WorkEvent
 
 class TurnCodecTest {
 
@@ -41,9 +42,9 @@ class TurnCodecTest {
         userText = "Какой статус?",
         userAudio = AudioPart(wavBase64 = base64("WAV"), durationSec = 2),
         userImages = listOf(ImagePart(imageBase64 = base64("IMG"), width = 100, height = 50)),
-        thought = "Смотрю…",
-        tools = listOf(
-            StoredTool(
+        work = listOf(
+            WorkEvent.Thought("Смотрю…"),
+            WorkEvent.Tool(
                 name = "device_state",
                 output = "torch=off",
                 isError = false,
@@ -57,6 +58,7 @@ class TurnCodecTest {
                 role = ChatRole.ASSISTANT,
                 content = "Смотрю…",
                 toolCalls = listOf(ToolCallRef(id = "call_1", name = "device_state", argumentsJson = "{}")),
+                reasoning = ReasoningBlock(text = "сперва проверю фонарик", signature = "sig_abc"),
             ),
             ChatMessage(role = ChatRole.TOOL, content = "torch=off", toolCallId = "call_1"),
             ChatMessage(role = ChatRole.ASSISTANT, content = "Фонарик выключен"),
@@ -73,16 +75,35 @@ class TurnCodecTest {
         assertEquals(2, restored.userAudio?.durationSec)
         assertEquals(base64("IMG"), restored.userImages.single().imageBase64)
         assertEquals(100, restored.userImages.single().width)
-        assertEquals("Смотрю…", restored.thought)
-        assertEquals("device_state", restored.tools.single().name)
-        assertEquals("torch=off", restored.tools.single().output)
-        assertEquals(base64("SHOT"), restored.tools.single().images.single().imageBase64)
+        // Хронологическое полотно: мысль → тул (порядок сохраняется).
+        assertEquals(2, restored.work.size)
+        assertEquals("Смотрю…", (restored.work[0] as WorkEvent.Thought).text)
+        val tool = restored.work[1] as WorkEvent.Tool
+        assertEquals("device_state", tool.name)
+        assertEquals("torch=off", tool.output)
+        assertEquals(base64("SHOT"), tool.images.single().imageBase64)
         assertEquals("Фонарик выключен", restored.answer)
         assertEquals(11L, restored.usage?.inputTokens)
         assertEquals(0.001, restored.usage?.costUsd)
         assertEquals(3, restored.turn.size)
         assertEquals("call_1", restored.turn[0].toolCalls?.single()?.id)
         assertEquals("call_1", restored.turn[1].toolCallId)
+        // Мысли ассистента переживают перезапись (replay Anthropic/Responses).
+        assertEquals("сперва проверю фонарик", restored.turn[0].reasoning?.text)
+        assertEquals("sig_abc", restored.turn[0].reasoning?.signature)
+        assertNull(restored.turn[2].reasoning)
+    }
+
+    @Test
+    fun decode_legacyThoughtTools_migratesToWork() {
+        // Ходы до WorkEvent: плоские thought+tools без поля work.
+        val legacy = """{"userText":"вопрос","thought":"считаю","tools":[{"name":"device_state","output":"ok"}],"answer":"ответ"}"""
+        val restored = TurnCodec.decode(legacy, media)!!
+
+        assertEquals(2, restored.work.size)
+        assertEquals("считаю", (restored.work[0] as WorkEvent.Thought).text)
+        assertEquals("device_state", (restored.work[1] as WorkEvent.Tool).name)
+        assertEquals("ответ", restored.answer)
     }
 
     @Test

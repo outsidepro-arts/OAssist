@@ -40,6 +40,22 @@ sealed interface ChatChunk {
      * Клиенты провайдеров всегда эмитят `false`; дефолт держит все места сборки.
      */
     data class Content(val delta: String, val isToolComment: Boolean = false) : ChatChunk
+    /**
+     * Кусок «мыслей» модели (DeepSeek `reasoning_content`, Gemini thought-части,
+     * Anthropic `thinking_delta`, события reasoning у Responses). Эмитится клиентами
+     * live (без буферизации раунда): UI показывает процесс размышления в полотне
+     * «Ход работы». В текст ответа не попадает.
+     *
+     * Пустой [delta] с заполненными [signature]/[replayJson] — служебная
+     * «приписка» к ходу: подпись Anthropic для replay thinking-блока или сырой
+     * JSON reasoning-item'ов Responses. UI их игнорирует, [ru.outsideproarts.
+     * oassist.core.agent.AgentLoop] подшивает к `ChatMessage.reasoning`.
+     */
+    data class Reasoning(
+        val delta: String,
+        val signature: String? = null,
+        val replayJson: String? = null,
+    ) : ChatChunk
     data class ToolCall(
         val id: String,
         val name: String,
@@ -91,11 +107,15 @@ interface ModelClient {
      */
     suspend fun probeCapabilities(modelId: String): Set<ModelCapability> = emptySet()
 
-    /** Стрим ответа на запрос чата. */
+    /** Стрим ответа на запрос чата.
+     *  [reasoningEnabled] — у модели включён флаг «Мышление» (REASONING capability):
+     *  Anthropic шлёт `thinking` в запросе, Responses — `reasoning.summary`;
+     *  остальные протоколы мыслят сами и флаг не используют. */
     fun chatCompletionStream(
         modelId: String,
         messages: List<ChatMessage>,
         tools: List<ToolSchemaDto> = emptyList(),
+        reasoningEnabled: Boolean = false,
     ): Flow<ChatChunk>
 
     companion object {

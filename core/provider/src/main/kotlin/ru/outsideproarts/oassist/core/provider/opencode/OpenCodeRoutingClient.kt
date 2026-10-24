@@ -104,15 +104,18 @@ class OpenCodeRoutingClient internal constructor(
         modelId: String,
         messages: List<ChatMessage>,
         tools: List<ToolSchemaDto>,
+        reasoningEnabled: Boolean,
     ): Flow<ChatChunk> = flow {
         var lastError: Throwable? = null
         for (protocol in protocolsFor(modelId)) {
             var emittedAny = false
             try {
-                clients.getValue(protocol).chatCompletionStream(modelId, messages, tools).collect { chunk ->
-                    emittedAny = true
-                    emit(chunk)
-                }
+                clients.getValue(protocol)
+                    .chatCompletionStream(modelId, messages, tools, reasoningEnabled)
+                    .collect { chunk ->
+                        emittedAny = true
+                        emit(chunk)
+                    }
                 learned[modelId] = protocol
                 return@flow
             } catch (e: CancellationException) {

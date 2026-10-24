@@ -16,21 +16,35 @@ data class AnthropicModelDto(
     @SerialName("display_name") val displayName: String? = null,
 )
 
-/** Запрос POST /v1/messages. `content` — строка или массив блоков (см. маппер). */
+/** Запрос POST /v1/messages. `content` — строка или массив блоков (см. маппер).
+ *  [maxTokens] и [stream] — БЕЗ дефолтов: encodeDefaults=false не пишет
+ *  равное-дефолту значение, а API требует `max_tokens`, а SSE — `stream` (урок
+ *  StreamOptionsDto); оба поля обязаны всегда попадать в wire. */
 @Serializable
 data class AnthropicMessagesRequest(
     val model: String,
-    @SerialName("max_tokens") val maxTokens: Int = DEFAULT_MAX_TOKENS,
+    @SerialName("max_tokens") val maxTokens: Int,
     val system: String? = null,
     val messages: List<AnthropicMessageDto>,
     val tools: List<AnthropicToolDto>? = null,
-    val stream: Boolean = true,
+    val stream: Boolean,
+    /** Extended thinking: только при флаге REASONING у модели; null-поле не сериализуется. */
+    val thinking: AnthropicThinkingDto? = null,
 ) {
     companion object {
         /** Anthropic требует max_tokens; дефолт покрывает ответы с тулами. */
         const val DEFAULT_MAX_TOKENS = 1024
     }
 }
+
+/** Включённый extended thinking: budget < max_tokens запроса (см. клиента).
+ *  [type] — без дефолта: encodeDefaults=false не пишет равное-дефолту значение,
+ *  а API требует `"type": "enabled"` (урок StreamOptionsDto). */
+@Serializable
+data class AnthropicThinkingDto(
+    val type: String,
+    @SerialName("budget_tokens") val budgetTokens: Int,
+)
 
 @Serializable
 data class AnthropicMessageDto(
@@ -73,6 +87,10 @@ data class AnthropicDelta(
     val text: String? = null,
     @SerialName("partial_json") val partialJson: String? = null,
     @SerialName("stop_reason") val stopReason: String? = null,
+    /** `thinking_delta`: кусок «мышлений» (только при включённом thinking). */
+    val thinking: String? = null,
+    /** `signature_delta`: подпись thinking-блока — обязательна при replay. */
+    val signature: String? = null,
 )
 
 @Serializable

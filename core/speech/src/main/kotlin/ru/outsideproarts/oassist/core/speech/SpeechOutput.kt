@@ -356,9 +356,9 @@ class SpeechOutput(
             }.sortedWith(compareBy({ it.localeTag }, { it.name }))
         }.getOrElse { emptyList() }
 
-    /** Озвучить одно завершённое предложение. */
+    /** Озвучить одно завершённое предложение. Markdown-атрибуты снимаются — в речь идёт чистый текст. */
     fun speak(sentence: String) {
-        val text = sentence.trim()
+        val text = MarkdownPlain.strip(sentence.trim())
         if (text.isEmpty()) return
         when (channel) {
             SpeechOutputChannel.OFF -> {}
@@ -402,7 +402,7 @@ class SpeechOutput(
      *   или движок не поднялся за [timeoutMs].
      */
     suspend fun speakWhenReady(text: String, timeoutMs: Long = 5_000L): Boolean {
-        val clean = text.trim()
+        val clean = MarkdownPlain.strip(text.trim())
         if (clean.isEmpty()) return false
         when (channel) {
             SpeechOutputChannel.SCREEN_READER -> {

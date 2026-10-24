@@ -7,16 +7,21 @@ import ru.outsideproarts.oassist.core.model.ChatMessage
 import ru.outsideproarts.oassist.core.model.ChatRole
 import ru.outsideproarts.oassist.core.model.ImagePart
 import ru.outsideproarts.oassist.core.model.ProviderUsage
-import ru.outsideproarts.oassist.core.model.StoredTool
+import ru.outsideproarts.oassist.core.model.ReasoningBlock
 import ru.outsideproarts.oassist.core.model.StoredTurn
 import ru.outsideproarts.oassist.core.model.ToolCallRef
+import ru.outsideproarts.oassist.core.model.WorkEvent
 
 @Serializable
 internal data class TurnPayload(
     val userText: String = "",
     val userAudio: MediaJson? = null,
     val userImages: List<MediaJson> = emptyList(),
+    /** Новое полотно (мыслевые блоки + тулы в хронологии); null — legacy-ход. */
+    val work: List<WorkEvent>? = null,
+    /** Legacy (до WorkEvent): сплошной текст мыслей — мигрируется в [work]. */
     val thought: String = "",
+    /** Legacy (до WorkEvent): плоский список тулов — мигрируется в [work]. */
     val tools: List<ToolJson> = emptyList(),
     val answer: String = "",
     val usage: ProviderUsage? = null,
@@ -31,6 +36,8 @@ internal data class MessageJson(
     val toolCalls: List<ToolCallRef>? = null,
     val audio: MediaJson? = null,
     val images: List<MediaJson> = emptyList(),
+    /** Мысли ассистента (text/signature/replay) — legacy-ходы без поля читаются как null. */
+    val reasoning: ReasoningBlock? = null,
 )
 
 @Serializable
@@ -70,17 +77,7 @@ object TurnCodec {
             userImages = turn.userImages.mapIndexedNotNull { index, image ->
                 media.writeImage(chatId, turnId, "u$index", image)?.toJson()
             },
-            thought = turn.thought,
-            tools = turn.tools.mapIndexed { toolIndex, tool ->
-                ToolJson(
-                    name = tool.name,
-                    output = tool.output,
-                    isError = tool.isError,
-                    images = tool.images.mapIndexedNotNull { index, image ->
-                        media.writeImage(chatId, turnId, "t${toolIndex}_$index", image)?.toJson()
-                    },
-                )
-            },
+            work = turn.work,
             answer = turn.answer,
             usage = turn.usage,
             turn = turn.turn.mapIndexed { index, message ->
@@ -93,6 +90,7 @@ object TurnCodec {
                     images = message.images.mapIndexedNotNull { imageIndex, image ->
                         media.writeImage(chatId, turnId, "m${index}_$imageIndex", image)?.toJson()
                     },
+                    reasoning = message.reasoning,
                 )
             },
         )
@@ -108,15 +106,7 @@ object TurnCodec {
             userText = dto.userText,
             userAudio = dto.userAudio?.toRef()?.let { media.readAudio(it) },
             userImages = dto.userImages.mapNotNull { it.toRef()?.let(media::readImage) },
-            thought = dto.thought,
-            tools = dto.tools.map { tool ->
-                StoredTool(
-                    name = tool.name,
-                    output = tool.output,
-                    isError = tool.isError,
-                    images = tool.images.mapNotNull { it.toRef()?.let(media::readImage) },
-                )
-            },
+            work = decodeWork(dto, media),
             answer = dto.answer,
             usage = dto.usage,
             turn = dto.turn.map { message ->
@@ -127,9 +117,29 @@ object TurnCodec {
                     toolCalls = message.toolCalls,
                     audio = message.audio?.toRef()?.let { media.readAudio(it) },
                     images = message.images.mapNotNull { it.toRef()?.let(media::readImage) },
+                    reasoning = message.reasoning?.takeUnless { it.isEmpty() },
                 )
             },
         )
+    }
+
+    /**
+     * Полотно: новый формат `work` как есть; legacy (thought+tools без work) —
+     * миграция «мыслевой блок → тулы по порядку» (порядок тогда не сохранялся).
+     */
+    private fun decodeWork(dto: TurnPayload, media: ChatMediaStore): List<WorkEvent> {
+        dto.work?.let { return it }
+        val events = mutableListOf<WorkEvent>()
+        if (dto.thought.isNotBlank()) events += WorkEvent.Thought(dto.thought)
+        dto.tools.forEach { tool ->
+            events += WorkEvent.Tool(
+                name = tool.name,
+                output = tool.output,
+                isError = tool.isError,
+                images = tool.images.mapNotNull { it.toRef()?.let(media::readImage) },
+            )
+        }
+        return events
     }
 
     private fun MediaJson.toRef(): MediaRef? = MediaRef(path, mimeType, width, height, durationSec)

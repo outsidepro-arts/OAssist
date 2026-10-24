@@ -4,6 +4,7 @@ import android.Manifest
 import android.content.pm.PackageManager
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
@@ -41,10 +42,8 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -53,34 +52,20 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.input.KeyboardCapitalization
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.TextFieldValue
-import androidx.compose.ui.semantics.CustomAccessibilityAction
-import androidx.compose.ui.semantics.Role
-import androidx.compose.ui.semantics.customActions
-import androidx.compose.ui.semantics.contentDescription
-import androidx.compose.ui.semantics.heading
-import androidx.compose.ui.semantics.paneTitle
 import androidx.compose.ui.semantics.semantics
-import androidx.compose.ui.semantics.stateDescription
 import android.widget.Toast
-import kotlinx.coroutines.Job
-import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.launch
 import ru.outsideproarts.oassist.core.a11y.oassistHeading
-import ru.outsideproarts.oassist.core.a11y.oassistRole
 import ru.outsideproarts.oassist.core.a11y.oassistTouchTarget
 import ru.outsideproarts.oassist.core.agent.AgentFactory
-import ru.outsideproarts.oassist.core.agent.AgentLoop
 import ru.outsideproarts.oassist.core.agent.AgentSession
-import ru.outsideproarts.oassist.core.agent.AgentToolEvent
 import ru.outsideproarts.oassist.core.agent.ChatTitler
 import ru.outsideproarts.oassist.core.data.chat.ChatHandle
 import ru.outsideproarts.oassist.core.model.ApprovalDecision
-import ru.outsideproarts.oassist.core.model.ApprovalRequest
 import ru.outsideproarts.oassist.core.model.AssistMode
 import ru.outsideproarts.oassist.core.model.ChatKind
 import ru.outsideproarts.oassist.core.model.ChatSummary
 import ru.outsideproarts.oassist.core.model.ProviderUsage
-import ru.outsideproarts.oassist.core.model.StoredTool
 import ru.outsideproarts.oassist.core.model.StoredTurn
 import ru.outsideproarts.oassist.core.provider.ChatChunk
 import ru.outsideproarts.oassist.core.model.ChatMessage
@@ -91,7 +76,6 @@ import ru.outsideproarts.oassist.core.provider.isEarlyRetryable
 import ru.outsideproarts.oassist.core.speech.AgentSound
 import ru.outsideproarts.oassist.core.speech.CaptureError
 import ru.outsideproarts.oassist.core.speech.CaptureState
-import ru.outsideproarts.oassist.core.speech.Narrator
 import ru.outsideproarts.oassist.core.speech.SentenceSplitter
 import ru.outsideproarts.oassist.core.speech.SoundHandle
 import ru.outsideproarts.oassist.core.speech.SttError
@@ -110,14 +94,12 @@ import ru.outsideproarts.oassist.core.ui.components.OAssistPanel
 
 /**
  * Одна реплика ленты. У ассистента три раздельные проекции:
- * [thought] — размышление/комментарий, [tools] — полотно вызовов,
- * [answer] — основной ответ. У пользователя [answer] — текст,
- * [thought]/[tools] пусты.
+ * [work] — полотно «Ход работы» (мыслевые блоки и тулы в хронологии),
+ * [answer] — основной ответ. У пользователя [answer] — текст, [work] пусто.
  */
 data class ChatItem(
     val role: ChatRole,
-    val thought: String = "",
-    val tools: List<AgentToolEvent> = emptyList(),
+    val work: List<ru.outsideproarts.oassist.core.model.WorkEvent> = emptyList(),
     val answer: String = "",
     val isStreaming: Boolean = false,
     /** Голосовой ход PTT (история для модели несёт байты, пузырь — плейсхолдер). */
@@ -128,9 +110,6 @@ data class ChatItem(
 
 /** Холд Send короче — случайный тап: отмена с хинтом, не отправка. */
 private const val HOLD_MIN_MS = 500L
-
-/** Отложенный ход: сеть пропала до/в начале стрима, повторим фронтом online. */
-private data class PendingChatTurn(val text: String, val audio: AudioPart?)
 
 /** Проекция пузыря ленты в историю модели: только основной ответ ассистента —
  * мысль и тулы уже связаны tool-протоколом и не должны дублироваться текстом. */
@@ -156,22 +135,30 @@ fun ChatScreen(
     stt: SttConfig = SttConfig.DEFAULT,
     /** У модели флаг AUDIO_IN (только ручной) — иначе MODEL_AUDIO падает в STT. */
     audioIn: Boolean = false,
-    /** Лента нарратива для сворачиваемого timeline. Null — без timeline. */
-    timeline: SharedFlow<Narrator.TimelineEntry>? = null,
-    /** Итоги использования за жизнь процесса (in-memory). Null — без строки итогов. */
-    usageTotals: kotlinx.coroutines.flow.StateFlow<ru.outsideproarts.oassist.core.model.UsageTotalsState>? = null,
+    /**
+     * Сессия чата (ViewModel activity-скоупа): лента/ходы/черновик/стрим
+     * переживают переключение вкладок, пока активно приложение.
+     */
+    viewModel: ChatSessionViewModel = androidx.lifecycle.viewmodel.compose.viewModel(),
 ) {
-    val messages = remember { mutableStateListOf<ChatItem>() }
-    // Состояние диалога: сохранён ли (chatId != null) и под каким именем.
-    // Ходы накапливаются в памяти — источник истины для истории модели и записи в БД.
-    val turnStore = remember { mutableStateListOf<StoredTurn>() }
-    var chatId by remember { mutableStateOf<String?>(null) }
-    var chatKind by remember { mutableStateOf(ChatKind.REGULAR) }
-    var chatTitle by remember { mutableStateOf("") }
-    var titleLocked by remember { mutableStateOf(false) }
-    var autoSaveChats by remember { mutableStateOf(true) }
+    // Состояние диалога живёт в ChatSessionViewModel; локальные `by vm::field`
+    // дают те же имена переменных с реактивностью snapshot-состояния.
+    val messages = viewModel.messages
+    val turnStore = viewModel.turnStore
+    var chatId by viewModel::chatId
+    var chatKind by viewModel::chatKind
+    var chatTitle by viewModel::chatTitle
+    var titleLocked by viewModel::titleLocked
+    var autoSaveChats by viewModel::autoSaveChats
     var pendingSwitch by remember { mutableStateOf<(() -> Unit)?>(null) }
     var deleteCurrentAsk by remember { mutableStateOf(false) }
+    /** Окно «Информация о чате» (по тапу на заголовок) вместо ленты. */
+    var showChatInfo by remember { mutableStateOf(false) }
+    // Системный жест «Назад» закрывает статистику и возвращает в чат,
+    // а не сворачивает приложение.
+    androidx.activity.compose.BackHandler(enabled = showChatInfo) {
+        showChatInfo = false
+    }
     val chatsFlow = remember {
         ChatHandle.get()?.observeChats()
             ?: kotlinx.coroutines.flow.flowOf(emptyList())
@@ -183,40 +170,22 @@ fun ChatScreen(
             AgentFactory.get().modeConfig(AssistMode.CHAT).effectiveAutoSaveChats()
         }.getOrDefault(true)
     }
-    val timelineEntries = remember { mutableStateListOf<Narrator.TimelineEntry>() }
-    val emptyTotals = remember { kotlinx.coroutines.flow.MutableStateFlow(ru.outsideproarts.oassist.core.model.UsageTotalsState()) }
-    val usageTotalsState by (usageTotals ?: emptyTotals).collectAsState()
-    var input by remember { mutableStateOf(TextFieldValue("")) }
+    var input by viewModel::input
     /** Живой preview распознавания — НЕ в поле ввода, уходит сразу в сообщение. */
     var sttPreview by remember { mutableStateOf("") }
-    var isStreaming by remember { mutableStateOf(false) }
-    var streamJob by remember { mutableStateOf<Job?>(null) }
+    var isStreaming by viewModel::isStreaming
+    var streamJob by viewModel::streamJob
     /** Ход, отложенный до появления сети (пре-чек или ранний обрыв без сети). */
-    var pendingRetry by remember { mutableStateOf<PendingChatTurn?>(null) }
-    var pendingApproval by remember { mutableStateOf<Pair<ApprovalRequest, AgentLoop>?>(null) }
-    val scope = rememberCoroutineScope()
+    var pendingRetry by viewModel::pendingRetry
+    var pendingApproval by viewModel::pendingApproval
+    // Скоуп сессии: корутины чата не прерываются при уходе на вкладку настроек.
+    val scope = viewModel.scope
     val listState = rememberLazyListState()
-
-    LaunchedEffect(timeline) {
-        timeline?.collect { timelineEntries.add(it) }
-    }
 
     val netHandle = remember { ru.outsideproarts.oassist.core.net.NetworkHandle.get() }
     val offlineRetryText = stringResource(ru.outsideproarts.oassist.core.ui.R.string.net_offline_retry)
     val repeatingText = stringResource(ru.outsideproarts.oassist.core.ui.R.string.net_repeating)
     val sounds = remember { SoundHandle.get() }
-
-    // Конец диалога (уход с экрана) — забыть «разрешено на текущую сессию»
-    // и обнулить итоги использования (статистика живёт в рамках сессии чата).
-    androidx.compose.runtime.DisposableEffect(Unit) {
-        onDispose {
-            runCatching {
-                val factory = ru.outsideproarts.oassist.core.agent.AgentFactory.get()
-                factory.clearSessionApprovals(ru.outsideproarts.oassist.core.model.AssistMode.CHAT)
-                factory.resetUsageTotals()
-            }
-        }
-    }
 
     val emptyTitle = stringResource(R.string.chat_empty_title)
     val emptyBody = stringResource(R.string.chat_empty_body)
@@ -271,8 +240,7 @@ fun ChatScreen(
     fun recordTurn(
         userMsg: String,
         audio: AudioPart?,
-        thought: String,
-        tools: List<AgentToolEvent>,
+        work: List<ru.outsideproarts.oassist.core.model.WorkEvent>,
         answer: String,
         usage: ProviderUsage?,
         turn: List<ChatMessage>,
@@ -281,8 +249,7 @@ fun ChatScreen(
             StoredTurn(
                 userText = userMsg,
                 userAudio = audio,
-                thought = thought,
-                tools = tools.map { StoredTool(it.name, it.output, it.isError, it.images) },
+                work = work,
                 answer = answer,
                 usage = usage,
                 turn = turn,
@@ -322,7 +289,7 @@ fun ChatScreen(
         val assistantIndex: Int
         val waiting = messages.lastOrNull()
         if (waiting != null && waiting.role == ChatRole.ASSISTANT && waiting.isStreaming &&
-            waiting.thought.isEmpty() && waiting.answer.isEmpty() && waiting.tools.isEmpty()
+            waiting.work.isEmpty() && waiting.answer.isEmpty()
         ) {
             assistantIndex = messages.size - 1
         } else {
@@ -330,13 +297,10 @@ fun ChatScreen(
             messages.add(ChatItem(ChatRole.ASSISTANT, isStreaming = true))
         }
         streamJob = scope.launch {
-            val thoughtSb = StringBuilder()
-            val answerSb = StringBuilder()
-            val toolEvents = mutableListOf<AgentToolEvent>()
-            var turnUsage: ru.outsideproarts.oassist.core.model.ProviderUsage? = null
-            // Разделение в синтезе: мысль и ответ — два независимых спикера
-            // с собственными счётчиками; тулы немы всегда (раньше вырезались
-            // stripServiceLines из общей каши — теперь не попадают вовсе).
+            // Хронологическое полотно (мыслевые блоки ↔ тулы) + ответ + usage.
+            val timeline = ru.outsideproarts.oassist.core.agent.WorkTimelineBuilder()
+            // Разделение в синтезе: комментарии и ответ — два независимых спикера
+            // с собственными счётчиками; reasoning и тулы немы всегда.
             val thoughtSpeaker = StreamSpeaker(
                 speak = { speakSentence?.invoke(it) },
                 speakToolCalls = speakToolCalls,
@@ -348,11 +312,10 @@ fun ChatScreen(
             fun publish(streaming: Boolean) {
                 messages[assistantIndex] = ChatItem(
                     role = ChatRole.ASSISTANT,
-                    thought = thoughtSb.toString(),
-                    tools = toolEvents.toList(),
-                    answer = answerSb.toString(),
+                    work = timeline.work,
+                    answer = timeline.answerText,
                     isStreaming = streaming,
-                    usage = turnUsage,
+                    usage = timeline.usage,
                 )
             }
             var error: ru.outsideproarts.oassist.core.provider.ProviderError? = null
@@ -364,34 +327,30 @@ fun ChatScreen(
                 val session = sendMessage(sendMode(), userMsg, history, audio) { turnTranscript = it }
                 error = session.chunks.collectSafe { chunk ->
                     when (chunk) {
+                        is ChatChunk.Reasoning -> {
+                            // Мысли модели: live в полотно, без озвучки и без звука
+                            // (дельты частые — звук затапил бы очередь).
+                            if (timeline.onChunk(chunk)) publish(true)
+                        }
                         is ChatChunk.Content -> {
                             if (chunk.isToolComment) {
-                                thoughtSb.append(chunk.delta)
+                                timeline.onChunk(chunk)
                                 publish(true)
-                                thoughtSpeaker.onText(thoughtSb.toString(), true)
+                                thoughtSpeaker.onText(timeline.commentText, true)
                                 sounds?.playIfEnabled(AgentSound.THINKING, soundEnabled)
                             } else {
-                                answerSb.append(chunk.delta)
+                                timeline.onChunk(chunk)
                                 publish(true)
-                                answerSpeaker.onText(answerSb.toString(), false)
+                                answerSpeaker.onText(timeline.answerText, false)
                             }
                         }
                         is ChatChunk.ToolCall -> {
-                            toolEvents.add(AgentToolEvent(name = chunk.name))
+                            timeline.onChunk(chunk)
                             publish(true)
                             sounds?.playIfEnabled(AgentSound.TOOL_CALL, soundEnabled)
                         }
                         is ChatChunk.ToolResult -> {
-                            val pending = toolEvents.indexOfLast {
-                                it.name == chunk.name && it.output == null
-                            }
-                            val event = AgentToolEvent(
-                                name = chunk.name,
-                                output = chunk.output,
-                                isError = chunk.isError,
-                            )
-                            if (pending >= 0) toolEvents[pending] = event
-                            else toolEvents.add(event)
+                            timeline.onChunk(chunk)
                             publish(true)
                         }
                         is ChatChunk.ApprovalNeeded -> {
@@ -399,9 +358,9 @@ fun ChatScreen(
                             sounds?.playIfEnabled(AgentSound.PERMISSION_REQUEST, soundEnabled)
                         }
                         is ChatChunk.Finish -> {
-                            thoughtSpeaker.onFinish(thoughtSb.toString())
-                            answerSpeaker.onFinish(answerSb.toString())
-                            turnUsage = chunk.usage
+                            timeline.onChunk(chunk)
+                            thoughtSpeaker.onFinish(timeline.commentText)
+                            answerSpeaker.onFinish(timeline.answerText)
                             publish(false)
                             sounds?.playIfEnabled(AgentSound.ANSWER_READY, soundEnabled)
                             // Поток закрылся без терминатора: пометку покажем после
@@ -411,9 +370,8 @@ fun ChatScreen(
                             recordTurn(
                                 userMsg = userMsg,
                                 audio = audio,
-                                thought = thoughtSb.toString(),
-                                tools = toolEvents.toList(),
-                                answer = answerSb.toString(),
+                                work = timeline.work,
+                                answer = timeline.answerText,
                                 usage = chunk.usage,
                                 turn = turnTranscript,
                             )
@@ -434,9 +392,7 @@ fun ChatScreen(
                 isStreaming = false
                 pendingApproval = null
                 streamJob = null
-                if (thoughtSb.isEmpty() && answerSb.isEmpty() && toolEvents.isEmpty() &&
-                    (error != null || cancelled)
-                ) {
+                if (timeline.isEmpty && (error != null || cancelled)) {
                     messages.removeAt(assistantIndex)
                 } else {
                     publish(false)
@@ -444,17 +400,18 @@ fun ChatScreen(
                     // транскрипт с tool-парами есть только у завершённого Finish.
                     if (!turnRecorded) {
                         val fallbackTurn = when {
-                            answerSb.isNotBlank() -> listOf(ChatMessage(ChatRole.ASSISTANT, answerSb.toString()))
-                            thoughtSb.isNotBlank() -> listOf(ChatMessage(ChatRole.ASSISTANT, thoughtSb.toString()))
+                            timeline.answerText.isNotBlank() ->
+                                listOf(ChatMessage(ChatRole.ASSISTANT, timeline.answerText))
+                            timeline.commentText.isNotBlank() ->
+                                listOf(ChatMessage(ChatRole.ASSISTANT, timeline.commentText))
                             else -> emptyList()
                         }
                         recordTurn(
                             userMsg = userMsg,
                             audio = audio,
-                            thought = thoughtSb.toString(),
-                            tools = toolEvents.toList(),
-                            answer = answerSb.toString(),
-                            usage = turnUsage,
+                            work = timeline.work,
+                            answer = timeline.answerText,
+                            usage = timeline.usage,
                             turn = fallbackTurn,
                         )
                         turnRecorded = true
@@ -464,7 +421,7 @@ fun ChatScreen(
             if (error != null) {
                 val net = ru.outsideproarts.oassist.core.net.NetworkHandle.get()
                 if (net != null && !net.isOnline.value && error.isEarlyRetryable() &&
-                    thoughtSb.isEmpty() && answerSb.isEmpty() && toolEvents.isEmpty()
+                    timeline.isEmpty
                 ) {
                     // Упали до первого чанка без сети (пустой пузырь уже убран в finally).
                     // Возвращаем состояние ожидания — как в пре-чеке send(): ждущий
@@ -519,7 +476,7 @@ fun ChatScreen(
             messages.lastOrNull()
                 ?.takeIf {
                     it.role == ChatRole.ASSISTANT && it.isStreaming &&
-                        it.thought.isEmpty() && it.answer.isEmpty() && it.tools.isEmpty()
+                        it.work.isEmpty() && it.answer.isEmpty()
                 }?.let { messages.removeAt(messages.size - 1) }
             isStreaming = false
         }
@@ -532,10 +489,7 @@ fun ChatScreen(
             messages.add(
                 ChatItem(
                     role = ChatRole.ASSISTANT,
-                    thought = turn.thought,
-                    tools = turn.tools.map {
-                        AgentToolEvent(name = it.name, output = it.output, isError = it.isError, images = it.images)
-                    },
+                    work = turn.work,
                     answer = turn.answer,
                     usage = turn.usage,
                 ),
@@ -562,7 +516,12 @@ fun ChatScreen(
         scope.launch { drawerState.close() }
     }
 
-    fun startNewChat() {
+    /**
+     * Сбросить текущий диалог в пустой новый (без закрытия шторки):
+     * гасит идущий стрим, чистит ленту/ходы/имя. Используется «Новым чатом»
+     * и удалением открытого диалога — удалённый не должен остаться на экране.
+     */
+    fun resetChat() {
         cancelTurn()
         chatId = null
         chatKind = ChatKind.REGULAR
@@ -570,6 +529,11 @@ fun ChatScreen(
         titleLocked = false
         turnStore.clear()
         messages.clear()
+        pendingApproval = null
+    }
+
+    fun startNewChat() {
+        resetChat()
         scope.launch { drawerState.close() }
     }
 
@@ -605,10 +569,27 @@ fun ChatScreen(
         }
     }
 
+    /**
+     * Переименование из окна «Информация о чате»: имя сразу фиксируется
+     * (titleLocked — авто-именование больше не трогает) и, если диалог
+     * сохранён, пишется в БД; несохранённый живёт только в памяти — имя
+     * применится при сохранении (createChat читает chatTitle).
+     */
+    fun renameCurrentChat(name: String) {
+        val clean = name.trim()
+        if (clean.isEmpty()) return
+        chatTitle = clean
+        titleLocked = true
+        val id = chatId ?: return
+        ChatHandle.get()?.let { repo -> scope.launch { repo.renameChat(id, clean) } }
+    }
+
     fun deleteChatFromList(summary: ChatSummary) {
         ChatHandle.get()?.let { repo -> scope.launch { repo.deleteChat(summary.id) } }
         if (summary.id == chatId) {
-            chatId = null
+            // Удалили открытый диалог — сбросить вид в пустой новый
+            // (шторка остаётся: сброс её не закрывает).
+            resetChat()
         }
     }
     // Авто-повтор отложенного хода только по фронту offline→online:
@@ -791,6 +772,15 @@ fun ChatScreen(
         },
         modifier = modifier,
     ) {
+        if (showChatInfo) {
+            ChatInfoScreen(
+                initialTitle = chatTitle,
+                kind = chatKind,
+                turns = turnStore,
+                onBack = { showChatInfo = false },
+                onRename = ::renameCurrentChat,
+            )
+        } else {
         Column(
             modifier = Modifier
                 .fillMaxSize()
@@ -823,7 +813,9 @@ fun ChatScreen(
                     color = MaterialTheme.colorScheme.onSurface,
                     modifier = Modifier
                         .weight(1f)
-                        .oassistHeading(),
+                        .oassistHeading()
+                        .oassistTouchTarget()
+                        .clickable { showChatInfo = true },
                 )
                 if (messages.isNotEmpty() && chatKind != ChatKind.ASSISTANT) {
                     TextButton(
@@ -884,17 +876,7 @@ fun ChatScreen(
                             speakLabel = speakAnswerLabel,
                         )
                     }
-                    // Итоги всего чата — сворачиваемый блок «Ход работы» внизу ленты.
-                    if (!usageTotalsState.isEmpty) {
-                        item {
-                            ChatTotalsBlock(totals = usageTotalsState)
-                        }
-                    }
                 }
-            }
-
-            if (timeline != null) {
-                TimelinePanel(entries = timelineEntries)
             }
 
             if (capturing) {
@@ -1004,6 +986,7 @@ fun ChatScreen(
                 }
             }
         }
+        }
     }
 
     pendingApproval?.let { (request, agent) ->
@@ -1041,7 +1024,9 @@ fun ChatScreen(
             onConfirm = {
                 deleteCurrentAsk = false
                 val id = chatId
-                chatId = null
+                // Удалённый диалог не должен остаться открытым: сброс вида
+                // в пустой новый чат, затем удаление из списка.
+                resetChat()
                 if (id != null) {
                     val repo = ChatHandle.get()
                     if (repo != null) {
@@ -1068,142 +1053,10 @@ private fun MessageBubble(
         isUser = item.role == ChatRole.USER,
         answer = item.answer,
         audio = item.audio,
-        thought = item.thought,
-        tools = item.tools.map {
-            StoredTool(name = it.name, output = it.output, isError = it.isError, images = it.images)
-        },
+        work = item.work,
         usage = item.usage,
         onSpeak = onSpeak,
         speakLabel = speakLabel,
+        isStreaming = item.isStreaming,
     )
-}
-
-/**
- * Итоги всего чата — сворачиваемый блок «Ход работы» внизу ленты
- * (аналог per-message WorkBlock, но без мысли/тулов — только «Всего»).
- */
-@Composable
-private fun ChatTotalsBlock(totals: ru.outsideproarts.oassist.core.model.UsageTotalsState) {
-    val title = stringResource(R.string.chat_work_title)
-    val expandedState = stringResource(R.string.chat_timeline_expanded)
-    val collapsedState = stringResource(R.string.chat_timeline_collapsed)
-    var expanded by remember { mutableStateOf(false) }
-    val state = if (expanded) expandedState else collapsedState
-    val toggleLabel = "$title. $state"
-    val actionLabel = if (expanded) stringResource(R.string.chat_action_collapse)
-                      else stringResource(R.string.chat_action_expand)
-
-    OAssistPanel(title = title) {
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .oassistTouchTarget()
-                .semantics {
-                    stateDescription = state
-                    customActions = listOf(
-                        CustomAccessibilityAction(toggleLabel) {
-                            expanded = !expanded
-                            true
-                        },
-                    )
-                },
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.SpaceBetween,
-        ) {
-            Text(
-                text = title,
-                style = MaterialTheme.typography.titleMedium,
-                color = MaterialTheme.colorScheme.onSurface,
-                modifier = Modifier
-                    .weight(1f)
-                    .oassistHeading(),
-            )
-            IconButton(
-                onClick = { expanded = !expanded },
-                modifier = Modifier.semantics { contentDescription = actionLabel },
-            ) {
-                Icon(
-                    imageVector = if (expanded) Icons.Default.ExpandLess else Icons.Default.ExpandMore,
-                    contentDescription = null,
-                )
-            }
-        }
-        if (expanded) {
-            ru.outsideproarts.oassist.core.ui.components.OAssistUsageTotalsLine(totals = totals)
-        }
-    }
-}
-
-@Composable
-private fun TimelinePanel(entries: List<Narrator.TimelineEntry>) {
-    val title = stringResource(R.string.chat_timeline_title)
-    val emptyText = stringResource(R.string.chat_timeline_empty)
-    val expandedText = stringResource(R.string.chat_timeline_expanded)
-    val collapsedText = stringResource(R.string.chat_timeline_collapsed)
-    var expanded by remember { mutableStateOf(false) }
-    val state = if (expanded) expandedText else collapsedText
-    val actionLabel = if (expanded) stringResource(R.string.chat_action_collapse)
-                      else stringResource(R.string.chat_action_expand)
-
-    OAssistPanel(title = title) {
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .oassistTouchTarget()
-                .semantics { stateDescription = state },
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.SpaceBetween,
-        ) {
-            Text(
-                text = title,
-                style = MaterialTheme.typography.titleMedium,
-                color = MaterialTheme.colorScheme.onSurface,
-                modifier = Modifier
-                    .weight(1f)
-                    .oassistHeading(),
-            )
-            IconButton(
-                onClick = { expanded = !expanded },
-                modifier = Modifier.semantics { contentDescription = actionLabel },
-            ) {
-                Icon(
-                    imageVector = if (expanded) Icons.Default.ExpandLess else Icons.Default.ExpandMore,
-                    contentDescription = null,
-                )
-            }
-        }
-        if (expanded) {
-            val visible = entries.filter {
-                it is Narrator.TimelineEntry.Thought ||
-                    it is Narrator.TimelineEntry.ToolCall ||
-                    it is Narrator.TimelineEntry.ToolResult
-            }
-            if (visible.isEmpty()) {
-                Text(
-                    text = emptyText,
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-            } else {
-                visible.takeLast(20).forEach { entry ->
-                    Text(
-                        text = timelineText(entry),
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                }
-            }
-        }
-    }
-}
-
-@Composable
-private fun timelineText(entry: Narrator.TimelineEntry): String = when (entry) {
-    is Narrator.TimelineEntry.Thought -> entry.text.take(300)
-    is Narrator.TimelineEntry.ToolCall ->
-        stringResource(R.string.chat_timeline_tool_call, entry.toolName)
-    is Narrator.TimelineEntry.ToolResult ->
-        stringResource(R.string.chat_timeline_tool_result, entry.toolName)
-    is Narrator.TimelineEntry.UserMessage -> entry.text.take(300)
-    is Narrator.TimelineEntry.AgentMessage -> entry.text.take(300)
 }

@@ -118,6 +118,9 @@ data class ChatDeltaDto(
     val role: String? = null,
     val content: String? = null,
     @SerialName("tool_calls") val toolCalls: List<ToolCallDeltaDto>? = null,
+    /** Ход «мышлений» DeepSeek и совместимых — в текст ответа не попадает. */
+    @SerialName("reasoning_content") val reasoningContent: String? = null,
+    val reasoning: String? = null,
 )
 
 @Serializable

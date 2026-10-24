@@ -17,7 +17,9 @@ import io.ktor.http.contentType
 import io.ktor.http.takeFrom
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.flow
+import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonElement
+import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.buildJsonArray
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
@@ -94,6 +96,7 @@ class OpenAiResponsesClient internal constructor(
         modelId: String,
         messages: List<ChatMessage>,
         tools: List<ToolSchemaDto>,
+        reasoningEnabled: Boolean,
     ): Flow<ChatChunk> = flow {
         val (instructions, input) = mapResponsesInput(messages)
         val requestDto = ResponsesRequestDto(
@@ -103,6 +106,10 @@ class OpenAiResponsesClient internal constructor(
             stream = true,
             tools = tools.map { it.toResponsesTool() }.ifEmpty { null },
             store = false,
+            // Модель с флагом «Мышление»: просим сводки в стриме и encrypted
+            // reasoning-item'ы — их же вернём в input при продолжении (store=false).
+            reasoning = if (reasoningEnabled) ResponsesReasoningDto(summary = "auto") else null,
+            include = if (reasoningEnabled) listOf(REASONING_ENCRYPTED_INCLUDE) else null,
         )
         http.sse(
             request = {
@@ -130,6 +137,12 @@ class OpenAiResponsesClient internal constructor(
                     "response.output_text.delta" -> dto.delta
                         ?.takeIf { it.isNotEmpty() }
                         ?.let { emit(ChatChunk.Content(it)) }
+                    // Мысли: полный текст и сводка — отдельным потоком в UI.
+                    "response.reasoning_text.delta",
+                    "response.reasoning_summary_text.delta",
+                    -> dto.delta
+                        ?.takeIf { it.isNotEmpty() }
+                        ?.let { emit(ChatChunk.Reasoning(it)) }
                     "response.output_item.added" -> {
                         val item = dto.item
                         if (item?.type == "function_call") {
@@ -157,15 +170,33 @@ class OpenAiResponsesClient internal constructor(
                     }
                     "response.output_item.done" -> {
                         val item = dto.item ?: return@collect
-                        if (item.type == "function_call") {
-                            val call = pending[item.id.orEmpty()]
-                            if (call == null || !call.emitted) {
-                                emit(ChatChunk.ToolCall(
-                                    id = item.callId ?: call?.callId ?: item.id.orEmpty(),
-                                    name = item.name ?: call?.name.orEmpty(),
-                                    argumentsJson = item.arguments ?: call?.args.orEmpty(),
-                                ))
+                        when (item.type) {
+                            "function_call" -> {
+                                val call = pending[item.id.orEmpty()]
+                                if (call == null || !call.emitted) {
+                                    emit(ChatChunk.ToolCall(
+                                        id = item.callId ?: call?.callId ?: item.id.orEmpty(),
+                                        name = item.name ?: call?.name.orEmpty(),
+                                        argumentsJson = item.arguments ?: call?.args.orEmpty(),
+                                    ))
+                                }
                             }
+                            // Reasoning-item: сырой JSON для replay в input (stateless
+                            // продолжение не работает без возврата этих элементов).
+                            "reasoning" -> {
+                                val raw = runCatching {
+                                    (ProviderJson.parseToJsonElement(data) as? JsonObject)?.get("item")
+                                }.getOrNull()
+                                if (raw != null) {
+                                    emit(
+                                        ChatChunk.Reasoning(
+                                            delta = "",
+                                            replayJson = ProviderJson.encodeToString(JsonElement.serializer(), raw),
+                                        ),
+                                    )
+                                }
+                            }
+                            else -> {}
                         }
                     }
                     "response.completed" -> {
@@ -219,6 +250,7 @@ class OpenAiResponsesClient internal constructor(
         private const val ERROR_MESSAGE_LIMIT = 200
         private const val PROBE_TEXT = "hi"
         private const val PROBE_MAX_TOKENS = 1
+        private const val REASONING_ENCRYPTED_INCLUDE = "reasoning.encrypted_content"
 
         private fun probeTool() = ResponsesToolDto(
             name = "probe",
@@ -242,6 +274,8 @@ class OpenAiResponsesClient internal constructor(
          * message-элементы, вызовы — `function_call`, результаты —
          * `function_call_output`. Tool-образы следуют отдельным user-элементом
          * (как у chat/completions: у tool-вывода только строковый output).
+         * Reasoning-item'ы хода (`ChatMessage.reasoning.replayJson`) вставляются
+         * ПЕРЕД сообщением ассистента — порядок должен совпадать с выдачей модели.
          */
         internal fun mapResponsesInput(messages: List<ChatMessage>): Pair<String?, List<JsonElement>> {
             val instructions = messages.filter { it.role == ChatRole.SYSTEM }
@@ -253,6 +287,7 @@ class OpenAiResponsesClient internal constructor(
                     ChatRole.SYSTEM -> {}
                     ChatRole.USER -> items += userMessageItem(message)
                     ChatRole.ASSISTANT -> {
+                        items += replayReasoningItems(message)
                         if (message.content.isNotEmpty()) {
                             items += buildJsonObject {
                                 put("role", "assistant")
@@ -308,6 +343,20 @@ class OpenAiResponsesClient internal constructor(
                     })
                 }
             })
+        }
+
+        /**
+         * Reasoning-item'ы хода обратно в input: одно событие `output_item.done`
+         * даёт один объект, несколько — JSON-массив (AgentLoop склеивает через запятую).
+         * Битый JSON игнорируется (replay-оптимизация, не контракт).
+         */
+        private fun replayReasoningItems(message: ChatMessage): List<JsonElement> {
+            val raw = message.reasoning?.replayJson?.takeIf { it.isNotBlank() } ?: return emptyList()
+            val parsed = runCatching { ProviderJson.parseToJsonElement(raw) }.getOrNull() ?: return emptyList()
+            return when (parsed) {
+                is JsonArray -> parsed.filterIsInstance<JsonElement>().toList()
+                else -> listOf(parsed)
+            }
         }
 
         private fun userImagesItem(text: String, images: List<ru.outsideproarts.oassist.core.model.ImagePart>): JsonElement =

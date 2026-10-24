@@ -15,7 +15,26 @@ data class ChatMessage(
     val audio: AudioPart? = null,
     /** Образы к сообщению (только USER/TOOL): скриншоты, вложения Share. Сжатый JPEG, см. ImageCodec. */
     val images: List<ImagePart> = emptyList(),
+    /** Для [ChatRole.ASSISTANT]: мысли модели хода (replay thinking-блоков Anthropic / reasoning-item'ов Responses). */
+    val reasoning: ReasoningBlock? = null,
 )
+
+/**
+ * Мысли модели, привязанные к assistant-сообщению хода.
+ *
+ * [text] — display-текст (полотно «Ход работы») и thinking-блок Anthropic;
+ * [signature] — подпись Anthropic, обязательна при обратной передаче
+ * `thinking`-блока (иначе API 400); [replayJson] — протокольный JSON
+ * reasoning-item'ов OpenAI Responses для stateless-replay.
+ */
+@Serializable
+data class ReasoningBlock(
+    val text: String = "",
+    val signature: String? = null,
+    val replayJson: String? = null,
+) {
+    fun isEmpty(): Boolean = text.isEmpty() && signature == null && replayJson == null
+}
 
 /**
  * Аудио-приложение к user-ходу: WAV 16 кГц моно в base64 (см. `WavEncoder`).

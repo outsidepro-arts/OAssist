@@ -90,4 +90,25 @@ class UsageTest {
         assertEquals(0, state.turns)
         assertTrue(state.isEmpty)
     }
+
+    @Test
+    fun aggregate_sumsTurnsAndSkipsMissingUsage() {
+        val turns = listOf(
+            StoredTurn(userText = "1", usage = ProviderUsage.of(inputTokens = 10, outputTokens = 5, costUsd = 0.2)),
+            StoredTurn(userText = "2"),
+            StoredTurn(userText = "3", usage = ProviderUsage.of(inputTokens = 1, outputTokens = 2)),
+        )
+        val total = aggregateUsage(turns)!!
+        assertEquals(11L, total.inputTokens)
+        assertEquals(7L, total.outputTokens)
+        assertEquals(18L, total.totalTokens)
+        // Cost только у известного хода — не размазываем и не выдумываем.
+        assertEquals(0.2, total.costUsd!!, 1e-9)
+    }
+
+    @Test
+    fun aggregate_noUsageOrNull_isNull() {
+        assertNull(aggregateUsage(emptyList()))
+        assertNull(aggregateUsage(listOf(StoredTurn(userText = "x"))))
+    }
 }

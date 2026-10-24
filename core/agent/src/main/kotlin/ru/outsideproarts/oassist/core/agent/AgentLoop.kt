@@ -38,6 +38,8 @@ class AgentLoop(
     private val events: AgentEvents? = null,
     /** У модели флаг VISION — иначе образы вырезаются с пометкой (провайдеры без vision их отвергают). */
     private val visionEnabled: Boolean = true,
+    /** У модели флаг REASONING — Anthropic шлёт `thinking`, Responses — `reasoning.summary`. */
+    private val reasoningEnabled: Boolean = false,
     private val maxToolRounds: Int = ru.outsideproarts.oassist.core.model.ToolPreferences.DEFAULT_MAX_TOOL_ROUNDS,
     /** Ключ сессии для «разрешено на текущую сессию» (режим: CHAT/ASSISTANT/SHARE). */
     private val sessionScope: String = "CHAT",
@@ -98,21 +100,36 @@ class AgentLoop(
             rounds++
             val toolCalls = mutableListOf<ChatChunk.ToolCall>()
             val contentSb = StringBuilder()
+            // Мысли раунда: живой поток наружу + накопление для
+            // `ChatMessage.reasoning` (replay Anthropic/Responses в истории).
+            val reasoningSb = StringBuilder()
+            var reasoningSignature: String? = null
+            val replayItems = mutableListOf<String>()
 
-            modelClient.chatCompletionStream(
+            val streamRound = modelClient.chatCompletionStream(
                 modelId = modelId,
                 messages = enforceImageBudget(messages),
                 tools = tools,
-            ).retryEarlyFailure(resubscribe = {
+                reasoningEnabled = reasoningEnabled,
+            )
+            streamRound.retryEarlyFailure(resubscribe = {
                 // Та же история/инструменты раунда: модель ещё ничего не прислала.
                 modelClient.chatCompletionStream(
                     modelId = modelId,
                     messages = enforceImageBudget(messages),
                     tools = tools,
+                    reasoningEnabled = reasoningEnabled,
                 )
             }).collect { chunk ->
                 when (chunk) {
                     is ChatChunk.Content -> contentSb.append(chunk.delta)
+                    // Мысли — live (UI показывает процесс размышления), без буферизации.
+                    is ChatChunk.Reasoning -> {
+                        emit(chunk)
+                        if (chunk.delta.isNotEmpty()) reasoningSb.append(chunk.delta)
+                        chunk.signature?.let { reasoningSignature = it }
+                        chunk.replayJson?.let { replayItems += it }
+                    }
                     is ChatChunk.ToolCall -> toolCalls.add(chunk)
                     is ChatChunk.Finish -> {
                         streamAbrupt = chunk.abrupt
@@ -123,6 +140,7 @@ class AgentLoop(
                     is ChatChunk.ToolResult -> {}
                 }
             }
+            val reasoning = buildReasoningBlock(reasoningSb, reasoningSignature, replayItems)
 
             if (toolCalls.isEmpty()) {
                 if (contentSb.isNotEmpty()) emit(ChatChunk.Content(contentSb.toString()))
@@ -130,8 +148,12 @@ class AgentLoop(
                 turnUsage?.let { events?.onTurnUsage(it) }
                 val turn = messages.drop(turnStart).toList()
                 onTurnMessages?.invoke(
-                    if (contentSb.isNotEmpty()) {
-                        turn + ChatMessage(ChatRole.ASSISTANT, contentSb.toString())
+                    if (contentSb.isNotEmpty() || reasoning != null) {
+                        turn + ChatMessage(
+                            role = ChatRole.ASSISTANT,
+                            content = contentSb.toString(),
+                            reasoning = reasoning,
+                        )
                     } else {
                         turn
                     },
@@ -157,6 +179,7 @@ class AgentLoop(
                             argumentsJson = tc.argumentsJson,
                         )
                     },
+                    reasoning = reasoning,
                 ),
             )
 
@@ -219,6 +242,29 @@ class AgentLoop(
             if (chunk is ChatChunk.Content) sb.append(chunk.delta)
         }
         return sb.toString()
+    }
+
+    /**
+     * Reasoning-блок хода из накопленных чанков: текст (display + replay
+     * Anthropic), подпись и JSON reasoning-item'ов Responses (несколько —
+     * склеиваются в массив). Нечего отдавать — null (сообщение без блока).
+     */
+    private fun buildReasoningBlock(
+        text: StringBuilder,
+        signature: String?,
+        replayItems: List<String>,
+    ): ru.outsideproarts.oassist.core.model.ReasoningBlock? {
+        if (text.isEmpty() && signature == null && replayItems.isEmpty()) return null
+        val replayJson = when (replayItems.size) {
+            0 -> null
+            1 -> replayItems.first()
+            else -> replayItems.joinToString(",", "[", "]")
+        }
+        return ru.outsideproarts.oassist.core.model.ReasoningBlock(
+            text = text.toString(),
+            signature = signature,
+            replayJson = replayJson,
+        )
     }
 
     /**
