@@ -15,7 +15,7 @@ import kotlin.coroutines.resume
  * Плеер событийных звуков агента.
  *
  * Правила:
- * - 7 звуков — [SoundPool] (`USAGE_ASSISTANCE_SONIFICATION`): короткие UI-звуки,
+ * - 9 звуков — [SoundPool] (`USAGE_ASSISTANCE_SONIFICATION`): короткие UI-звуки,
  *   играют параллельно, fire-and-forget. Фокус не запрашиваем, беззвучный
  *   режим/DND уважаются самим usage. Независим от [SpeechOutput.stop]:
  *   стоп/бардж-ин озвучки звуки не гасит.
@@ -121,7 +121,8 @@ class AgentSounds(context: Context) {
         AgentSound.PERMISSION_DENIED -> R.raw.permission_denied
         AgentSound.PERMISSION_REQUEST -> R.raw.permission_request
         AgentSound.THINKING -> R.raw.thinking
-        AgentSound.TOOL_CALL -> R.raw.tool_call
+        AgentSound.TOOL_CALL_READ -> R.raw.tool_call_read
+        AgentSound.TOOL_CALL_WRITE -> R.raw.tool_call_write
     }
 
     companion object {

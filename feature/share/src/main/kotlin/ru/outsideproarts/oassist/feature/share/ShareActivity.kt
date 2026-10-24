@@ -344,7 +344,7 @@ private fun ShareFlow(payload: SharePayload) {
                         is ChatChunk.ToolCall -> {
                             timeline.onChunk(chunk)
                             workEvents = timeline.work
-                            sounds?.playIfEnabled(AgentSound.TOOL_CALL, soundsOn)
+                            sounds?.playToolCallIfEnabled(chunk.name, soundsOn)
                         }
                         is ChatChunk.ToolResult -> {
                             timeline.onChunk(chunk)

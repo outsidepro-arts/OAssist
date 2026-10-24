@@ -627,7 +627,7 @@ private var turnTranscript: List<ChatMessage> = emptyList()
                             if (chunk.name == BYE_TOOL_NAME) pendingBye = true
                             timeline.onChunk(chunk)
                             workEvents = timeline.work
-                            sounds?.playIfEnabled(AgentSound.TOOL_CALL, soundEnabled)
+                            sounds?.playToolCallIfEnabled(chunk.name, soundEnabled)
                             refreshSessionNotification()
                         }
                         is ChatChunk.ToolResult -> {

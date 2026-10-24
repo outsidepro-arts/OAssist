@@ -1,5 +1,8 @@
 package ru.outsideproarts.oassist.core.speech
 
+import ru.outsideproarts.oassist.core.model.ToolAccess
+import ru.outsideproarts.oassist.core.model.ToolGroups
+
 /**
  * Событийные звуки агента (ogg в `res/raw`, короткие и тихие).
  * Трекинга повторов нет: звуки подобраны неназойливыми и играют
@@ -14,7 +17,23 @@ enum class AgentSound(val resName: String) {
     PERMISSION_DENIED("permission_denied"),
     PERMISSION_REQUEST("permission_request"),
     THINKING("thinking"),
-    TOOL_CALL("tool_call"),
+    TOOL_CALL_READ("tool_call_read"),
+    TOOL_CALL_WRITE("tool_call_write");
+
+    companion object {
+        /**
+         * Звук вызова тула по его имени: чтение → [TOOL_CALL_READ],
+         * запись → [TOOL_CALL_WRITE] (по группе разрешений [ToolGroups]).
+         * Без класса чтение/запись (MCP, служебные вроде `bye`,
+         * неизвестные) — без звука.
+         */
+        fun toolCallSound(toolName: String): AgentSound? =
+            when (ToolGroups.accessOf(ToolGroups.groupOf(toolName))) {
+                ToolAccess.READ -> TOOL_CALL_READ
+                ToolAccess.WRITE -> TOOL_CALL_WRITE
+                null -> null
+            }
+    }
 }
 
 /**
@@ -29,6 +48,15 @@ interface SoundHandle {
     /** Проиграть, только если сопровождение включено в активном режиме. */
     fun playIfEnabled(sound: AgentSound, enabled: Boolean) {
         if (enabled) play(sound)
+    }
+
+    /**
+     * Звук вызова тула по имени (чтение/запись) — только если
+     * сопровождение включено. Тулы без класса чтение/запись
+     * (MCP/служебные/неизвестные) молчат.
+     */
+    fun playToolCallIfEnabled(toolName: String, enabled: Boolean) {
+        AgentSound.toolCallSound(toolName)?.let { playIfEnabled(it, enabled) }
     }
 
     /**

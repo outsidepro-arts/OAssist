@@ -347,7 +347,7 @@ fun ChatScreen(
                         is ChatChunk.ToolCall -> {
                             timeline.onChunk(chunk)
                             publish(true)
-                            sounds?.playIfEnabled(AgentSound.TOOL_CALL, soundEnabled)
+                            sounds?.playToolCallIfEnabled(chunk.name, soundEnabled)
                         }
                         is ChatChunk.ToolResult -> {
                             timeline.onChunk(chunk)
