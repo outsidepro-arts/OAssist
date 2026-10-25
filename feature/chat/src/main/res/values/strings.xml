@@ -11,7 +11,11 @@
     <string name="chat_mic_denied">Разрешите доступ к микрофону для голосового ввода</string>
     <string name="chat_mic_empty">Не расслышал, повторите</string>
     <string name="chat_mic_error">Ошибка распознавания</string>
-    <string name="chat_hold_hint">Удерживайте кнопку, чтобы говорить</string>
+    <string name="chat_hold_hint">Нажмите для голосового ввода или удерживайте, чтобы говорить</string>
+    <string name="chat_hold_action">Говорить, удерживая кнопку</string>
+    <string name="chat_mic_start">Начать голосовой ввод</string>
+    <string name="chat_mic_stop">Остановить голосовой ввод</string>
+    <string name="chat_mic_idle">Микрофон выключен</string>
     <string name="chat_voice_short">Слишком коротко — удерживайте дольше</string>
     <string name="chat_listening">Слушаю…</string>
     <string name="chat_open_list">Список чатов</string>

@@ -5,7 +5,6 @@ import android.content.pm.PackageManager
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -25,7 +24,6 @@ import androidx.compose.material.icons.filled.ExpandMore
 import androidx.compose.material.icons.filled.Menu
 import androidx.compose.material.icons.filled.Mic
 import androidx.compose.material.icons.filled.Stop
-import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.semantics.LiveRegionMode
 import androidx.compose.ui.semantics.liveRegion
 import androidx.compose.material3.DrawerValue
@@ -108,9 +106,6 @@ data class ChatItem(
     /** Статистика хода (токены/cost от провайдера); null — провайдер не прислал. */
     val usage: ru.outsideproarts.oassist.core.model.ProviderUsage? = null,
 )
-
-/** Холд Send короче — случайный тап: отмена с хинтом, не отправка. */
-private const val HOLD_MIN_MS = 500L
 
 /** Проекция пузыря ленты в историю модели: только основной ответ ассистента —
  * мысль и тулы уже связаны tool-протоколом и не должны дублироваться текстом. */
@@ -206,12 +201,17 @@ fun ChatScreen(
     val holdHintText = stringResource(R.string.chat_hold_hint)
     val voiceShortText = stringResource(R.string.chat_voice_short)
     val listeningText = stringResource(R.string.chat_listening)
+    val holdActionLabel = stringResource(R.string.chat_hold_action)
+    val startVoiceLabel = stringResource(R.string.chat_mic_start)
+    val stopVoiceLabel = stringResource(R.string.chat_mic_stop)
+    val micIdleLabel = stringResource(R.string.chat_mic_idle)
 
     // Голосовой ввод — единый in-app захват (VoiceHandle поверх VoiceListener).
-    // Распознанное НЕ пишется в поле: финал уходит сразу в send(), partials —
+    // Распознанное не пишется в поле; удержание подтверждается отпусканием, partials —
     // только в preview-статус. Порядок: send → слушатель → старт/стоп → mic.
     val voice = remember { VoiceHandle.get() }
     var capturing by remember { mutableStateOf(false) }
+    var holdSession by remember { mutableStateOf<ChatVoiceHoldSession?>(null) }
     LaunchedEffect(voice) {
         voice?.captureState()?.collect { capturing = it is CaptureState.Listening }
     }
@@ -616,21 +616,25 @@ fun ChatScreen(
             wasOnline = online
         }
     }
-    // Слушатель системного STT: финал — сразу в send(), в поле не пишем.
-    fun sttListener(): SttListener = object : SttListener {
+    // Итог удержания отправляется только после принятого отпускания.
+    fun sendRecognizedText(text: String) {
+        if (text.isNotBlank()) {
+            input = TextFieldValue("")
+            send(text)
+        }
+    }
+    fun sttListener(hold: ChatVoiceHoldSession? = null): SttListener = object : SttListener {
         override fun onPartial(text: String) {
             sttPreview = text
         }
 
         override fun onFinal(text: String) {
             sttPreview = ""
-            if (text.isNotBlank()) {
-                input = TextFieldValue("")
-                send(text)
-            }
+            if (hold == null) sendRecognizedText(text) else hold.onFinal(text)?.let(::sendRecognizedText)
         }
 
         override fun onSttError(error: SttError) {
+            hold?.onError()
             sttPreview = ""
             Toast.makeText(
                 context,
@@ -715,34 +719,47 @@ fun ChatScreen(
             micPermissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
             return false
         }
-        if (useRawCapture()) {
+        val hold = ChatVoiceHoldSession(
+            if (useRawCapture()) ru.outsideproarts.oassist.core.speech.CaptureMode.RAW
+            else ru.outsideproarts.oassist.core.speech.CaptureMode.STT,
+        )
+        if (hold.mode == ru.outsideproarts.oassist.core.speech.CaptureMode.RAW) {
             handle.startRaw()?.let { sttErrorToast(it); return false }
         } else {
             if (!handle.isSttAvailable(stt.recognizerComponent)) {
                 sttErrorToast(CaptureError.NO_RECOGNIZER)
                 return false
             }
-            handle.startStt(stt.language, sttListener(), stt.recognizerComponent)
+            handle.startStt(stt.language, sttListener(hold), stt.recognizerComponent)
                 ?.let { sttErrorToast(it); return false }
         }
+        holdSession = hold
         return true
     }
-    // Случайное короткое касание — отмена без шума в эфир.
-    fun cancelHold() {
+    fun cancelHold(tooShort: Boolean) {
         val handle = voice ?: return
-        when ((handle.captureState().value as? CaptureState.Listening)?.mode) {
-            ru.outsideproarts.oassist.core.speech.CaptureMode.STT -> handle.cancelStt()
-            ru.outsideproarts.oassist.core.speech.CaptureMode.RAW -> handle.cancelRaw()
-            null -> Unit
+        val hold = holdSession ?: return
+        holdSession = null
+        if (hold.cancel()) {
+            when (hold.mode) {
+                ru.outsideproarts.oassist.core.speech.CaptureMode.STT -> handle.cancelStt()
+                ru.outsideproarts.oassist.core.speech.CaptureMode.RAW -> handle.cancelRaw()
+            }
         }
         sttPreview = ""
-        Toast.makeText(context, holdHintText, Toast.LENGTH_SHORT).show()
+        if (tooShort) Toast.makeText(context, voiceShortText, Toast.LENGTH_SHORT).show()
     }
     // Отпускание холда: STT — финал придёт колбэком, RAW — забираем WAV.
     fun stopHold() {
         val handle = voice ?: return
-        when ((handle.captureState().value as? CaptureState.Listening)?.mode) {
-            ru.outsideproarts.oassist.core.speech.CaptureMode.STT -> handle.stopStt()
+        val hold = holdSession ?: return
+        holdSession = null
+        when (hold.mode) {
+            ru.outsideproarts.oassist.core.speech.CaptureMode.STT -> {
+                val finalText = hold.release()
+                if (finalText != null) sendRecognizedText(finalText)
+                else if (hold.captureActive) handle.stopStt()
+            }
             ru.outsideproarts.oassist.core.speech.CaptureMode.RAW -> {
                 val wav = handle.stopRaw()
                 if (wav == null) {
@@ -755,16 +772,12 @@ fun ChatScreen(
                     )
                 }
             }
-            null -> Unit
         }
     }
 
     LaunchedEffect(messages.size) {
         if (messages.isNotEmpty()) listState.animateScrollToItem(messages.size - 1)
     }
-    // Метка последнего холда: клик сразу после удержания — эхо onClick, игнор.
-    var lastHoldEnd by remember { mutableStateOf(0L) }
-
     ModalNavigationDrawer(
         drawerState = drawerState,
         drawerContent = {
@@ -938,20 +951,40 @@ fun ChatScreen(
                         Icons.AutoMirrored.Filled.Send
                     }
                 }
-                IconButton(
+                ChatInputButton(
+                    icon = actionIcon,
+                    label = if (input.text.isBlank() && !isStreaming && !capturing) {
+                        "$micLabel. $holdHintText"
+                    } else {
+                        actionContent
+                    },
+                    holdLabel = holdActionLabel,
+                    canStartHold = input.text.isBlank() && !isStreaming && !capturing,
+                    holdEnabled = !isStreaming && (input.text.isBlank() || capturing),
+                    onHoldStart = ::startHold,
+                    onHoldRelease = ::stopHold,
+                    onHoldCancel = ::cancelHold,
+                    voiceActionLabel = if (!isStreaming && (input.text.isBlank() || capturing)) {
+                        if (capturing) stopVoiceLabel else startVoiceLabel
+                    } else {
+                        null
+                    },
+                    voiceStateLabel = if (!isStreaming && (input.text.isBlank() || capturing)) {
+                        if (capturing) listeningText else micIdleLabel
+                    } else {
+                        null
+                    },
                     onClick = {
                         if (isStreaming) {
                             // Стоп: отмена коллекции снимает стрим, паузу подтверждения и HTTP-запрос.
                             // Озвучку тоже гасим (barge-in): недоговорённое не должно дочитываться.
                             // Без job — снимает ожидание сети (см. cancelTurn).
                             cancelTurn()
-                            return@IconButton
+                            return@ChatInputButton
                         }
-                        // Эхо клика после холда — игнор.
-                        if (System.currentTimeMillis() - lastHoldEnd < 300L) return@IconButton
                         if (capturing) {
                             toggleSttMic()
-                            return@IconButton
+                            return@ChatInputButton
                         }
                         if (input.text.isNotBlank()) {
                             val userMsg = input.text.trim()
@@ -962,36 +995,7 @@ fun ChatScreen(
                             toggleSttMic()
                         }
                     },
-                    modifier = Modifier
-                        .oassistTouchTarget()
-                        .pointerInput(input.text.isBlank(), isStreaming, capturing) {
-                            detectTapGestures(
-                                onPress = {
-                                    if (input.text.isBlank() && !isStreaming && !capturing && startHold()) {
-                                        val downAt = System.currentTimeMillis()
-                                        tryAwaitRelease()
-                                        lastHoldEnd = System.currentTimeMillis()
-                                        // Случайный короткий тап — отмена с хинтом, не «не расслышал».
-                                        if (System.currentTimeMillis() - downAt < HOLD_MIN_MS) {
-                                            cancelHold()
-                                        } else {
-                                            stopHold()
-                                        }
-                                    }
-                                },
-                            )
-                        },
-                ) {
-                    Icon(
-                        imageVector = actionIcon,
-                        contentDescription = if (input.text.isBlank() && !isStreaming && !capturing) {
-                            // Подсказка холда вслух; имя «Голосовой ввод» — в toggle-пути.
-                            "$micLabel. $actionContent"
-                        } else {
-                            actionContent
-                        },
-                    )
-                }
+                )
             }
         }
         }
