@@ -13,14 +13,14 @@
 
 ```bat
 .\gradlew.bat :app:compileDebugKotlin          :: компиляция графа модулей
-.\gradlew.bat testDebugUnitTest --no-daemon     :: юнит-тесты (только с --no-daemon!)
+.\gradlew.bat testDebugUnitTest                 :: юнит-тесты
 .\gradlew.bat :<module>:lintDebug               :: Android Lint
 .\gradlew.bat :app:assembleDebug                :: отладочный APK
 ```
 
-Юнит-тесты **обязательно** запускать с `--no-daemon` — без него прогоны зависают на Windows. Тяжёлые задачи (`assemble*`, `lint*`, полные прогоны) удобно гонять detached-скриптом из [`tools/README.md`](tools/README.md).
+Сборка использует штатные Gradle/Kotlin daemon и параллельное выполнение проектов. Необязательные синхронные обёртки и локальная диагностика OpenCode описаны в [`tools/README.md`](tools/README.md).
 
-Не используйте нестандартные флаги `--offline`, `--no-build-cache` и `clean` — они ломают кэш и зависают сборку (см. `AGENTS.md`).
+`clean`, `--offline` и `--no-build-cache` применяйте для конкретной задачи; они не требуются перед обычной сборкой и не диагностируют зависание агентского клиента.
 
 ## Правила изменений
 
@@ -34,7 +34,7 @@
 
 ## Definition of Done
 
-1. Юнит-тесты зелёные (`testDebugUnitTest --no-daemon`), линт зелёный (`lintDebug`).
+1. Юнит-тесты зелёные (`testDebugUnitTest`), линт зелёный (`lintDebug`).
 2. Строки ru + en, без хардкода в UI.
 3. TalkBack-проход по затронутым экранам.
 4. Секреты не попадают в логи, историю, экспорт и бэкапы.

@@ -16,76 +16,48 @@
 
 ## Стек и инструменты
 
-| Инструмент | Путь / версия |
+| Инструмент | Выбор |
 |---|---|
-| Android SDK | `c:\dev\android-sdk` |
-| Gradle | `c:\dev\gradle\gradle-9.4.1` |
-| JDK | `c:\dev\jdk\jdk-21.0.10+7` (проверено 2026-10-02: `bin\java.exe` именно там; сам `c:\dev\jdk` — только контейнер) |
-| Kotlin | `c:\dev\kotlin\kotlinc` |
-| Все тулчейны | `c:\dev\*` |
+| Android SDK | `ANDROID_HOME` или `sdk.dir` в локальном `local.properties` |
+| Gradle | Gradle Wrapper проекта |
+| JDK | Совместимый JDK (минимум 17), `JAVA_HOME` или `java` из `PATH` |
+| Kotlin | Версия из `gradle/libs.versions.toml`, запускается через Gradle |
 
 Сборка — через Gradle Wrapper проекта (`gradlew.bat`). **Никогда** не используйте глобальные `gradle`/`mvn` без необходимости.
 
-## Стратегия проверок: точечные билды, а не APK
+## Сборка и проверки
 
-`assembleDebug` собирает APK целиком (30–90 с, плодит Kotlin compile daemon). **Контрольный (финальный) `assembleDebug` выполняет только пользователь вручную — агент не запускает его никогда** (ни синхронно, ни фоном, ни через `tools/run-build.ps1`), включая верификацию Milestone и сборку артефакта. Гейты агента: точечные таски + юнит-тесты + линт. Для итераций над кодом используем **точечные** таски, которые проверяют корректность кода без APK:
+Gradle и Kotlin используют штатные демоны; Gradle выбирает число workers по доступным
+процессорам. Параллельное выполнение проектов и build cache включены. Постоянно живущий
+демон после завершения команды — штатное поведение, а не доказательство зависания.
 
-```bat
-gradlew.bat :module:compileDebugKotlin          : REM компиляция Kotlin (включая KSP) одного модуля
-gradlew.bat :module:compileDebugUnitTestKotlin  : REM то же + testSources
-gradlew.bat :module:testDebugUnitTest --no-daemon           : REM юнит-тесты модуля (JVM), ТОЛЬКО с --no-daemon
-gradlew.bat :app:compileDebugKotlin             : REM компиляция всего графа (без APK)
-gradlew.bat :module:lintDebug                   : REM Android Lint (поверх скомпилированного)
+```powershell
+.\gradlew.bat :module:compileDebugKotlin
+.\gradlew.bat :module:testDebugUnitTest
+.\gradlew.bat :module:lintDebug
+.\gradlew.bat :app:assembleDebug
 ```
 
-**Юнит-тесты — только с `--no-daemon`.** Без него прогоны виснут/убиваются harness'ом (`ChildProcess.kill`, прецедент 2026-10-04: `testDebugUnitTest` без флага умирал, с флагом — зелёный). Запрет импровизации `--offline`/`--no-build-cache` остаётся в силе; `--no-daemon` — не импровизация, а обязательный флаг для тестов (и допустим для `assembleDebug`).
+Для небольших правок выбирайте затронутые модули. Изменения общей сборки проверяйте
+через `:app:assembleDebug`, `testDebugUnitTest` и `lintDebug`. Агент может собирать APK.
+На Unix используйте `./gradlew`.
 
-Типичный цикл правки: **правка → `:module:compileDebugKotlin` + `:module:testDebugUnitTest --no-daemon` (5–15 с) + `:module:lintDebug` → контрольный `:app:assembleDebug` выполняет пользователь вручную (агент не запускает)**.
-
-**Защита от зомби-демонов.** Каждый запуск `compileDebugKotlin` поднимает Kotlin compile daemon (живёт 2 ч). При «прерванных» билдах daemon остаётся висеть → следующие билды стартуют медленнее или зависают на старте. Перед большим билдом или если предыдущий был прерван:
-
-```bat
-gradlew.bat --stop                              : REM остановить Gradle daemon
-for /f "tokens=2 delims=," %i in ('tasklist /fi "imagename eq java.exe" /fo csv /nh ^| findstr KotlinCompileDaemon') do taskkill /pid %i /f
-```
-
-Ключевой признак зомби: `tasklist | findstr java` показывает несколько `java.exe` с `-Xmx4g` и `KotlinCompileDaemon` в командной строке. Достаточно оставить один процесс — Gradle daemon (`gradle --status` → `IDLE`).
-
-**Дисциплина длинных команд (урок инцидента 2026-10-02).** Инструментальный вызов, который молчит дольше пары минут, неотличим от зависания — ни для пользователя, ни для агента. Правила:
-
-- **Никакого `| Select-Object -Last` на длинных вызовах.** Пайп буферизует весь вывод до завершения процесса. Длинный Gradle-запуск — только фоном с перенаправлением в файл и опросом:
-  ```powershell
-  $env:JAVA_HOME='C:\dev\jdk\jdk-21.0.10+7'; $env:ANDROID_HOME='c:\dev\android-sdk'; $env:ANDROID_SDK_ROOT='c:\dev\android-sdk'
-  $p = Start-Process -FilePath .\gradlew.bat -ArgumentList ':app:assembleDebug','--console=plain' -RedirectStandardOutput C:\Users\denis\AppData\Local\Temp\opencode\build-log.txt -RedirectStandardError C:\Users\denis\AppData\Local\Temp\opencode\build-err.txt -NoNewWindow -PassThru
-  ```
-  затем опросами `Get-Content <лог> -Tail 30` и проверкой живости `Get-Process -Id $p.Id`. Один инструментальный вызов — одна быстрая операция (старт или опрос), никаких многоминутных блокировок.
-- **Разграничение «агент vs человек» (урок 2026-10-04).** Фон+poll через `Start-Process` — только для ручных запусков из живой консоли: harness убивает фоновые обёртки внутри инструментального вызова (`ChildProcess.kill`, проверено — демон при этом выживает и добегает). Агентские прогоны — всегда синхронно, с явным таймаутом под задачу (`compile`/`test` модуля — от 120 с, `lint` — от 300 с; `assembleDebug` агенту запрещён — контрольную сборку делает пользователь).
-- **Никаких импровизированных флагов в агентских прогонах (урок 2026-10-04).** `--offline` и `--no-build-cache` в руках агента запрещены: они форсируют полное перевыполнение самой тяжёлой фазы (`processDebugManifestForPackage` → ресурсы → dex → package), раздувают вывод и вешают синхронный вызов вместе со всей сессией (прецедент: `assembleDebug --offline --no-build-cache` встал на `processDebugManifestForPackage`, сессия остекленела целиком, демон при этом остался здоров — все 11 билдов `Received`/`Finishing` сбалансированы, APK 72 МБ собрался). Полный `assembleDebug` — только вручную пользователем (контрольная сборка); агенту запрещён и этот запуск.
-- **Никакого `clean` для диагностики.** На Windows `clean` хрупок: `Unable to delete ... classes.jar` — файл держат индексатор IDE / Defender / параллельный Gradle (прецедент 2026-10-02: `clean` упал за 2 с на `:core:model:clean`, оставив проект в полуснесённом состоянии). Остатки удаляются точечно, по одному файлу/каталогу, и только после `gradlew --stop` при закрытой Android Studio.
-- **Переменные окружения — только через `$env:` в PowerShell.** Конструкция `cmd /c "set A=... && ..."` не работает (в PowerShell 5.1 нет `&&`); путь JDK содержит `+`, что дополнительно ломает bat-проверки `if exist` при передаче через `cmd /c`.
-- **Перед разрушительными операциями — проверить чужую активность:** `gradlew --status` + `tasklist /fi "imagename eq java.exe"`. Параллельный актор (IDE-синк, вторая сессия) + файловые локи = рецидив 2026-10-02 (чужие билды в логе демона за минуты до падения).
-- **Диагностика «висит ли билд» — по логу демона, а не по молчанию инструмента:** `C:\Users\<user>\.gradle\daemon\<gradle-ver>\daemon-<pid>.out.log`. Маркеры: `Received command: Build` (старт), `BUILD FAILED/SUCCESSFUL` (итог), `Finishing executing command` (результат отдан клиенту — дальше Gradle ни при чём, смотреть клиент/пайп/harness), `Stop ... not running a build` (демона остановил чужой `--stop`).
-
-## Сборка и тесты (Windows, минимизация JVM)
-
-- Синхронно разрешены только быстрые задачи: `:<module>:compileDebugKotlin`,
-  `:<module>:testDebugUnitTest`, таймаут ≤ 300000 мс.
-- Тяжёлые задачи (`assemble*`, `lint*`, полные прогоны) — **только** через
-  `tools/run-build.ps1 start|status|stop` (detached + polling). Никогда не запускать
-  их одним синхронным tool-call'ом.
-- Перед любой сборкой — `tools/run-build.ps1 clean-orphans` (убивает Gradle/Kotlin daemon'ы,
-  оставшиеся от предыдущих запусков, через `taskkill /T /F`).
-- `org.gradle.jvmargs` и `GRADLE_OPTS` (в `tools/run-*.ps1`) обязаны совпадать
-  **в точности** — только так сборка идёт в клиентском JVM без single-use daemon.
-  В составе строки обязательны `-Xms64m` (gradlew.bat добавляет
-  `DEFAULT_JVM_OPTS="-Xmx64m" "-Xms64m"`) и `--add-modules=ALL-DEFAULT`
-  (java.exe этого JDK инжектирует флаг в каждый запуск). Меняете одно —
-  меняйте оба, иначе вернётся форк single-use daemon и сироты при kill.
-- `org.gradle.internal.instrumentation.agent=false` — обязателен (клиент gradlew
-  запущен без `-javaagent`, иначе mismatch agent-статуса форкает single-use daemon).
-- `kotlin.compiler.execution.strategy=in-process` — обязателен.
-- Скрипты в `tools/` пишем ASCII-only: Windows PowerShell 5.1 читает `.ps1`
-  без BOM как ANSI, em-dash/кириллица ломают парсер.
+- Запускайте Wrapper синхронно с потоковым выводом либо перенаправляйте вывод в лог,
+  сохраняя настоящий код завершения. Выбирайте timeout инструмента по длительности
+  задачи; отсутствие вывода само по себе не доказывает зависание.
+- Скрипты `tools/run-build.ps1` и `tools/run-tests.ps1` — необязательные синхронные
+  обёртки. Они наследуют окружение, не завершают демоны и возвращают код Gradle.
+- Не завершайте все Java/Gradle/Kotlin-процессы перед сборкой. При проблеме сначала
+  определите конкретный процесс и причину. `gradlew --stop` затрагивает демоны той же
+  версии Gradle, поэтому перед ручной остановкой проверьте другие активные сборки.
+- Ограничения workers/памяти и обходы особенностей файловой системы задавайте локально
+  в `GRADLE_USER_HOME/gradle.properties`, а не в общих настройках репозитория.
+- Не подгоняйте `GRADLE_OPTS` под JVM-аргументы сборки и не отключайте Gradle/Kotlin
+  daemon ради особенностей агентского клиента. Диагностика OpenCode описана в
+  `tools/README.md`.
+- `clean`, `--offline` и `--no-build-cache` используйте для конкретной задачи,
+  а не как обязательную подготовку или случайный способ лечения зависания клиента.
+- Скрипты в `tools/` сохраняйте ASCII-only для совместимости с Windows PowerShell 5.1.
 
 ## Архитектура
 

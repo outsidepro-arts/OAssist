@@ -217,7 +217,7 @@ feature/
 
 ```bat
 .\gradlew.bat :app:compileDebugKotlin
-.\gradlew.bat testDebugUnitTest --no-daemon
+.\gradlew.bat testDebugUnitTest
 .\gradlew.bat lintDebug
 ```
 
@@ -231,7 +231,7 @@ feature/
 
 Для сборки подписанного релизного APK (`:app:assembleRelease`) требуется файл `keystore.properties` в корне проекта (для генерации ключа предусмотрен скрипт `tools/gen-keystore.ps1`). Без него релизная сборка сформирует неподписанный пакет.
 
-Подробности (detached-запуск тяжёлых задач, релиз, тесты) — в [`tools/README.md`](tools/README.md).
+Подробности (обёртки запуска, релиз, тесты и локальная диагностика OpenCode) — в [`tools/README.md`](tools/README.md).
 
 ## Настройка после установки
 
