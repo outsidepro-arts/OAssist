@@ -14,12 +14,14 @@ import android.media.MediaRecorder
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
+import android.provider.Settings
 import android.speech.RecognitionListener
 import android.speech.RecognizerIntent
 import android.speech.SpeechRecognizer
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import ru.outsideproarts.oassist.core.model.OAssistLog
 import java.util.ArrayList
 import kotlin.concurrent.thread
 
@@ -49,10 +51,12 @@ class VoiceListener(
     // ---- STT ----
 
     private var recognizer: SpeechRecognizer? = null
+    private var recognizerComponent: ComponentName? = null
     private val sttGate = SttCallbackGate()
     private val retryHandler = Handler(Looper.getMainLooper())
     private var pendingRetry: Runnable? = null
     private var sttSession: SttSession? = null
+    private var sttProxy: SttProxy? = null
 
     /**
      * Фокус на время слушания: GAIN_TRANSIENT — speech-контент (TalkBack) прерывает речь,
@@ -125,37 +129,26 @@ class VoiceListener(
     }
 
     /**
-     * Одна попытка старта движка. Повторяемые отказы (звук ещё занят TTS, см. [SttStartPolicy])
-     * уходят в отложенный повтор; финальные — наружу через [SttListener.onSttError].
+     * Одна попытка старта движка. Повторяемые отказы уходят в отложенный повтор;
+     * финальные — наружу через SttListener.onSttError.
      */
     private fun startSttAttempt(startSession: SttSession, isFirst: Boolean): CaptureError? {
         startSession.hadPartial = false
-        // Гасим колбэки предыдущего движка до его отмены: cancel/destroy шлёт запоздалые onError.
         val token = sttGate.newSession()
         return try {
-            recognizer?.cancel()
-            recognizer?.destroy()
             val intent = Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
                 putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
                 putExtra(RecognizerIntent.EXTRA_LANGUAGE, startSession.language)
                 putExtra(RecognizerIntent.EXTRA_PARTIAL_RESULTS, true)
                 putExtra(RecognizerIntent.EXTRA_MAX_RESULTS, 1)
             }
-            val engine = SpeechRecognizer.createSpeechRecognizer(context, startSession.component)
-                .also { recognizer = it }
-            engine.setRecognitionListener(
-                SttProxy(
-                    listener = startSession.listener,
-                    isActive = { sttGate.isActive(token) },
-                    onPartialSeen = { startSession.hadPartial = true },
-                    onErrorIntercept = { error -> handleAsyncError(startSession, error) },
-                    onDone = { finishSttSession() },
-                ),
-            )
+            val engine = recognizerFor(startSession.component)
+            engine.setRecognitionListener(SttProxy(startSession, token).also { sttProxy = it })
             engine.startListening(intent)
             _state.value = CaptureState.Listening(CaptureMode.STT, System.currentTimeMillis())
             null
         } catch (e: Exception) {
+            releaseRecognizer()
             handleSyncError(startSession, CaptureError.INIT_FAILED, isFirst)
         }
     }
@@ -208,6 +201,8 @@ class VoiceListener(
     }
 
     private fun scheduleRetry(startSession: SttSession, delayMs: Long) {
+        sttGate.invalidate()
+        detachSttProxy()
         cancelPendingRetry()
         val runnable = Runnable {
             pendingRetry = null
@@ -224,14 +219,23 @@ class VoiceListener(
     }
 
     private fun finishSttSession() {
+        sttGate.invalidate()
+        detachSttProxy()
+        cancelPendingRetry()
         sttSession = null
         session.reset()
         _state.value = CaptureState.Idle
         listenFocus.close()
     }
 
+    private fun detachSttProxy() {
+        sttProxy?.detach()
+        sttProxy = null
+    }
+
     /** Попросить финал (придёт в onFinal). В покое — no-op. */
     fun stopStt() {
+        if (sttSession == null) return
         if (pendingRetry != null) {
             val startSession = sttSession
             cancelPendingRetry()
@@ -242,16 +246,43 @@ class VoiceListener(
         runCatching { recognizer?.stopListening() }
     }
 
-    /** Жёсткая отмена без финала. */
+    /** Жёсткая отмена без финала и без общих callback со следующим захватом. */
     fun cancelStt() {
         cancelPendingRetry()
         sttGate.invalidate()
-        runCatching {
-            recognizer?.cancel()
-            recognizer?.destroy()
+        if (sttSession != null) {
+            runCatching { recognizer?.cancel() }
+            releaseRecognizer()
         }
-        recognizer = null
         finishSttSession()
+    }
+
+    /** Освободить распознаватель, когда владелец VoiceListener больше не нужен. */
+    fun close() {
+        cancelRaw()
+        cancelStt()
+        releaseRecognizer()
+    }
+
+    private fun recognizerFor(component: ComponentName?): SpeechRecognizer {
+        // В SDK нет константы этого ключа; Android читает его при подключении default.
+        val identity = component ?: runCatching {
+            Settings.Secure.getString(context.contentResolver, "voice_recognition_service")
+                ?.let(ComponentName::unflattenFromString)
+        }.getOrNull()
+        recognizer?.let { if (identity != null && recognizerComponent == identity) return it }
+        releaseRecognizer()
+        return SpeechRecognizer.createSpeechRecognizer(context, component).also {
+            recognizer = it
+            recognizerComponent = identity
+        }
+    }
+
+    private fun releaseRecognizer() {
+        val previous = recognizer
+        recognizer = null
+        recognizerComponent = null
+        runCatching { previous?.destroy() }
     }
 
     // ---- RAW ----
@@ -361,13 +392,14 @@ class VoiceListener(
         _state.value = CaptureState.Idle
     }
 
-    private class SttProxy(
-        private val listener: SttListener,
-        private val isActive: () -> Boolean,
-        private val onPartialSeen: () -> Unit,
-        private val onErrorIntercept: (SttError) -> Boolean,
-        private val onDone: () -> Unit,
+    private inner class SttProxy(
+        private var target: SttSession?,
+        private val token: Int,
     ) : RecognitionListener {
+        fun detach() {
+            target = null
+        }
+
         override fun onReadyForSpeech(params: Bundle?) = Unit
         override fun onBeginningOfSpeech() = Unit
         override fun onRmsChanged(rmsdB: Float) = Unit
@@ -376,27 +408,36 @@ class VoiceListener(
         override fun onEvent(eventType: Int, params: Bundle?) = Unit
 
         override fun onPartialResults(partialResults: Bundle?) {
-            if (!isActive()) return
+            if (!sttGate.isActive(token)) return
+            val capture = target ?: return
             val text = partialResults
                 ?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)
                 ?.firstOrNull()?.trim().orEmpty()
             if (text.isNotEmpty()) {
-                onPartialSeen()
-                listener.onPartial(text)
+                capture.hadPartial = true
+                capture.listener.onPartial(text)
             }
         }
 
         override fun onResults(results: Bundle?) {
-            if (!isActive()) return
+            if (!sttGate.isActive(token)) return
+            val capture = target ?: return
             val text = results
                 ?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)
                 ?.firstOrNull()?.trim().orEmpty()
-            if (text.isNotEmpty()) listener.onFinal(text) else listener.onSttError(SttError.NO_SPEECH)
-            onDone()
+            finishSttSession()
+            if (text.isNotEmpty()) capture.listener.onFinal(text)
+            else capture.listener.onSttError(SttError.NO_SPEECH)
         }
 
         override fun onError(error: Int) {
-            if (!isActive()) return
+            if (!sttGate.isActive(token)) return
+            val capture = target ?: return
+            OAssistLog.info("OAssistStt", "Recognition error code=$error attempt=${capture.attempt}")
+            if (error == SpeechRecognizer.ERROR_SERVER_DISCONNECTED ||
+                error == SpeechRecognizer.ERROR_CLIENT ||
+                error == SpeechRecognizer.ERROR_TOO_MANY_REQUESTS
+            ) releaseRecognizer()
             val mapped = when (error) {
                 SpeechRecognizer.ERROR_SPEECH_TIMEOUT,
                 SpeechRecognizer.ERROR_NO_MATCH -> SttError.NO_SPEECH
@@ -404,12 +445,13 @@ class VoiceListener(
                 SpeechRecognizer.ERROR_SERVER -> SttError.NETWORK
                 SpeechRecognizer.ERROR_AUDIO,
                 SpeechRecognizer.ERROR_CLIENT,
-                SpeechRecognizer.ERROR_RECOGNIZER_BUSY -> SttError.BUSY
+                SpeechRecognizer.ERROR_RECOGNIZER_BUSY,
+                SpeechRecognizer.ERROR_SERVER_DISCONNECTED -> SttError.BUSY
                 else -> SttError.UNKNOWN
             }
-            if (onErrorIntercept(mapped)) return
-            listener.onSttError(mapped)
-            onDone()
+            if (handleAsyncError(capture, mapped)) return
+            finishSttSession()
+            capture.listener.onSttError(mapped)
         }
     }
 }
