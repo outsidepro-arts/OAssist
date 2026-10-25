@@ -67,6 +67,7 @@ import ru.outsideproarts.oassist.core.model.TtsConfig
 import ru.outsideproarts.oassist.core.speech.SpeechHandle
 import ru.outsideproarts.oassist.core.speech.VoiceInfo
 import ru.outsideproarts.oassist.core.speech.TtsEngineInfo
+import ru.outsideproarts.oassist.core.speech.RecognitionServiceInfo
 import ru.outsideproarts.oassist.core.speech.voiceLanguageTags
 import ru.outsideproarts.oassist.core.ui.OAssistDimens
 import ru.outsideproarts.oassist.core.ui.components.OAssistLiveStatus
@@ -95,6 +96,8 @@ fun ModeConfigScreen(
     loadEngines: suspend () -> List<TtsEngineInfo> = { emptyList() },
     /** Голоса движка (`null` — привязанный/дефолт); пусто — только голос по умолчанию. */
     loadVoices: suspend (enginePackage: String?) -> List<VoiceInfo> = { emptyList() },
+    /** Установленные Android RecognitionService. */
+    loadRecognitionServices: () -> List<RecognitionServiceInfo> = { emptyList() },
     /** Дефолтный промпт режима из assets в языке приложения; пусто — недоступен. */
     loadDefaultPrompt: suspend () -> String = { "" },
 ) {
@@ -143,6 +146,8 @@ fun ModeConfigScreen(
     val baseStt = config.effectiveStt()
     var sttEngine by remember { mutableStateOf(baseStt.engine) }
     var sttLanguage by remember { mutableStateOf(baseStt.language) }
+    var sttRecognizerComponent by remember { mutableStateOf(baseStt.recognizerComponent) }
+    var recognitionServices by remember { mutableStateOf(emptyList<RecognitionServiceInfo>()) }
     var engines by remember { mutableStateOf(emptyList<TtsEngineInfo>()) }
     var voices by remember { mutableStateOf(emptyList<VoiceInfo>()) }
     var engineExpanded by remember { mutableStateOf(false) }
@@ -184,9 +189,13 @@ fun ModeConfigScreen(
         val stt = config.effectiveStt()
         sttEngine = stt.engine
         sttLanguage = stt.language
+        sttRecognizerComponent = stt.recognizerComponent
     }
     LaunchedEffect(Unit) {
         engines = runCatching { loadEngines() }.getOrElse { emptyList() }
+    }
+    LaunchedEffect(mode) {
+        recognitionServices = loadRecognitionServices()
     }
     // Дефолтный промпт — из assets в языке приложения (см. AppGraph.defaultPromptText).
     LaunchedEffect(mode) {
@@ -545,6 +554,12 @@ fun ModeConfigScreen(
                 onEngineChange = { sttEngine = it },
                 language = sttLanguage,
                 onLanguageChange = { sttLanguage = it },
+                recognizerComponent = sttRecognizerComponent,
+                onRecognizerComponentChange = { sttRecognizerComponent = it },
+                recognitionServices = recognitionServices,
+                onRefreshRecognitionServices = {
+                    recognitionServices = loadRecognitionServices()
+                },
             )
 
             OAssistSectionHeading(text = stringResource(R.string.mode_sounds_title))
@@ -615,6 +630,7 @@ fun ModeConfigScreen(
                             stt = SttConfig(
                                 engine = sttEngine,
                                 language = sttLanguage.ifBlank { SttConfig.DEFAULT.language },
+                                recognizerComponent = sttRecognizerComponent,
                             ),
                             soundEnabled = soundEnabled,
                             autoSaveChats = autoSaveChats,
@@ -1052,6 +1068,10 @@ private fun SttSection(
     onEngineChange: (SttEngine) -> Unit,
     language: String,
     onLanguageChange: (String) -> Unit,
+    recognizerComponent: String?,
+    onRecognizerComponentChange: (String?) -> Unit,
+    recognitionServices: List<RecognitionServiceInfo>,
+    onRefreshRecognitionServices: () -> Unit,
 ) {
     val groupLabel = stringResource(R.string.mode_stt_title)
     val options = listOf(
@@ -1098,6 +1118,68 @@ private fun SttSection(
         style = MaterialTheme.typography.bodySmall,
         color = MaterialTheme.colorScheme.onSurfaceVariant,
     )
+    val recognizerLabel = stringResource(R.string.mode_stt_recognizer)
+    val defaultRecognizerLabel = stringResource(R.string.mode_stt_recognizer_default)
+    val missingRecognizerLabel = stringResource(R.string.mode_stt_recognizer_missing)
+    val unavailableRecognizerLabel = stringResource(R.string.mode_stt_recognizer_unavailable)
+    val selectedRecognizer = recognitionServices.firstOrNull {
+        it.componentName == recognizerComponent
+    }
+    val selectedRecognizerLabel = when {
+        recognizerComponent == null -> defaultRecognizerLabel
+        selectedRecognizer != null -> selectedRecognizer.label
+        else -> missingRecognizerLabel
+    }
+    var recognizerExpanded by remember { mutableStateOf(false) }
+    ExposedDropdownMenuBox(
+        expanded = recognizerExpanded,
+        onExpandedChange = { recognizerExpanded = it },
+    ) {
+        OutlinedTextField(
+            value = selectedRecognizerLabel,
+            onValueChange = {},
+            label = { Text(recognizerLabel) },
+            readOnly = true,
+            trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = recognizerExpanded) },
+            modifier = Modifier
+                .fillMaxWidth()
+                .menuAnchor(ExposedDropdownMenuAnchorType.PrimaryNotEditable)
+                .oassistDropdownClassName()
+                .oassistTouchTarget(),
+        )
+        ExposedDropdownMenu(
+            expanded = recognizerExpanded,
+            onDismissRequest = { recognizerExpanded = false },
+        ) {
+            DropdownMenuItem(
+                text = { Text(defaultRecognizerLabel) },
+                onClick = {
+                    onRecognizerComponentChange(null)
+                    recognizerExpanded = false
+                },
+                modifier = Modifier.oassistTouchTarget(),
+            )
+            recognitionServices.forEach { service ->
+                DropdownMenuItem(
+                    text = { Text(service.label) },
+                    onClick = {
+                        onRecognizerComponentChange(service.componentName)
+                        recognizerExpanded = false
+                    },
+                    modifier = Modifier.oassistTouchTarget(),
+                )
+            }
+        }
+    }
+    if (recognizerComponent != null && selectedRecognizer == null) {
+        OAssistLiveStatus(text = unavailableRecognizerLabel)
+    }
+    TextButton(
+        onClick = onRefreshRecognitionServices,
+        modifier = Modifier.oassistTouchTarget(),
+    ) {
+        Text(stringResource(R.string.mode_stt_recognizer_refresh))
+    }
     val sttLangLabel = stringResource(R.string.field_mode_stt_lang)
     OutlinedTextField(
         value = language,

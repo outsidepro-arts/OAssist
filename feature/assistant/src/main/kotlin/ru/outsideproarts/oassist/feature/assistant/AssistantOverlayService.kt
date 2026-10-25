@@ -119,6 +119,7 @@ private var turnTranscript: List<ChatMessage> = emptyList()
     private var listening = false
 
     private var sttLanguage: String = "ru-RU"
+    private var sttRecognizerComponent: String? = null
     private var continueDialog: Boolean = false
     private var showOverlay: Boolean = true
     private var soundEnabled: Boolean = true
@@ -279,6 +280,7 @@ private var turnTranscript: List<ChatMessage> = emptyList()
             AgentFactory.get().modeConfig(AssistMode.ASSISTANT)
         }.getOrNull() ?: return
         sttLanguage = config.effectiveStt().language
+        sttRecognizerComponent = config.effectiveStt().recognizerComponent
         continueDialog = config.assistant?.continueDialog ?: false
         // showOverlay фиксируется при старте сессии: решение «окно или уведомление» структурное,
         // переключение посреди сессии смешивало бы два UI (панель + живое уведомление).
@@ -460,7 +462,7 @@ private var turnTranscript: List<ChatMessage> = emptyList()
             // Запоздавший StartStt (быстрый toggle) не должен поднимать микрофон поверх нового состояния.
             if (voiceFlow.state.value !is AssistVoiceState.Listening) return@launch
             val handle = voice
-            if (handle == null || !handle.isSttAvailable()) {
+            if (handle == null || !handle.isSttAvailable(sttRecognizerComponent)) {
                 hintText = getString(R.string.assistant_no_recognizer)
                 voiceFlow.onSttStartFailed()
                 refreshSessionNotification(force = true)
@@ -475,7 +477,7 @@ private var turnTranscript: List<ChatMessage> = emptyList()
             hintText = null
             // Тишина нашего TTS перед стартом: движок распознавания падает поверх звука.
             speech?.stop()
-            val error = handle.startStt(sttLanguage, sttListener())
+            val error = handle.startStt(sttLanguage, sttListener(), sttRecognizerComponent)
             if (error != null) {
                 hintText = sttErrorText(error)
                 voiceFlow.onSttStartFailed()

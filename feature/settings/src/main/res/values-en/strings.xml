@@ -156,6 +156,11 @@
     <string name="mode_stt_model_audio">Model audio</string>
     <string name="mode_stt_model_audio_hint">Requires the model’s AUDIO_IN flag, otherwise falls back to text recognition</string>
     <string name="mode_stt_language">Recognition language</string>
+    <string name="mode_stt_recognizer">Speech recognizer</string>
+    <string name="mode_stt_recognizer_default">System default</string>
+    <string name="mode_stt_recognizer_missing">Unavailable</string>
+    <string name="mode_stt_recognizer_unavailable">Selected recognizer is unavailable; using the system default</string>
+    <string name="mode_stt_recognizer_refresh">Refresh recognizer list</string>
 
     <!-- Approvals -->
     <string name="approvals_title">Confirmations</string>

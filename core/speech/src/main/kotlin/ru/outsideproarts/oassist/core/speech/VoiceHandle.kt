@@ -9,9 +9,9 @@ import kotlinx.coroutines.flow.StateFlow
  */
 interface VoiceHandle {
     fun captureState(): StateFlow<CaptureState>
-    fun isSttAvailable(): Boolean
+    fun isSttAvailable(recognizerComponent: String? = null): Boolean
 
-    fun startStt(language: String, listener: SttListener): CaptureError?
+    fun startStt(language: String, listener: SttListener, recognizerComponent: String? = null): CaptureError?
     fun stopStt()
     fun cancelStt()
 

@@ -663,10 +663,10 @@ fun ChatScreen(
     ) { granted ->
         if (granted) {
             val handle = voice
-            if (handle == null || !handle.isSttAvailable()) {
+            if (handle == null || !handle.isSttAvailable(stt.recognizerComponent)) {
                 sttErrorToast(CaptureError.NO_RECOGNIZER)
             } else {
-                handle.startStt(stt.language, sttListener())?.let { sttErrorToast(it) }
+                handle.startStt(stt.language, sttListener(), stt.recognizerComponent)?.let { sttErrorToast(it) }
             }
         } else {
             Toast.makeText(context, micDeniedText, Toast.LENGTH_LONG).show()
@@ -689,14 +689,14 @@ fun ChatScreen(
                 }
             }
             else -> {
-                if (!handle.isSttAvailable()) {
+                if (!handle.isSttAvailable(stt.recognizerComponent)) {
                     sttErrorToast(CaptureError.NO_RECOGNIZER)
                     return
                 }
                 if (context.checkSelfPermission(Manifest.permission.RECORD_AUDIO) ==
                     PackageManager.PERMISSION_GRANTED
                 ) {
-                    handle.startStt(stt.language, sttListener())?.let { sttErrorToast(it) }
+                    handle.startStt(stt.language, sttListener(), stt.recognizerComponent)?.let { sttErrorToast(it) }
                 } else {
                     micPermissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
                 }
@@ -718,11 +718,12 @@ fun ChatScreen(
         if (useRawCapture()) {
             handle.startRaw()?.let { sttErrorToast(it); return false }
         } else {
-            if (!handle.isSttAvailable()) {
+            if (!handle.isSttAvailable(stt.recognizerComponent)) {
                 sttErrorToast(CaptureError.NO_RECOGNIZER)
                 return false
             }
-            handle.startStt(stt.language, sttListener())?.let { sttErrorToast(it); return false }
+            handle.startStt(stt.language, sttListener(), stt.recognizerComponent)
+                ?.let { sttErrorToast(it); return false }
         }
         return true
     }

@@ -1,6 +1,7 @@
 package ru.outsideproarts.oassist.core.speech
 
 import android.Manifest
+import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
@@ -28,13 +29,18 @@ import kotlin.concurrent.thread
  * Один захват за раз (guard — [VoiceCaptureSession]); состояние — в [state]
  * для иконок/индикаторов UI. Все методы вызывать с главного потока.
  */
-class VoiceListener(private val context: Context) {
+class VoiceListener(
+    private val context: Context,
+    private val recognitionServices: RecognitionServiceCatalog = RecognitionServiceCatalog(context),
+) {
 
     private val session = VoiceCaptureSession()
     private val _state = MutableStateFlow<CaptureState>(CaptureState.Idle)
     val state: StateFlow<CaptureState> = _state.asStateFlow()
 
-    fun isSttAvailable(): Boolean = SpeechRecognizer.isRecognitionAvailable(context)
+    fun isSttAvailable(recognizerComponent: String? = null): Boolean =
+        recognitionServices.resolveComponent(recognizerComponent) != null ||
+            SpeechRecognizer.isRecognitionAvailable(context)
 
     private fun hasMicPermission(): Boolean =
         context.checkSelfPermission(Manifest.permission.RECORD_AUDIO) ==
@@ -82,6 +88,7 @@ class VoiceListener(private val context: Context) {
     private class SttSession(
         val language: String,
         val listener: SttListener,
+        val component: ComponentName?,
         var attempt: Int = 1,
         var hadPartial: Boolean = false,
     )
@@ -90,17 +97,22 @@ class VoiceListener(private val context: Context) {
      * Начать системное распознавание. Частичные результаты — в [listener],
      * финал — тоже (там же снимать [state]). Возвращает причину отказа.
      */
-    fun startStt(language: String, listener: SttListener): CaptureError? {
+    fun startStt(
+        language: String,
+        listener: SttListener,
+        recognizerComponent: String? = null,
+    ): CaptureError? {
         session.start(CaptureMode.STT)?.let { return it }
         if (!hasMicPermission()) {
             session.reset()
             return CaptureError.NO_PERMISSION
         }
-        if (!isSttAvailable()) {
+        val component = recognitionServices.resolveComponent(recognizerComponent)
+        if (component == null && !SpeechRecognizer.isRecognitionAvailable(context)) {
             session.reset()
             return CaptureError.NO_RECOGNIZER
         }
-        val startSession = SttSession(language, listener)
+        val startSession = SttSession(language, listener, component)
         sttSession = startSession
         // Фокус берём до старта захвата и держим через все retry-попытки одной сессии.
         listenFocus.open()
@@ -129,7 +141,8 @@ class VoiceListener(private val context: Context) {
                 putExtra(RecognizerIntent.EXTRA_PARTIAL_RESULTS, true)
                 putExtra(RecognizerIntent.EXTRA_MAX_RESULTS, 1)
             }
-            val engine = SpeechRecognizer.createSpeechRecognizer(context).also { recognizer = it }
+            val engine = SpeechRecognizer.createSpeechRecognizer(context, startSession.component)
+                .also { recognizer = it }
             engine.setRecognitionListener(
                 SttProxy(
                     listener = startSession.listener,

@@ -805,6 +805,7 @@ private fun OAssistApp(
                     },
                     loadVoices = { pkg -> graph.speechOutput.availableVoices(pkg) },
                     loadEngines = { graph.speechOutput.availableEngines() },
+                    loadRecognitionServices = { graph.recognitionServices.availableServices() },
                     onBack = { navController.popBackStack() },
                 )
             }

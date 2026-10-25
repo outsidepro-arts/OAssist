@@ -161,7 +161,11 @@ class ProviderConfigCodecTest {
     fun modeConfig_stt_roundTripAndLegacyDefault() {
         val config = ModeConfig(
             mode = AssistMode.CHAT,
-            stt = SttConfig(engine = SttEngine.MODEL_AUDIO, language = "en-US"),
+            stt = SttConfig(
+                engine = SttEngine.MODEL_AUDIO,
+                language = "en-US",
+                recognizerComponent = "org.example.speech/org.example.speech.CustomRecognitionService",
+            ),
         )
 
         val decoded = json.decodeFromString<ModeConfig>(json.encodeToString(config))
@@ -171,6 +175,17 @@ class ProviderConfigCodecTest {
         val legacy = json.decodeFromString<ModeConfig>("""{"mode":"CHAT"}""")
         assertEquals(null, legacy.stt)
         assertEquals(SttConfig.DEFAULT, legacy.effectiveStt())
+    }
+
+    @Test
+    fun modeConfig_legacySttWithoutRecognizer_usesSystemDefault() {
+        val legacy = json.decodeFromString<ModeConfig>(
+            """{"mode":"ASSISTANT","stt":{"engine":"SYSTEM","language":"ru-RU"}}""",
+        )
+
+        assertEquals(SttEngine.SYSTEM, legacy.effectiveStt().engine)
+        assertEquals("ru-RU", legacy.effectiveStt().language)
+        assertEquals(null, legacy.effectiveStt().recognizerComponent)
     }
 
     @Test

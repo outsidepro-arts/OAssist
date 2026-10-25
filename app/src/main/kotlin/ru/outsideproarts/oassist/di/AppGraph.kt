@@ -261,9 +261,18 @@ class AppGraph private constructor(context: Context) {
         ru.outsideproarts.oassist.core.agent.WebRenderActions(appContext, foregroundRunner)
     }
 
+    val recognitionServices: ru.outsideproarts.oassist.core.speech.RecognitionServiceCatalog by lazy {
+        ru.outsideproarts.oassist.core.speech.RecognitionServiceCatalog(
+            appContext,
+            excludedComponents = setOf(
+                android.content.ComponentName(appContext, ru.outsideproarts.oassist.vis.OAssistRecognitionService::class.java),
+            ),
+        )
+    }
+
     /** Захват микрофона: PTT/тап UI и голосовые тулы агента поверх одного слушателя. */
     val voiceListener: ru.outsideproarts.oassist.core.speech.VoiceListener by lazy {
-        ru.outsideproarts.oassist.core.speech.VoiceListener(appContext)
+        ru.outsideproarts.oassist.core.speech.VoiceListener(appContext, recognitionServices)
     }
 
     /** Контроллер голосовых тулов (`voice_listen_start/stop`, всегда STT-режим). */
@@ -478,9 +487,13 @@ class AppGraph private constructor(context: Context) {
         })
         ru.outsideproarts.oassist.core.speech.VoiceHandle.register(object : ru.outsideproarts.oassist.core.speech.VoiceHandle {
             override fun captureState() = voiceListener.state
-            override fun isSttAvailable(): Boolean = voiceListener.isSttAvailable()
-            override fun startStt(language: String, listener: ru.outsideproarts.oassist.core.speech.SttListener) =
-                voiceListener.startStt(language, listener)
+            override fun isSttAvailable(recognizerComponent: String?): Boolean =
+                voiceListener.isSttAvailable(recognizerComponent)
+            override fun startStt(
+                language: String,
+                listener: ru.outsideproarts.oassist.core.speech.SttListener,
+                recognizerComponent: String?,
+            ) = voiceListener.startStt(language, listener, recognizerComponent)
             override fun stopStt() = voiceListener.stopStt()
             override fun cancelStt() = voiceListener.cancelStt()
             override fun startRaw(maxSec: Int) = voiceListener.startRaw(maxSec)

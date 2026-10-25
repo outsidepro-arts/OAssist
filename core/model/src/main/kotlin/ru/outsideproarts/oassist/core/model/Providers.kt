@@ -92,6 +92,7 @@ enum class SttEngine {
 data class SttConfig(
     val engine: SttEngine = SttEngine.SYSTEM,
     val language: String = "ru-RU",
+    val recognizerComponent: String? = null,
 ) {
     companion object {
         val DEFAULT = SttConfig()

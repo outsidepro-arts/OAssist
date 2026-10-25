@@ -156,6 +156,11 @@
     <string name="mode_stt_model_audio">Аудио модели</string>
     <string name="mode_stt_model_audio_hint">Нужен флаг AUDIO_IN у модели, иначе — распознавание в текст</string>
     <string name="mode_stt_language">Язык распознавания</string>
+    <string name="mode_stt_recognizer">Распознаватель речи</string>
+    <string name="mode_stt_recognizer_default">Системный по умолчанию</string>
+    <string name="mode_stt_recognizer_missing">Недоступен</string>
+    <string name="mode_stt_recognizer_unavailable">Выбранный распознаватель недоступен; используется системный по умолчанию</string>
+    <string name="mode_stt_recognizer_refresh">Обновить список распознавателей</string>
 
     <!-- Подтверждения -->
     <string name="approvals_title">Подтверждения</string>
