@@ -12,9 +12,14 @@ $root      = Split-Path -Parent $PSScriptRoot
 $dir       = Join-Path $root 'keystore'
 $keyStore  = Join-Path $dir 'oassist-release.jks'
 $props     = Join-Path $root 'keystore.properties'
-$keytool   = Join-Path $env:JAVA_HOME 'bin\keytool.exe'
-if (-not (Test-Path $keytool)) { $keytool = 'C:\dev\jdk\jdk-21.0.10+7\bin\keytool.exe' }
-if (-not (Test-Path $keytool)) { throw 'keytool.exe not found (set JAVA_HOME)' }
+$keytool   = if ($env:JAVA_HOME) {
+  Join-Path $env:JAVA_HOME.Trim('"') 'bin\keytool.exe'
+} else {
+  (Get-Command keytool.exe -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1).Source
+}
+if (-not $keytool -or -not (Test-Path -LiteralPath $keytool -PathType Leaf)) {
+  throw 'keytool.exe not found (set JAVA_HOME or add the JDK bin directory to PATH)'
+}
 
 if ((Test-Path $keyStore) -and (Test-Path $props)) {
   "keystore already exists: $keyStore"

@@ -1,6 +1,7 @@
 param(
   [Parameter(Mandatory)][ValidateSet('start','status','stop','clean-orphans','release','verify-release')][string]$Action,
-  [string]$Task = ':app:assembleDebug'
+  [string]$Task = ':app:assembleDebug',
+  [string]$SdkRoot
 )
 
 $root = Split-Path -Parent $PSScriptRoot
@@ -36,9 +37,6 @@ switch ($Action) {
     # MUST match org.gradle.jvmargs exactly (see gradle.properties) - otherwise
     # Gradle forks a single-use daemon instead of building in the client JVM.
     $env:GRADLE_OPTS  = "-Xmx4g -Xms64m -XX:MaxMetaspaceSize=1g -Dfile.encoding=UTF-8 -XX:+HeapDumpOnOutOfMemoryError --add-modules=ALL-DEFAULT"
-    $env:JAVA_HOME    = 'C:\dev\jdk\jdk-21.0.10+7'
-    $env:ANDROID_HOME = 'c:\dev\android-sdk'
-    $env:ANDROID_SDK_ROOT = 'c:\dev\android-sdk'
 
     $cmd = "`"`"$root\gradlew.bat`" $Task --no-daemon --console=plain > `"$log`" 2> `"$err`"`""
     $p = Start-Process -FilePath $env:ComSpec `
@@ -67,8 +65,13 @@ switch ($Action) {
   'verify-release' {
     $apk = Join-Path $root 'app\build\outputs\apk\release\app-release.apk'
     if (-not (Test-Path $apk)) { throw "APK not found: $apk (run 'release' first)" }
-    $sdk = if ($env:ANDROID_HOME) { $env:ANDROID_HOME } else { 'c:\dev\android-sdk' }
-    $bt  = Join-Path $sdk 'build-tools'
+    # Gradle also accepts sdk.dir in local.properties; pass -SdkRoot here in that case.
+    if (-not $SdkRoot) { $SdkRoot = $env:ANDROID_HOME }
+    if (-not $SdkRoot) { $SdkRoot = $env:ANDROID_SDK_ROOT }
+    if (-not $SdkRoot) {
+      throw 'Android SDK not configured: set ANDROID_HOME (or ANDROID_SDK_ROOT), or pass -SdkRoot to verify-release'
+    }
+    $bt  = Join-Path $SdkRoot 'build-tools'
     $ver = Get-ChildItem $bt -Directory -ErrorAction SilentlyContinue |
              Where-Object { $_.Name -match '^\d+(\.\d+)*$' } |
              Sort-Object { [version]$_.Name } | Select-Object -Last 1

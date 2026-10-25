@@ -11,9 +11,6 @@ Get-CimInstance Win32_Process -Filter "Name='java.exe'" |
 # MUST match org.gradle.jvmargs exactly (see gradle.properties) - otherwise
 # Gradle forks a single-use daemon instead of building in the client JVM.
 $env:GRADLE_OPTS = "-Xmx4g -Xms64m -XX:MaxMetaspaceSize=1g -Dfile.encoding=UTF-8 -XX:+HeapDumpOnOutOfMemoryError --add-modules=ALL-DEFAULT"
-$env:JAVA_HOME   = 'C:\dev\jdk\jdk-21.0.10+7'
-$env:ANDROID_HOME = 'c:\dev\android-sdk'
-$env:ANDROID_SDK_ROOT = 'c:\dev\android-sdk'
 
 $log = Join-Path $env:TEMP 'opencode\gradle-tests.log'
 New-Item -ItemType Directory -Force -Path (Split-Path $log) | Out-Null
