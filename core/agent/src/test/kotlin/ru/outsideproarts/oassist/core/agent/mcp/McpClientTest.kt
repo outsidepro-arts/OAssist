@@ -4,6 +4,7 @@ import io.ktor.client.HttpClient
 import io.ktor.client.engine.mock.MockEngine
 import io.ktor.client.engine.mock.respond
 import io.ktor.http.HttpStatusCode
+import io.ktor.http.content.TextContent
 import io.ktor.http.headersOf
 import kotlinx.coroutines.awaitCancellation
 import kotlinx.coroutines.runBlocking
@@ -207,5 +208,29 @@ class McpClientTest {
         mcp.callTool("read", JsonObject(emptyMap()))
         // initialize + initialized + tools/list + tools/call.
         assertEquals(listOf(false, false, false, true), flags)
+    }
+
+    @Test
+    fun requestBodies_carryJsonrpcVersion() = runBlocking {
+        // Регресс wire-контракта: JSON-RPC 2.0 требует "jsonrpc":"2.0" в каждом
+        // запросе; encodeDefaults=false молча его вырезал (равен дефолту DTO),
+        // и строгий сервер отвечал 400 Validation error на initialize.
+        val bodies = mutableListOf<String>()
+        val engine = MockEngine { request ->
+            bodies.add((request.body as TextContent).text)
+            respond(
+                """{"jsonrpc":"2.0","id":1,"result":{}}""",
+                HttpStatusCode.OK,
+                headersOf(
+                    "Content-Type" to listOf("application/json"),
+                    McpClient.SESSION_HEADER to listOf("sess-1"),
+                ),
+            )
+        }
+        client(engine).listTools()
+        val initialize = bodies.first()
+        assertTrue(initialize, initialize.contains(""""jsonrpc":"2.0""""))
+        assertTrue(initialize, initialize.contains(""""method":"initialize""""))
+        assertTrue(initialize, initialize.contains(""""capabilities":{}"""))
     }
 }

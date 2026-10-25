@@ -15,6 +15,9 @@ internal val McpJson: Json = Json {
     isLenient = true
     coerceInputValues = true
     explicitNulls = false
+    // Без этого jsonrpc="2.0" и capabilities={} (значения-равные-дефолту)
+    // не уходят на wire — строгий сервер отвечает 400 Validation error.
+    encodeDefaults = true
 }
 
 /** JSON-RPC 2.0 поверх Streamable HTTP (один объект на запрос/ответ). */
