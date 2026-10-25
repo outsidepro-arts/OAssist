@@ -202,7 +202,7 @@ feature/
 
 ### Требования
 
-* **JDK:** 21
+* **JDK:** совместимый с Gradle Wrapper и Android Gradle Plugin проекта (минимум 17). Wrapper использует `JAVA_HOME` или `java` из `PATH`; конкретная установка JDK в проекте не закреплена.
 
 
 * **Android SDK:** API 36

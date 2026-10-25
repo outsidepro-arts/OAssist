@@ -6,7 +6,7 @@
 
 ## Требования
 
-* **JDK 21**, Android SDK (API 36), Gradle Wrapper проекта (`gradlew.bat` — не глобальный `gradle`).
+* **Совместимый JDK (минимум 17)**, Android SDK (API 36), Gradle Wrapper проекта (`gradlew.bat` — не глобальный `gradle`). JDK выбирается через `JAVA_HOME` или `java` из `PATH`, без общего абсолютного пути и фиксации конкретной установки.
 * Только **Kotlin**. Без Java, reflection-based DI и аннотационных процессоров, кроме Room (KSP).
 
 ## Сборка и проверки
