@@ -1,65 +1,97 @@
-# tools/ — управляемый запуск сборок (Windows)
+# tools/ — запуск сборок (Windows)
 
-Проблема: на Windows каждая Gradle-сборка порождает несколько JVM (single-use daemon,
-Kotlin daemon, тестовая JVM). При жёстком таймауте tool-call’а они остаются висеть
-и удерживают handles — вызов никогда не завершается. Поэтому тяжёлые задачи
-запускаются detached, а завершение отслеживается опросом.
+Основной интерфейс сборки — Gradle Wrapper. Скрипты здесь служат необязательными
+синхронными обёртками: показывают вывод Gradle, ждут завершения и возвращают его код.
+Они наследуют JDK/SDK и GRADLE_OPTS из окружения, не завершают другие процессы.
 
-## Тяжёлые задачи (`assemble*`, `lint*`, полные прогоны)
-
-```powershell
-.\tools\run-build.ps1 clean-orphans            # убить сирот-демонов перед запуском
-.\tools\run-build.ps1 start -Task ':app:assembleDebug'
-.\tools\run-build.ps1 status                   # опрос: pid/alive + хвост лога
-.\tools\run-build.ps1 stop                     # tree-kill (taskkill /T /F)
-```
-
-Лог: `%TEMP%\opencode\gradle-build.log` (stdout), `gradle-build.err.log` (stderr).
-
-Порядок: `clean-orphans` → `start` → отдельными tool-call’ами `status` каждые 30–60 с
-до `BUILD SUCCESSFUL`/`BUILD FAILED` → при необходимости `stop` → контроль сирот.
-
-**Никогда не запускать `assemble*`/`lint*` одним синхронным tool-call’ом** —
-он молчит дольше пары минут, harness убивает процесс, а JVM-сироты остаются.
-
-## Релиз (подписанный APK)
+## Сборка и тесты
 
 ```powershell
-.\tools\gen-keystore.ps1                 # один раз: keystore/ + keystore.properties (в .gitignore)
-.\tools\run-build.ps1 clean-orphans
-.\tools\run-build.ps1 release             # detached :app:assembleRelease (подпись из keystore.properties)
-.\tools\run-build.ps1 status              # опрос до BUILD SUCCESSFUL
-.\tools\run-build.ps1 verify-release      # apksigner verify --print-certs
+.\gradlew.bat :app:assembleDebug
+.\gradlew.bat testDebugUnitTest
+.\gradlew.bat lintDebug
+
+.\tools\run-build.ps1
+.\tools\run-build.ps1 start -Task ':app:lintDebug'
+.\tools\run-tests.ps1 -Tasks ':core:agent:testDebugUnitTest'
+.\tools\run-tests.ps1 -Tasks ':core:model:testDebugUnitTest', ':core:data:testDebugUnitTest'
 ```
 
-APK: `app\build\outputs\apk\release\app-release.apk`. Пароли и ключ — только в
-`keystore.properties`/`keystore/`, в git не попадают; без них Gradle собирает
-релиз **без подписи** (с warning). Перед релизом прогнать линт:
-`.\tools\run-build.ps1 start -Task ':app:lintDebug'`.
+Обёртки выбирают корень проекта независимо от текущего каталога. На Unix используйте
+`./gradlew` напрямую.
 
-**Ключ потерял — апдейты подписать нельзя** (подпись v2/v3 приложения должна
-совпадать): бэкапить `keystore/` и `keystore.properties` вне репозитория.
+Действия `status`, `stop`, `clean-orphans` и параметр `-TimeoutSec` удалены:
+сборка выполняется в текущем вызове, без фонового процесса и PID-файлов.
+Timeout настраивается у вызывающего инструмента. Принудительное завершение всех
+Gradle/Kotlin daemon перед запуском больше не выполняется.
 
-## Юнит-тесты (короткие задачи)
+## Релиз
 
 ```powershell
-.\tools\run-tests.ps1 -Tasks ':core:agent:testDebugUnitTest' -TimeoutSec 300
+.\tools\gen-keystore.ps1
+.\tools\run-build.ps1 release
+.\tools\run-build.ps1 verify-release
 ```
 
-Синхронно, с таймаутом и tree-kill по его истечении; сироты-демоны чистятся до запуска.
-Лог: `%TEMP%\opencode\gradle-tests.log`.
+Команда `release` по-прежнему требует `keystore.properties`. Прямой вызов
+`gradlew.bat :app:assembleRelease` без этого файла формирует неподписанный APK.
+Логика ключей и подписи не менялась.
 
-## Почему настроено так
+`verify-release` выбирает SDK через `-SdkRoot`, затем `ANDROID_HOME` и
+`ANDROID_SDK_ROOT`. Если Gradle настроен только через `sdk.dir` в
+`local.properties`, передайте тот же SDK через `-SdkRoot`.
 
-- Сборка идёт **в клиентском JVM** (ноль форк-демонов). Для этого
-  `org.gradle.jvmargs` в `gradle.properties` и `GRADLE_OPTS` в этих скриптах
-  обязаны совпадать **в точности** — иначе Gradle форкает single-use daemon
-  (docs: "If the JAVA_OPTS and GRADLE_OPTS match org.gradle.jvmargs, the Daemon
-  will not be used at all"). Состав строки не случаен:
-  - `-Xms64m` — `gradlew.bat` всегда добавляет `DEFAULT_JVM_OPTS="-Xmx64m" "-Xms64m"`;
-  - `--add-modules=ALL-DEFAULT` — `java.exe` этого JDK инжектирует флаг в каждый запуск;
-  - `org.gradle.internal.instrumentation.agent=false` — клиент запущен без
-    `-javaagent`, без этого флага mismatch agent-статуса форкает single-use daemon.
-- `org.gradle.daemon=false`, `kotlin.compiler.execution.strategy=in-process`,
-  `options.fork = false`, `maxParallelForks = 1` — минимум JVM на сборку.
-- Запрещено: `--offline`, `--no-build-cache`, `clean` (см. AGENTS.md).
+APK: `app/build/outputs/apk/release/app-release.apk`.
+Храните резервные копии ключа и `keystore.properties` вне Git.
+
+## Настройки выполнения
+
+Gradle и Kotlin используют штатные демоны. Параллельное выполнение проектов и build
+cache включены; число workers выбирает Gradle по доступным процессорам.
+Лимиты heap/metaspace сохранены. Configuration cache не включается принудительно:
+его совместимость с полным набором задач требует отдельной проверки.
+
+Личные ограничения памяти/workers задавайте в `GRADLE_USER_HOME/gradle.properties`.
+Файловое наблюдение использует стандартную политику Gradle. При ошибках watcher на
+неподдерживаемой файловой системе (например, ReFS/Dev Drive) можно локально задать:
+
+```properties
+org.gradle.vfs.watch=false
+```
+
+Согласовывать JVM-аргументы клиента с аргументами демона не требуется.
+Живые демоны после завершения сборки предназначены для повторного использования.
+
+## Локальная диагностика OpenCode
+
+Ранние ограничения сборки были обходами проблем инструментальных вызовов OpenCode
+на Windows. Они не являются требованиями проекта. Сначала сравните ту же команду
+в обычной PowerShell и в OpenCode, запишите версию клиента и его логи.
+
+Если Gradle уже завершился, а OpenCode ждёт вывод команды, проверьте перенаправление
+stdout/stderr в файл. Например, следующий локальный .ps1 запускается из корня проекта
+и сохраняет код завершения:
+
+```powershell
+cmd.exe /d /c '.\gradlew.bat :app:assembleDebug --console=plain > "%TEMP%\oassist-build.log" 2>&1 < NUL'
+$code = $LASTEXITCODE
+Get-Content -LiteralPath "$env:TEMP\oassist-build.log" -Tail 20 -Encoding utf8
+exit $code
+```
+
+Это диагностический обход, а не подтверждённое исправление backend OpenCode.
+При нескольких одновременных проверках используйте разные файлы логов.
+
+В OpenCode 1.19.4 timeout shell-команды по умолчанию равен двум минутам. Увеличивайте
+timeout именно вызова сборки. Локальная переменная
+`OPENCODE_EXPERIMENTAL_BASH_DEFAULT_TIMEOUT_MS` задаёт значение по умолчанию;
+Desktop должен унаследовать её при запуске. Это не таймаут запроса к модели.
+
+Если перестаёт отвечать весь backend, отдельно проверяйте плагины и watcher OpenCode.
+В личном конфиге поддерживаются `shell: "pwsh"` и `watcher.ignore` с шаблонами
+`**/build/**`, `**/.gradle/**`, `**/.kotlin/**`. Не меняйте все параметры одновременно.
+
+Источники: [OpenCode 1.19.4 shell](https://github.com/anomalyco/opencode/blob/v1.19.4/packages/opencode/src/tool/shell.ts),
+[конфигурация OpenCode](https://opencode.ai/docs/config/),
+[диагностика OpenCode](https://opencode.ai/docs/troubleshooting/),
+[Gradle file system watching](https://docs.gradle.org/current/userguide/file_system_watching.html).
