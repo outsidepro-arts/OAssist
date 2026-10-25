@@ -37,6 +37,9 @@
          сторонние синтезаторы (RHVoice и др.) из списка пропадают. -->
     <queries>
         <intent>
+            <action android:name="android.speech.RecognitionService" />
+        </intent>
+        <intent>
             <action android:name="android.intent.action.TTS_SERVICE" />
         </intent>
         <!-- app_list: видимость приложений с launcher-ярлыками (паттерн лаунчеров,
