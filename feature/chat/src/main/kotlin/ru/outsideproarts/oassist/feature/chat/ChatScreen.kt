@@ -662,9 +662,12 @@ fun ChatScreen(
         ActivityResultContracts.RequestPermission(),
     ) { granted ->
         if (granted) {
-            voice?.takeIf { it.isSttAvailable() }?.startStt(stt.language, sttListener())
-                ?.let { sttErrorToast(it) }
-                ?: voice?.let { sttErrorToast(CaptureError.NO_RECOGNIZER) }
+            val handle = voice
+            if (handle == null || !handle.isSttAvailable()) {
+                sttErrorToast(CaptureError.NO_RECOGNIZER)
+            } else {
+                handle.startStt(stt.language, sttListener())?.let { sttErrorToast(it) }
+            }
         } else {
             Toast.makeText(context, micDeniedText, Toast.LENGTH_LONG).show()
         }
