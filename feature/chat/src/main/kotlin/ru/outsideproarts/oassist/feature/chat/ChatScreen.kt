@@ -44,6 +44,7 @@ import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -180,6 +181,9 @@ fun ChatScreen(
     var pendingApproval by viewModel::pendingApproval
     // Скоуп сессии: корутины чата не прерываются при уходе на вкладку настроек.
     val scope = viewModel.scope
+    // UI-скоуп композиции: только для анимаций Compose (drawerState.open/close).
+    // У viewModel.scope нет MonotonicFrameClock, анимация из него падает.
+    val uiScope = rememberCoroutineScope()
     val listState = rememberLazyListState()
 
     val netHandle = remember { ru.outsideproarts.oassist.core.net.NetworkHandle.get() }
@@ -513,7 +517,7 @@ fun ChatScreen(
                 loadTurnsIntoUi(turns)
             }
         }
-        scope.launch { drawerState.close() }
+        uiScope.launch { drawerState.close() }
     }
 
     /**
@@ -534,7 +538,7 @@ fun ChatScreen(
 
     fun startNewChat() {
         resetChat()
-        scope.launch { drawerState.close() }
+        uiScope.launch { drawerState.close() }
     }
 
     /** Сохранить текущий несохранённый диалог в список (со всеми ходами). */
@@ -793,7 +797,7 @@ fun ChatScreen(
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 IconButton(
-                    onClick = { scope.launch { drawerState.open() } },
+                    onClick = { uiScope.launch { drawerState.open() } },
                     modifier = Modifier.oassistTouchTarget(),
                 ) {
                     Icon(
