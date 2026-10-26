@@ -54,6 +54,9 @@ rg -n -F "Выбор RecognitionService" docs/history/development-log-2026-10-26
 
 ## Последующие записи
 
+- [Rebase runtime-промптов, 2026-10-27](runtime-prompts-rebase-2026-10-27.md) —
+  сохранение трёх патчей поверх нового master, повторная проверка и граница build-доступа.
+
 - [Squash-интеграция unprivileged-ветки, 2026-10-27](unprivileged-integration-2026-10-27.md) —
   итоговый объём, проверка совместно со звуками записи и ограничения устройства.
 
