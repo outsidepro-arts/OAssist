@@ -6,7 +6,7 @@
 
 Проект ориентирован на личное использование, распространяется вне Google Play и разработан с жестким соблюдением стандартов доступности для программ экранного доступа (TalkBack).
 
-> **О разработке:** Проект создан методом вайбкодинга (AI-assisted development) в связке с ИИ-агентами. Архитектурные инварианты, правила доступности и история инженерных решений фиксируются прямо в репозитории (`AGENTS.md`, `MEMORY.md`), что позволяет агентам вести разработку последовательно, с соблюдением строгих требований к коду и тестам.
+> **О разработке:** Проект создан при помощи ИИ-агентов. Актуальные инструкции находятся в [`AGENTS.md`](AGENTS.md), действующее состояние проекта и открытые вопросы — в [`MEMORY.md`](MEMORY.md), подробная история решений — в [`docs/history/README.md`](docs/history/README.md). Архив сохраняет контекст прошлых решений; перед задачей достаточно прочитать относящиеся к ней разделы.
 
 ## Примеры запросов
 
@@ -104,7 +104,7 @@
 * Использование `input tap/swipe/keyevent` в качестве резервного механизма жестов.
 
 
-* Автоматический обход ограничений фонового запуска Activity на прошивках MIUI / HyperOS.
+* На MIUI/HyperOS приложение обнаруживает ограничение фонового запуска Activity и показывает команду для включения разрешения. Разрешение настраивается пользователем через Shizuku или ADB; автоматический обход не гарантируется.
 
 
 
@@ -114,7 +114,7 @@
 * **MCP-клиент:** подключение внешних серверов по протоколу Model Context Protocol (Streamable HTTP, поддержка Bearer-авторизации и пользовательских заголовков).
 
 
-* **Долговременная память (`MEMORY.md`):** агент может сохранять, читать и удалять факты о пользователе между сессиями.
+* **Долговременная память ассистента:** агент может сохранять, читать и удалять факты о пользователе между сессиями. Эти данные хранятся приложением отдельно от проектных файлов [`MEMORY.md`](MEMORY.md) и [`docs/history/README.md`](docs/history/README.md).
 
 
 * **Навыки (`Skills`):** подключаемые инструкции в формате Markdown, которые пользователь может создавать и переключать в настройках, а агент — подгружать по необходимости.
@@ -271,11 +271,11 @@ feature/
 
 * **Three modes** — Assistant (overlay panel or notification mode, continuous voice dialog), Chat (local history with fuzzy search, auto-titling, reasoning stream, token/cost stats) and Share (text, images, files from other apps). Each mode has its own provider, model, system prompt and speech settings.
 * **Providers** — any OpenAI-compatible API (Completions / Responses), Anthropic (`/v1/messages`, extended thinking), Google Gemini, and the OpenCode aggregator with automatic per-model protocol routing. No hardcoded model lists: models are fetched from the provider or entered manually. Vision and audio input supported.
-* **55 built-in tools** across three privilege tiers: system intents (calls, SMS, alarms, calendar, apps, notifications, media, web search/fetch), Accessibility UI automation (screen snapshot, taps, text input, scrolling, screenshots, hidden node actions) and privileged shell commands via Shizuku / Root. Plus an MCP client, long-term memory and Markdown skills.
+* **50+ built-in tools** across three privilege tiers: system intents (calls, SMS, alarms, calendar, apps, notifications, media, web search/fetch), Accessibility UI automation (screen snapshot, taps, text input, scrolling, screenshots, hidden node actions) and privileged shell commands via Shizuku / Root. Plus an MCP client, long-term memory and Markdown skills.
 * **Accessibility-first** — full TalkBack support (WCAG 2.2), two independent speech streams (answer TTS or screen reader, work narration), audio focus handling, optional sound effects.
 * **Security** — secrets encrypted with Android Keystore (AES-256-GCM), excluded from backups and logs; category-based approval gate with per-action, per-session and persistent grants.
 
-Requires Android 12+, JDK 21 to build: `gradlew assembleDebug`. Interface languages: Russian (default) and English.
+Requires Android 12+ and a JDK compatible with the project Gradle Wrapper and Android Gradle Plugin (minimum 17). Build with the included wrapper: `./gradlew assembleDebug` on Unix-like systems or `gradlew.bat assembleDebug` on Windows. Interface languages: Russian (default) and English.
 
 ## Лицензия
 

@@ -9,10 +9,8 @@ pluginManagement {
 dependencyResolutionManagement {
     repositoriesMode.set(RepositoriesMode.FAIL_ON_PROJECT_REPOS)
     repositories {
-        // M5.1: вендоренные aar Shizuku (vendor/maven). Файловый репозиторий первым —
-        // сети не требует. Прямой Maven Central режется прокси (403), а его
-        // Google-зеркало рвёт TLS-хендшейк из Java (проверено 2026-10-05), поэтому
-        // новых внешних зависимостей не добавляем — только вендоренные.
+        // Shizuku AARs are vendored in this repository; resolve those from the local
+        // Maven repository while keeping standard repositories available for others.
         maven { url = uri("vendor/maven") }
         google()
         mavenCentral()
