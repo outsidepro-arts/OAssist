@@ -367,7 +367,7 @@
     <string name="tool_skill_get_desc">Полный текст навыка по имени</string>
 
     <!-- Промпт режима -->
-    <string name="mode_prompt_placeholders">Плейсхолдеры: {locale} {time} {device} {memory} {skills} {screen_context} {shared_content}. Пустое поле при сохранении заполняется промптом по умолчанию.</string>
+    <string name="mode_prompt_placeholders">Плейсхолдеры: {locale} {time} {device} {memory} {skills} {screen_context} {shared_content}. Память, навыки и экран подключаются соответствующими плейсхолдерами. Контент Share сопровождает просьбу. Общие правила доверия действуют и для своего промпта. Пустое поле при сохранении заполняется промптом по умолчанию.</string>
     <string name="mode_assistant_extras">Поведение ассистента</string>
     <string name="mode_assistant_autospeak">Озвучивать ответы</string>
     <string name="mode_assistant_autoclose">Закрывать панель после ответа</string>

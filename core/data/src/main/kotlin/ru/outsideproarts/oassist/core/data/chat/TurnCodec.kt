@@ -5,7 +5,10 @@ import kotlinx.serialization.json.Json
 import ru.outsideproarts.oassist.core.model.AudioPart
 import ru.outsideproarts.oassist.core.model.ChatMessage
 import ru.outsideproarts.oassist.core.model.ChatRole
+import ru.outsideproarts.oassist.core.model.ContextData
+import ru.outsideproarts.oassist.core.model.ContextSource
 import ru.outsideproarts.oassist.core.model.ImagePart
+import ru.outsideproarts.oassist.core.model.ModelUserInput
 import ru.outsideproarts.oassist.core.model.ProviderUsage
 import ru.outsideproarts.oassist.core.model.ReasoningBlock
 import ru.outsideproarts.oassist.core.model.StoredTurn
@@ -15,6 +18,7 @@ import ru.outsideproarts.oassist.core.model.WorkEvent
 @Serializable
 internal data class TurnPayload(
     val userText: String = "",
+    val modelUserInput: ModelUserInputJson? = null,
     val userAudio: MediaJson? = null,
     val userImages: List<MediaJson> = emptyList(),
     /** Новое полотно (мыслевые блоки + тулы в хронологии); null — legacy-ход. */
@@ -38,6 +42,19 @@ internal data class MessageJson(
     val images: List<MediaJson> = emptyList(),
     /** Мысли ассистента (text/signature/replay) — legacy-ходы без поля читаются как null. */
     val reasoning: ReasoningBlock? = null,
+    val contextData: List<ContextDataJson> = emptyList(),
+)
+
+@Serializable
+internal data class ModelUserInputJson(
+    val requestText: String = "",
+    val context: List<ContextDataJson> = emptyList(),
+)
+
+@Serializable
+internal data class ContextDataJson(
+    val source: String = "UNKNOWN_HISTORY",
+    val text: String = "",
 )
 
 @Serializable
@@ -73,6 +90,9 @@ object TurnCodec {
     fun encode(turn: StoredTurn, chatId: String, turnId: String, media: ChatMediaStore): String {
         val payload = TurnPayload(
             userText = turn.userText,
+            modelUserInput = turn.modelUserInput?.let {
+                ModelUserInputJson(it.requestText, it.context.map { part -> part.toJson() })
+            },
             userAudio = turn.userAudio?.let { media.writeAudio(chatId, turnId, it)?.toJson() },
             userImages = turn.userImages.mapIndexedNotNull { index, image ->
                 media.writeImage(chatId, turnId, "u$index", image)?.toJson()
@@ -91,6 +111,7 @@ object TurnCodec {
                         media.writeImage(chatId, turnId, "m${index}_$imageIndex", image)?.toJson()
                     },
                     reasoning = message.reasoning,
+                    contextData = message.contextData.map { it.toJson() },
                 )
             },
         )
@@ -104,6 +125,9 @@ object TurnCodec {
         }.getOrNull() ?: return null
         return StoredTurn(
             userText = dto.userText,
+            modelUserInput = dto.modelUserInput?.let {
+                ModelUserInput(it.requestText, it.context.map { part -> part.toModel() })
+            },
             userAudio = dto.userAudio?.toRef()?.let { media.readAudio(it) },
             userImages = dto.userImages.mapNotNull { it.toRef()?.let(media::readImage) },
             work = decodeWork(dto, media),
@@ -118,6 +142,7 @@ object TurnCodec {
                     audio = message.audio?.toRef()?.let { media.readAudio(it) },
                     images = message.images.mapNotNull { it.toRef()?.let(media::readImage) },
                     reasoning = message.reasoning?.takeUnless { it.isEmpty() },
+                    contextData = message.contextData.map { it.toModel() },
                 )
             },
         )
@@ -141,6 +166,15 @@ object TurnCodec {
         }
         return events
     }
+
+    private fun ContextData.toJson(): ContextDataJson = ContextDataJson(source.name, text)
+
+    private fun ContextDataJson.toModel(): ContextData = ContextData(
+        source = if (source == ContextSource.SHARED_CONTENT.name) {
+            ContextSource.SHARED_CONTENT
+        } else ContextSource.UNKNOWN_HISTORY,
+        text = text,
+    )
 
     private fun MediaJson.toRef(): MediaRef? = MediaRef(path, mimeType, width, height, durationSec)
         .takeIf { it.path.isNotEmpty() }

@@ -294,6 +294,6 @@ class ChatTitlerTest {
 
         override suspend fun systemPromptFor(
             mode: AssistMode, screenContext: String?, sharedContent: String?,
-        ): String = throw AssertionError("Titles must not load mode prompts or user context")
+        ): RuntimePrompt = throw AssertionError("Titles must not load mode prompts or user context")
     }
 }

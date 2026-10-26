@@ -642,13 +642,15 @@ private var turnTranscript: List<ChatMessage> = emptyList()
                 session.screenImage = null
                 val agent = factory.agentFor(profile, AssistMode.ASSISTANT)
                 val timeline = ru.outsideproarts.oassist.core.agent.WorkTimelineBuilder()
+                val prompt = factory.systemPromptFor(
+                    AssistMode.ASSISTANT,
+                    screenContext = session.screenContext,
+                )
                 val agentSession = AgentSession(
                     chunks = agent.stream(
                         modelId = modelId,
-                        systemPrompt = factory.systemPromptFor(
-                            AssistMode.ASSISTANT,
-                            screenContext = session.screenContext,
-                        ),
+                        systemPrompt = prompt.instructions,
+                        promptContext = prompt.context,
                         history = session.history,
                         userMessage = text,
                         images = screenImage?.let { listOf(it) },

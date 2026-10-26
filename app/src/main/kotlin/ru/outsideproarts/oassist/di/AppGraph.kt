@@ -363,7 +363,7 @@ class AppGraph private constructor(context: Context) {
             mode: ru.outsideproarts.oassist.core.model.AssistMode,
             screenContext: String?,
             sharedContent: String?,
-        ): String = buildSystemPrompt(mode, screenContext, sharedContent)
+        ): ru.outsideproarts.oassist.core.agent.RuntimePrompt = buildSystemPrompt(mode, screenContext, sharedContent)
     }
 
     /**
@@ -377,7 +377,7 @@ class AppGraph private constructor(context: Context) {
         mode: ru.outsideproarts.oassist.core.model.AssistMode,
         screenContext: String? = null,
         sharedContent: String? = null,
-    ): String {
+    ): ru.outsideproarts.oassist.core.agent.RuntimePrompt {
         val config = data.providers.modeConfig(mode)
         val language = promptLanguage()
         val template = config.initialPrompt.orEmpty()
@@ -387,8 +387,12 @@ class AppGraph private constructor(context: Context) {
                 locale = if (language == "ru") "ru-RU" else "en-US",
                 time = promptTime(),
                 device = promptDevice(),
-                memory = runCatching { data.memory.read() }.getOrElse { "" },
-                skills = runCatching { data.skills.list() }.getOrElse { emptyList() },
+                memory = if (template.contains("{memory}")) {
+                    runCatching { data.memory.read() }.getOrElse { "" }
+                } else "",
+                skills = if (template.contains("{skills}")) {
+                    runCatching { data.skills.list() }.getOrElse { emptyList() }
+                } else emptyList(),
                 screenContext = screenContext,
                 sharedContent = sharedContent,
             ),

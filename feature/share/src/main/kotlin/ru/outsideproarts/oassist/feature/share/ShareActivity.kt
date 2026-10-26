@@ -57,7 +57,10 @@ import ru.outsideproarts.oassist.core.model.AssistMode
 import ru.outsideproarts.oassist.core.model.ChatMessage
 import ru.outsideproarts.oassist.core.model.ChatRole
 import ru.outsideproarts.oassist.core.model.ChatSummary
+import ru.outsideproarts.oassist.core.model.ContextData
+import ru.outsideproarts.oassist.core.model.ContextSource
 import ru.outsideproarts.oassist.core.model.ImagePart
+import ru.outsideproarts.oassist.core.model.ModelUserInput
 import ru.outsideproarts.oassist.core.model.StoredTurn
 import ru.outsideproarts.oassist.core.provider.ChatChunk
 import ru.outsideproarts.oassist.core.provider.ImageCodec
@@ -241,6 +244,12 @@ private fun ShareFlow(payload: SharePayload) {
             payload.otherUris.forEach { append(String.format(promptFileTemplate, it)) }
         }
         val userMsg = String.format(promptQuestionTemplate, contentDesc, query)
+        val modelInput = ModelUserInput(
+            requestText = query,
+            context = if (contentDesc.isBlank()) emptyList() else {
+                listOf(ContextData(ContextSource.SHARED_CONTENT, contentDesc))
+            },
+        )
         activeUserMsg = userMsg
         val history = turns.flatMap { it.modelMessages() }
         val timeline = ru.outsideproarts.oassist.core.agent.WorkTimelineBuilder()
@@ -255,6 +264,7 @@ private fun ShareFlow(payload: SharePayload) {
             if (timeline.isEmpty) return
             val stored = StoredTurn(
                 userText = userMsg,
+                modelUserInput = modelInput,
                 userImages = images,
                 work = timeline.work,
                 answer = timeline.answerText,
@@ -298,13 +308,16 @@ private fun ShareFlow(payload: SharePayload) {
                 val modelId = config.modelId?.takeIf { it.isNotBlank() }
                     ?: throw ProviderError.NotConfigured(ProviderError.NotConfigured.Reason.MODEL_MISSING)
                 val agent = factory.agentFor(profile, AssistMode.SHARE)
+                val prompt = factory.systemPromptFor(
+                    AssistMode.SHARE,
+                    sharedContent = contentDesc.ifBlank { null },
+                )
                 AgentSession(
                     chunks = agent.stream(
                         modelId = modelId,
-                        systemPrompt = factory.systemPromptFor(
-                            AssistMode.SHARE,
-                            sharedContent = contentDesc.ifBlank { null },
-                        ),
+                        systemPrompt = prompt.instructions,
+                        promptContext = prompt.context,
+                        modelUserInput = modelInput,
                         history = history,
                         userMessage = userMsg,
                         images = images.ifEmpty { null },

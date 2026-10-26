@@ -7,6 +7,9 @@ import kotlinx.coroutines.test.runTest
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
+import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.jsonPrimitive
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -98,5 +101,19 @@ class AgentLoopImagesTest {
         val userMsg = client.seenMessages[0].last { it.role == ChatRole.USER }
         assertTrue(userMsg.images.isEmpty())
         assertTrue(userMsg.content.contains(IMAGE_DISABLED_NOTE.trim()))
+    }
+
+    @Test
+    fun imageBudgetNotesRemainInsideStructuredHistory() = runTest {
+        val client = ScriptedClient(ArrayDeque(listOf(listOf(ChatChunk.Finish("stop")))))
+        val history = (0..MAX_IMAGE_MESSAGES).map {
+            ChatMessage(ChatRole.USER, "old $it", images = listOf(ImagePart(imageBase64 = "QUJD")))
+        }
+        AgentLoop(client).stream("m", null, history, "question").toList()
+        val oldest = client.seenMessages.single().first { it.role == ChatRole.USER }
+        val envelope = Json.parseToJsonElement(oldest.content).jsonObject
+        assertTrue(envelope["content"]!!.jsonPrimitive.content.contains(IMAGE_REMOVED_NOTE))
+        assertTrue(oldest.images.isEmpty())
+        assertTrue(history.first().images.isNotEmpty())
     }
 }
