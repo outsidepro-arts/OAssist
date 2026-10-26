@@ -118,22 +118,15 @@ class UiActions(
             node.isClickable && node.performAction(AccessibilityNodeInfo.ACTION_CLICK)
         }
         if (direct.success) return direct
-        return gestureThrough { tapNodeCenter(index, "нажать") }
+        return gestureThrough { touchNodeCenter(index, "нажать", longClick = false) }
     }
 
     suspend fun longClick(index: Int): ToolResult {
         val direct = performOnNode(index, "долго нажать") { node ->
-            node.isClickable && node.performAction(AccessibilityNodeInfo.ACTION_LONG_CLICK)
+            node.isLongClickable && node.performAction(AccessibilityNodeInfo.ACTION_LONG_CLICK)
         }
         if (direct.success) return direct
-        val center = nodeCenter(index) ?: return ToolResult(false, "Узел №$index не найден")
-        return gestureThrough {
-            privProvider().inputSwipe(center.first, center.second, center.first, center.second, 800)
-                .fold(
-                onSuccess = { ToolResult(true, "Удалось долго нажать (узел №$index, фолбэк input)") },
-                onFailure = { ToolResult(false, "Не удалось долго нажать (узел №$index): ${it.message}") },
-                )
-        }
+        return gestureThrough { touchNodeCenter(index, "долго нажать", longClick = true) }
     }
 
     suspend fun setText(index: Int, text: String): ToolResult = performOnNode(index, "ввести текст") { node ->
@@ -308,9 +301,15 @@ class UiActions(
         return ((b.left + b.right) / 2) to ((b.top + b.bottom) / 2)
     }
 
-    private suspend fun tapNodeCenter(index: Int, verb: String): ToolResult {
+    private suspend fun touchNodeCenter(index: Int, verb: String, longClick: Boolean): ToolResult {
         val center = nodeCenter(index) ?: return ToolResult(false, "Узел №$index не найден")
-        return privProvider().inputTap(center.first, center.second).fold(
+        val priv = privProvider()
+        val result = if (longClick) {
+            priv.inputSwipe(center.first, center.second, center.first, center.second, 800)
+        } else {
+            priv.inputTap(center.first, center.second)
+        }
+        return result.fold(
             onSuccess = { ToolResult(true, "Удалось $verb (узел №$index, фолбэк input)") },
             onFailure = { ToolResult(false, "Не удалось $verb (узел №$index): ${it.message}") },
         )

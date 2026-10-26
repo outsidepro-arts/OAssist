@@ -32,6 +32,7 @@ class DeviceActions(
     private val torchTracker: TorchTracker? = null,
     private val foreground: ForegroundRunner = NoopForegroundRunner(),
 ) {
+    internal val settingsAccess: SettingsAccess by lazy { AndroidSettingsAccess(context.contentResolver) }
 
     fun launchApp(packageName: String): ToolResult {
         bgStartBlocked()?.let { return it }

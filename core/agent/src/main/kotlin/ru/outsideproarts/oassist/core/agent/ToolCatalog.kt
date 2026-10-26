@@ -91,8 +91,8 @@ object ToolCatalog {
         SkillListTool(skills),
         SkillGetTool(skills),
         ShellExecTool(priv),
-        ShellGetSettingTool(priv),
-        ShellPutSettingTool(priv),
+        ShellGetSettingTool(priv, actions.settingsAccess),
+        ShellPutSettingTool(priv, actions.settingsAccess),
         ByeTool(),
     )
 
