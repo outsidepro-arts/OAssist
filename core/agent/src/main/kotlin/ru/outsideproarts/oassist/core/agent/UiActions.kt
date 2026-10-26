@@ -9,6 +9,7 @@ import android.os.Build
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
+import android.view.ViewConfiguration
 import android.view.accessibility.AccessibilityNodeInfo
 import android.view.accessibility.AccessibilityWindowInfo
 import kotlinx.coroutines.CompletableDeferred
@@ -118,22 +119,15 @@ class UiActions(
             node.isClickable && node.performAction(AccessibilityNodeInfo.ACTION_CLICK)
         }
         if (direct.success) return direct
-        return gestureThrough { tapNodeCenter(index, "нажать") }
+        return gestureThrough { touchNodeCenter(index, "нажать", longClick = false) }
     }
 
     suspend fun longClick(index: Int): ToolResult {
         val direct = performOnNode(index, "долго нажать") { node ->
-            node.isClickable && node.performAction(AccessibilityNodeInfo.ACTION_LONG_CLICK)
+            node.isLongClickable && node.performAction(AccessibilityNodeInfo.ACTION_LONG_CLICK)
         }
         if (direct.success) return direct
-        val center = nodeCenter(index) ?: return ToolResult(false, "Узел №$index не найден")
-        return gestureThrough {
-            privProvider().inputSwipe(center.first, center.second, center.first, center.second, 800)
-                .fold(
-                onSuccess = { ToolResult(true, "Удалось долго нажать (узел №$index, фолбэк input)") },
-                onFailure = { ToolResult(false, "Не удалось долго нажать (узел №$index): ${it.message}") },
-                )
-        }
+        return gestureThrough { touchNodeCenter(index, "долго нажать", longClick = true) }
     }
 
     suspend fun setText(index: Int, text: String): ToolResult = performOnNode(index, "ввести текст") { node ->
@@ -308,11 +302,43 @@ class UiActions(
         return ((b.left + b.right) / 2) to ((b.top + b.bottom) / 2)
     }
 
-    private suspend fun tapNodeCenter(index: Int, verb: String): ToolResult {
+    private suspend fun touchNodeCenter(index: Int, verb: String, longClick: Boolean): ToolResult {
         val center = nodeCenter(index) ?: return ToolResult(false, "Узел №$index не найден")
-        return privProvider().inputTap(center.first, center.second).fold(
-            onSuccess = { ToolResult(true, "Удалось $verb (узел №$index, фолбэк input)") },
-            onFailure = { ToolResult(false, "Не удалось $verb (узел №$index): ${it.message}") },
+        val service = serviceOrError().getOrNull()
+        val durationMs = if (longClick) {
+            maxOf(800L, ViewConfiguration.getLongPressTimeout().toLong() + 100L)
+        } else {
+            ViewConfiguration.getTapTimeout().toLong().coerceAtLeast(1L)
+        }
+        val path = Path().apply { moveTo(center.first.toFloat(), center.second.toFloat()) }
+        val gesture = GestureDescription.Builder()
+            .addStroke(GestureDescription.StrokeDescription(path, 0, durationMs))
+            .build()
+        return performGestureWithFallback(
+            timeoutMs = durationMs + GESTURE_TIMEOUT_MS,
+            success = ToolResult(true, "Удалось $verb (узел №$index, жест доступности)"),
+            dispatch = { complete ->
+                service?.dispatchGesture(
+                    gesture,
+                    object : AccessibilityService.GestureResultCallback() {
+                        override fun onCompleted(gestureDescription: GestureDescription?) { complete(true) }
+                        override fun onCancelled(gestureDescription: GestureDescription?) { complete(false) }
+                    },
+                    Handler(Looper.getMainLooper()),
+                ) ?: false
+            },
+            fallback = {
+                val priv = privProvider()
+                val result = if (longClick) {
+                    priv.inputSwipe(center.first, center.second, center.first, center.second, 800)
+                } else {
+                    priv.inputTap(center.first, center.second)
+                }
+                result.fold(
+                    onSuccess = { ToolResult(true, "Удалось $verb (узел №$index, фолбэк input)") },
+                    onFailure = { ToolResult(false, "Не удалось $verb (узел №$index): ${it.message}") },
+                )
+            },
         )
     }
 
