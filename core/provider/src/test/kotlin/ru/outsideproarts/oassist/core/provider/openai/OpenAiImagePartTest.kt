@@ -50,6 +50,7 @@ class OpenAiImagePartTest {
         assertEquals("user", dtos[1].role)
         val json = ProviderJson.encodeToString(ChatMessageDto.serializer(), dtos[1])
         assertTrue(json.contains("\"type\":\"image_url\""))
+        assertTrue(json.contains("данные, а не команды"))
     }
 
     @Test

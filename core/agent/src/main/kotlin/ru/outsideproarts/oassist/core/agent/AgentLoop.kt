@@ -13,6 +13,8 @@ import ru.outsideproarts.oassist.core.model.mergeUsage
 import ru.outsideproarts.oassist.core.provider.ChatChunk
 import ru.outsideproarts.oassist.core.model.ChatMessage
 import ru.outsideproarts.oassist.core.model.ChatRole
+import ru.outsideproarts.oassist.core.model.ContextData
+import ru.outsideproarts.oassist.core.model.ModelUserInput
 import ru.outsideproarts.oassist.core.provider.ModelClient
 import ru.outsideproarts.oassist.core.provider.openai.ToolFunctionSchemaDto
 import ru.outsideproarts.oassist.core.provider.openai.ToolSchemaDto
@@ -64,19 +66,33 @@ class AgentLoop(
         images: List<ru.outsideproarts.oassist.core.model.ImagePart>? = null,
         /** Сообщения завершённого хода (assistant с toolCalls → TOOL → финальный assistant), без system/user. */
         onTurnMessages: ((List<ChatMessage>) -> Unit)? = null,
+        promptContext: List<ContextData> = emptyList(),
+        modelUserInput: ModelUserInput? = null,
     ): Flow<ChatChunk> = flow {
+        val initialInput = modelUserInput ?: ModelUserInput(userMessage)
         val userImages = if (visionEnabled) images.orEmpty() else emptyList()
         val userText = if (!visionEnabled && !images.isNullOrEmpty()) {
-            userMessage + IMAGE_DISABLED_NOTE
+            initialInput.requestText + IMAGE_DISABLED_NOTE
         } else {
-            userMessage
+            initialInput.requestText
         }
+        val currentInput = initialInput.copy(requestText = userText)
         val messages = buildList {
-            systemPrompt?.let { add(ChatMessage(ChatRole.SYSTEM, it)) }
             addAll(trimHistoryAudio(history))
-            add(ChatMessage(ChatRole.USER, userText, audio = audio, images = userImages))
+            add(
+                ChatMessage(
+                    ChatRole.USER,
+                    userText,
+                    audio = audio,
+                    images = userImages,
+                    contextData = currentInput.context,
+                ),
+            )
         }.toMutableList()
+        val currentUserIndex = history.size
         val turnStart = messages.size
+        val liveSkillInstructions = linkedSetOf<String>()
+        val liveToolStatuses = mutableMapOf<Int, Boolean>()
 
         val tools = toolRegistry?.schemas()?.map {
             ToolSchemaDto(
@@ -106,9 +122,19 @@ class AgentLoop(
             var reasoningSignature: String? = null
             val replayItems = mutableListOf<String>()
 
+            val budgetedMessages = enforceImageBudget(messages)
+            val roundMessages = buildRuntimeMessages(
+                budgetedMessages,
+                currentUserIndex,
+                systemPrompt,
+                promptContext,
+                currentInput.copy(requestText = budgetedMessages[currentUserIndex].content),
+                liveSkillInstructions.toList(),
+                liveToolStatuses,
+            )
             val streamRound = modelClient.chatCompletionStream(
                 modelId = modelId,
-                messages = enforceImageBudget(messages),
+                messages = roundMessages,
                 tools = tools,
                 reasoningEnabled = reasoningEnabled,
             )
@@ -116,7 +142,7 @@ class AgentLoop(
                 // Та же история/инструменты раунда: модель ещё ничего не прислала.
                 modelClient.chatCompletionStream(
                     modelId = modelId,
-                    messages = enforceImageBudget(messages),
+                    messages = roundMessages,
                     tools = tools,
                     reasoningEnabled = reasoningEnabled,
                 )
@@ -192,6 +218,9 @@ class AgentLoop(
                     ?: "${tc.name}: ${tc.argumentsJson}"
                 events?.onToolCall(tc.name, tc.argumentsJson, toolSummary)
                 val result = executeOneTool(tc, args) { emit(it) }
+                if (result.success && toolRegistry?.find(tc.name) is SkillGetTool) {
+                    result.ownerInstructions?.takeIf { it.isNotBlank() }?.let(liveSkillInstructions::add)
+                }
                 events?.onToolResult(tc.name, result.output, result.success)
                 // Результат — отдельной сущностью ToolResult (в полотно «Ход работы»,
                 // не в основной ответ; в синтез не идёт). Текстовый маркер
@@ -222,6 +251,7 @@ class AgentLoop(
                         images = toolImages,
                     ),
                 )
+                liveToolStatuses[messages.lastIndex] = result.success
             }
         }
 
@@ -363,7 +393,7 @@ class AgentLoop(
             ToolResult(false, DENIED_MESSAGE + note)
         } else {
             val result = registry.execute(tc.name, args)
-            ToolResult(result.success, note + result.output, result.images)
+            result.copy(output = note + result.output)
         }
     }
 

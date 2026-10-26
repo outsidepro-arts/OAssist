@@ -366,7 +366,7 @@
     <string name="tool_skill_get_desc">Full skill text by name</string>
 
     <!-- Mode prompt -->
-    <string name="mode_prompt_placeholders">Placeholders: {locale} {time} {device} {memory} {skills} {screen_context} {shared_content}. An empty field is filled with the default prompt on save.</string>
+    <string name="mode_prompt_placeholders">Placeholders: {locale} {time} {device} {memory} {skills} {screen_context} {shared_content}. Memory, skills, and screen data are included through their placeholders. Shared content accompanies the request. Common trust rules also apply to a custom prompt. An empty field is filled with the default prompt on save.</string>
     <string name="mode_assistant_extras">Assistant behavior</string>
     <string name="mode_assistant_autospeak">Speak answers aloud</string>
     <string name="mode_assistant_autoclose">Close panel after answer</string>

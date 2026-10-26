@@ -54,6 +54,6 @@ class SkillGetTool(private val skills: SkillStore) : Tool {
         val skill = skills.get(name)
             ?: return ToolResult(false, "Навык «$name» не найден")
         if (!skill.enabled) return ToolResult(false, "Навык «$name» выключен в настройках")
-        return ToolResult(true, skill.body)
+        return ToolResult(true, skill.body, ownerInstructions = skill.body)
     }
 }

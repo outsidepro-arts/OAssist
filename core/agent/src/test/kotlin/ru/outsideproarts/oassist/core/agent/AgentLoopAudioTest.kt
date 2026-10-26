@@ -5,6 +5,9 @@ import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.flow.toList
 import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertEquals
+import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.jsonPrimitive
 import org.junit.Test
 import ru.outsideproarts.oassist.core.model.ModelInfo
 import ru.outsideproarts.oassist.core.model.AudioPart
@@ -53,6 +56,7 @@ class AgentLoopAudioTest {
 
         val userTurn = client.seen.single().single { it.role == ChatRole.USER }
         assertEquals(null, userTurn.audio)
-        assertEquals("привет", userTurn.content)
+        val input = Json.parseToJsonElement(userTurn.content).jsonObject
+        assertEquals("привет", input["request"]!!.jsonPrimitive.content)
     }
 }
