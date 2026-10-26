@@ -63,5 +63,38 @@ APK и повышения привилегий. Попытки с фокусом
   getter для восстановления чужой области нет. В этой диагностике область
   не менялась; безопасное совместное использование не установлено.
 
+## Отличие от adb shell input tap
+
+После первоначальной диагностики пользователь проверил `adb shell input tap`
+в центре экрана при запущенном Jieshuo: команда активирует значок лаунчера,
+элемент в чате и результат поиска. Состояние browse by touch в этом сообщении
+сопоставлялось с ранее воспроизведённым отказом OAssist. Это самостоятельная
+проверка пользователя; агент команду касания не выполнял.
+
+Исходники AOSP Android 16 объясняют различие путей:
+
+- [InputShellCommand](https://github.com/aosp-mirror/platform_frameworks_base/blob/android16-release/services/core/java/com/android/server/input/InputShellCommand.java)
+  создаёт DOWN/UP и вызывает InputManagerGlobal.injectInputEvent.
+  [InputManagerService](https://github.com/aosp-mirror/platform_frameworks_base/blob/android16-release/services/core/java/com/android/server/input/InputManagerService.java)
+  требует INJECT_EVENTS и передаёт событие в native-инъекцию.
+  [InputDispatcher::injectInputEvent](https://android.googlesource.com/platform/frameworks/native/+/refs/heads/android16-release/services/inputflinger/dispatcher/InputDispatcher.cpp)
+  помещает его в очередь диспетчера без вызова accessibility InputFilter.
+- [MotionEventInjector](https://github.com/aosp-mirror/platform_frameworks_base/blob/android16-release/services/accessibility/java/com/android/server/accessibility/MotionEventInjector.java)
+  обслуживает dispatchGesture и передаёт события следующему преобразованию.
+  [AccessibilityInputFilter](https://github.com/aosp-mirror/platform_frameworks_base/blob/android16-release/services/accessibility/java/com/android/server/accessibility/AccessibilityInputFilter.java)
+  ставит injector перед TouchExplorer при включённом touch exploration.
+
+Таким образом, одинаковые координаты не означают одинаковую доставку события.
+Запуск `input tap` из обычного процесса приложения не даёт ему shell UID или
+INJECT_EVENTS. Существующий Shizuku/root-исполнитель предоставляет другой
+контекст исполнения; новая попытка через AccessibilityService его не заменяет
+во всех состояниях экранного чтеца.
+
+Дополнительная граница текущей цепочки: performGestureWithFallback возвращает
+успех после успешного callback. Если инъекция завершилась, но цель не активирована,
+привилегированный input tap уже не вызывается, даже при наличии исполнителя.
+Изменение маршрутизации или проверка результата активации — отдельное исправление;
+его здесь не реализовывали.
+
 Рабочее исправление взаимодействия с browse by touch пока не реализовано.
 Актуальные незавершённые проверки — в [MEMORY.md](../../MEMORY.md).
