@@ -18,6 +18,8 @@ data class ToolResult(
     val output: String,
     /** Образы в результате (скриншоты): уходят в TOOL-сообщение, в модель — только при vision. */
     val images: List<ImagePart> = emptyList(),
+    /** App-owned instruction attachment, populated only by a successful built-in skill lookup. */
+    val ownerInstructions: String? = null,
 )
 
 /** Инструмент агента. */

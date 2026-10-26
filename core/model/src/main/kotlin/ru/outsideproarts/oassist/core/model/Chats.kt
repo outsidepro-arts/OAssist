@@ -61,14 +61,17 @@ data class StoredTurn(
     val usage: ProviderUsage? = null,
     /** Транскрипт хода для модели, без system/user. */
     val turn: List<ChatMessage> = emptyList(),
+    /** New typed user request/context. Null keeps legacy userText replay behavior. */
+    val modelUserInput: ModelUserInput? = null,
 ) {
     /** История для модели: реплика пользователя + транскрипт хода. */
     fun modelMessages(): List<ChatMessage> = listOf(
         ChatMessage(
             role = ChatRole.USER,
-            content = userText,
+            content = modelUserInput?.requestText ?: userText,
             audio = userAudio,
             images = userImages,
+            contextData = modelUserInput?.context.orEmpty(),
         ),
     ) + turn
 }

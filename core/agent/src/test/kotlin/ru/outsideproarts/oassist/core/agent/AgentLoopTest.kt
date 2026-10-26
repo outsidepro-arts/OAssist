@@ -5,6 +5,10 @@ import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.flow.toList
 import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertTrue
+import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.jsonPrimitive
 import org.junit.Test
 import ru.outsideproarts.oassist.core.model.ModelInfo
 import ru.outsideproarts.oassist.core.provider.ChatChunk
@@ -81,10 +85,16 @@ class AgentLoopTest {
 
         assertEquals(4, capturedMessages.size)
         assertEquals(ChatRole.SYSTEM, capturedMessages[0].role)
-        assertEquals("Система", capturedMessages[0].content)
+        assertTrue(capturedMessages[0].content.contains("Система"))
+        assertTrue(capturedMessages[0].content.contains(RUNTIME_TRUST_POLICY))
         assertEquals(ChatRole.USER, capturedMessages[1].role)
         assertEquals(ChatRole.ASSISTANT, capturedMessages[2].role)
         assertEquals(ChatRole.USER, capturedMessages[3].role)
-        assertEquals("Как дела?", capturedMessages[3].content)
+        val previous = Json.parseToJsonElement(capturedMessages[1].content).jsonObject
+        assertEquals("history", previous["kind"]!!.jsonPrimitive.content)
+        assertEquals("Привет", previous["content"]!!.jsonPrimitive.content)
+        val current = Json.parseToJsonElement(capturedMessages[3].content).jsonObject
+        assertEquals("current_user_input", current["kind"]!!.jsonPrimitive.content)
+        assertEquals("Как дела?", current["request"]!!.jsonPrimitive.content)
     }
 }

@@ -250,10 +250,12 @@ private fun OAssistApp(
                             permissionRequester = graph.permissionRequester,
                             screenLocked = { graph.keyguardLockState.isLocked() },
                         )
+                        val prompt = graph.buildSystemPrompt(mode)
                         ru.outsideproarts.oassist.core.agent.AgentSession(
                             chunks = agent.stream(
                                 modelId = modelId,
-                                systemPrompt = graph.buildSystemPrompt(mode),
+                                systemPrompt = prompt.instructions,
+                                promptContext = prompt.context,
                                 history = history,
                                 userMessage = userMsg,
                                 audio = audio,

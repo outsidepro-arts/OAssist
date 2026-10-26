@@ -17,6 +17,8 @@ data class ChatMessage(
     val images: List<ImagePart> = emptyList(),
     /** Для [ChatRole.ASSISTANT]: мысли модели хода (replay thinking-блоков Anthropic / reasoning-item'ов Responses). */
     val reasoning: ReasoningBlock? = null,
+    /** Typed attachment for untrusted user/context data. It never carries a chat role. */
+    val contextData: List<ContextData> = emptyList(),
 )
 
 /**

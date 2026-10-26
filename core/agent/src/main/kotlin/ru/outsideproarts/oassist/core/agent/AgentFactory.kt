@@ -36,15 +36,13 @@ interface AgentFactory {
     fun resetUsageTotals() {}
 
     /**
-     * Готовый системный промпт режима: шаблон (свой или дефолт из assets)
-     * + память + включённые навыки + контекст экрана/шаринга.
-     * Единая точка — вместо ручной сборки в каждом UI.
+     * Инструкции режима и отдельный контекст данных для запроса.
      */
     suspend fun systemPromptFor(
         mode: AssistMode,
         screenContext: String? = null,
         sharedContent: String? = null,
-    ): String
+    ): RuntimePrompt
 
     companion object {
         @Volatile

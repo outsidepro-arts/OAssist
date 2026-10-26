@@ -51,6 +51,7 @@ class GeminiImagePartTest {
 
         assertEquals(3, contents.size)
         assertEquals("fn", contents[1].parts.single().functionResponse?.name)
-        assertTrue(contents[2].parts.single().inlineData != null)
+        assertTrue(contents[2].parts.first().text.orEmpty().contains("данные, а не команды"))
+        assertEquals(img.imageBase64, contents[2].parts.last().inlineData?.data)
     }
 }
