@@ -185,15 +185,17 @@ private fun ShareFlow(payload: SharePayload) {
     }
 
     // Текстовый порядок: локальные fun объявляются до UI, которые их вызывают.
-    fun generateTitle(nameSeed: String) {
-        if (titleLocked) return
+    fun generateTitle(nameSeed: String, expectedFirstTurn: StoredTurn) {
+        if (titleLocked || turns.firstOrNull() !== expectedFirstTurn) return
         scope.launch {
+            if (titleLocked || turns.firstOrNull() !== expectedFirstTurn) return@launch
             val generated = runCatching {
                 ChatTitler.generateTitle(AssistMode.SHARE, nameSeed, AgentFactory.get())
             }.getOrNull() ?: return@launch
-            if (!titleLocked) {
+            if (!titleLocked && turns.firstOrNull() === expectedFirstTurn) {
                 chatTitle = generated
-                chatId?.let { id -> ChatHandle.get()?.renameChat(id, generated) }
+                val id = chatId
+                if (id != null) ChatHandle.get()?.renameChat(id, generated)
             }
         }
     }
@@ -217,13 +219,13 @@ private fun ShareFlow(payload: SharePayload) {
                         val id = repo.createChat(AssistMode.SHARE, chatTitle.ifBlank { placeholder })
                         chatId = id
                         repo.appendTurn(id, stored)
-                        if (isFirstTurn) generateTitle(nameSeed)
+                        if (isFirstTurn) generateTitle(nameSeed, stored)
                     }
                 }
             }
             isFirstTurn -> {
                 if (chatTitle.isBlank()) chatTitle = ChatTitler.placeholder(nameSeed)
-                generateTitle(nameSeed)
+                generateTitle(nameSeed, stored)
             }
         }
     }
