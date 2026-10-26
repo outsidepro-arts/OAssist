@@ -225,15 +225,17 @@ fun ChatScreen(
         if (chatKind == ChatKind.ASSISTANT) AssistMode.ASSISTANT else AssistMode.CHAT
 
     /** Фоновое имя диалога от модели; до ответа остаётся плейсхолдер. */
-    fun generateTitle(userMsg: String, answer: String) {
-        if (titleLocked) return
+    fun generateTitle(userMsg: String, expectedFirstTurn: StoredTurn) {
+        if (titleLocked || turnStore.firstOrNull() !== expectedFirstTurn) return
         scope.launch {
+            if (titleLocked || turnStore.firstOrNull() !== expectedFirstTurn) return@launch
             val generated = runCatching {
-                ChatTitler.generateTitle(sendMode(), userMsg, AgentFactory.get(), answer)
+                ChatTitler.generateTitle(sendMode(), userMsg, AgentFactory.get(), firstAnswer = expectedFirstTurn.answer)
             }.getOrNull() ?: return@launch
-            if (!titleLocked) {
+            if (!titleLocked && turnStore.firstOrNull() === expectedFirstTurn) {
                 chatTitle = generated
-                chatId?.let { id -> ChatHandle.get()?.renameChat(id, generated) }
+                val id = chatId
+                if (id != null) ChatHandle.get()?.renameChat(id, generated)
             }
         }
     }
@@ -282,13 +284,13 @@ fun ChatScreen(
                         val id = repo.createChat(sendMode(), chatTitle.ifBlank { placeholder })
                         chatId = id
                         repo.appendTurn(id, stored)
-                        if (isFirstTurn) generateTitle(userMsg, answer)
+                        if (isFirstTurn) generateTitle(userMsg, stored)
                     }
                 }
             }
             isFirstTurn -> {
                 if (chatTitle.isBlank()) chatTitle = ChatTitler.placeholder(nameSeed)
-                generateTitle(userMsg, answer)
+                generateTitle(userMsg, stored)
             }
         }
     }

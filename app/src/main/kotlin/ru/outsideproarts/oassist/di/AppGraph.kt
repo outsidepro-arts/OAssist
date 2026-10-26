@@ -293,6 +293,13 @@ class AppGraph private constructor(context: Context) {
         )
 
     private val agentFactory = object : ru.outsideproarts.oassist.core.agent.AgentFactory {
+        override suspend fun modelClientFor(profile: ProviderProfile): ModelClient =
+            this@AppGraph.modelClientFor(profile)
+
+        override suspend fun recordModelUsage(usage: ru.outsideproarts.oassist.core.model.ProviderUsage) {
+            usageTotals.record(usage)
+        }
+
         override suspend fun modeConfig(mode: ru.outsideproarts.oassist.core.model.AssistMode) =
             data.providers.modeConfig(mode)
 
