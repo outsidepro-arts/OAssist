@@ -1,5 +1,8 @@
 package ru.outsideproarts.oassist.core.agent
 
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.jsonPrimitive
@@ -9,9 +12,9 @@ import ru.outsideproarts.oassist.core.device.ShellPolicy
 import ru.outsideproarts.oassist.core.model.PrivilegeLevel
 
 /**
- * Привилегированные тулы (M5.1): выполнение только при SHIZUKU/ROOT,
- * иначе явная ошибка «нет привилегий». `shell_exec` — строгий read-only
- * белый список ([ShellPolicy]); запись настроек — отдельным тулом.
+ * `shell_exec` требует SHIZUKU/ROOT и проверяет белый список [ShellPolicy].
+ * Настройки сначала доступны через Android API, привилегии — резерв при отказе.
+ * Группы подтверждений сохраняются независимо от выбранного способа исполнения.
  */
 private fun requirePrivileged(exec: PrivExecutor): ToolResult? =
     if (exec.level < PrivilegeLevel.SHIZUKU) {
@@ -63,10 +66,28 @@ class ShellExecTool(private val exec: PrivExecutor) : Tool {
     }
 }
 
-class ShellGetSettingTool(private val exec: PrivExecutor) : Tool {
+private suspend fun <T> settingWithFallback(
+    exec: PrivExecutor,
+    direct: suspend () -> Result<T>,
+    fallback: suspend () -> Result<T>,
+): Result<T> {
+    currentCoroutineContext().ensureActive()
+    val local = direct()
+    val failure = local.exceptionOrNull()
+    if (failure is CancellationException) throw failure
+    if (local.isSuccess) return local
+    currentCoroutineContext().ensureActive()
+    if (exec.level < PrivilegeLevel.SHIZUKU) {
+        return Result.failure(IllegalStateException("${failure?.message}. ${ShellPolicy.NO_PRIVILEGES_MESSAGE}"))
+    }
+    return fallback()
+}
+
+class ShellGetSettingTool(private val exec: PrivExecutor, private val settings: SettingsAccess) : Tool {
     override val schema = ToolSchema(
         name = "shell_get_setting",
-        description = "Прочитать системную настройку (system/secure/global). Требует Shizuku или root.",
+        description = "Прочитать системную настройку (system/secure/global). " +
+            "Сначала Android API, при отказе — Shizuku или root.",
         parameters = buildJsonObject {
             put("type", "object")
             put("properties", buildJsonObject {
@@ -85,26 +106,30 @@ class ShellGetSettingTool(private val exec: PrivExecutor) : Tool {
             })
         },
     )
-    override val privilege: PrivilegeLevel = PrivilegeLevel.SHIZUKU
+    override val privilege: PrivilegeLevel = PrivilegeLevel.NONE
 
     override suspend fun execute(arguments: JsonObject): ToolResult {
-        requirePrivileged(exec)?.let { return it }
         val namespace = stringArg(arguments, "namespace")
             ?: return ToolResult(false, "Не указан namespace")
         ShellPolicy.checkNamespace(namespace)?.let { return ToolResult(false, it) }
         val key = stringArg(arguments, "key")
             ?: return ToolResult(false, "Не указан key")
-        return exec.getSetting(namespace, key).fold(
+        return settingWithFallback(
+            exec,
+            direct = { settings.getSetting(namespace, key) },
+            fallback = { exec.getSetting(namespace, key) },
+        ).fold(
             onSuccess = { v -> ToolResult(true, v ?: "(не задано)") },
             onFailure = { ToolResult(false, "Ошибка: ${it.message}") },
         )
     }
 }
 
-class ShellPutSettingTool(private val exec: PrivExecutor) : Tool {
+class ShellPutSettingTool(private val exec: PrivExecutor, private val settings: SettingsAccess) : Tool {
     override val schema = ToolSchema(
         name = "shell_put_setting",
-        description = "Записать системную настройку (system/secure/global). Требует Shizuku или root.",
+        description = "Записать системную настройку (system/secure/global). " +
+            "Сначала Android API с выданными приложению разрешениями, при отказе — Shizuku или root.",
         parameters = buildJsonObject {
             put("type", "object")
             put("properties", buildJsonObject {
@@ -128,7 +153,7 @@ class ShellPutSettingTool(private val exec: PrivExecutor) : Tool {
             })
         },
     )
-    override val privilege: PrivilegeLevel = PrivilegeLevel.SHIZUKU
+    override val privilege: PrivilegeLevel = PrivilegeLevel.NONE
 
     override fun describeForConfirmation(arguments: JsonObject): String {
         val ns = arguments["namespace"]?.jsonPrimitive?.content ?: "?"
@@ -138,7 +163,6 @@ class ShellPutSettingTool(private val exec: PrivExecutor) : Tool {
     }
 
     override suspend fun execute(arguments: JsonObject): ToolResult {
-        requirePrivileged(exec)?.let { return it }
         val namespace = stringArg(arguments, "namespace")
             ?: return ToolResult(false, "Не указан namespace")
         ShellPolicy.checkNamespace(namespace)?.let { return ToolResult(false, it) }
@@ -146,7 +170,15 @@ class ShellPutSettingTool(private val exec: PrivExecutor) : Tool {
             ?: return ToolResult(false, "Не указан key")
         val value = arguments["value"]?.jsonPrimitive?.content
             ?: return ToolResult(false, "Не указан value")
-        return exec.putSetting(namespace, key, value).fold(
+        return settingWithFallback(
+            exec,
+            direct = {
+                settings.putSetting(namespace, key, value).mapCatching { written ->
+                    check(written) { "Android API отклонил запись $namespace/$key" }
+                }
+            },
+            fallback = { exec.putSetting(namespace, key, value) },
+        ).fold(
             onSuccess = { ToolResult(true, "Записано: $namespace/$key") },
             onFailure = { ToolResult(false, "Ошибка: ${it.message}") },
         )
