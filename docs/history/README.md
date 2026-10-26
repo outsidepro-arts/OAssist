@@ -54,6 +54,8 @@ rg -n -F "Выбор RecognitionService" docs/history/development-log-2026-10-26
 
 ## Последующие записи
 
+- [Нажатия при Jieshuo browse by touch, 2026-10-26](jieshuo-touch-exploration-2026-10-26.md) —
+  воспроизведение на телефоне, ограничения Android API и влияние JDWP на диагностику.
 - [Резервные способы ввода и доступа к настройкам, 2026-10-26](privilege-fallbacks-2026-10-26.md) —
   сохранение привилегированных резервов, новые Android API-попытки и замечание review.
 - [Аудит инструкций, 2026-10-26](instruction-audit-2026-10-26.md) — найденные конфликты,
