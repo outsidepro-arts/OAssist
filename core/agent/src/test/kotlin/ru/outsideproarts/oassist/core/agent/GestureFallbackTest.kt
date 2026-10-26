@@ -76,6 +76,20 @@ class GestureFallbackTest {
     }
 
     @Test
+    fun invalidGestureConstructionStillRunsPrivilegedFallback() = runTest {
+        val calls = mutableListOf<String>()
+        val result = performGestureWithFallback(100, success, {
+            calls += "build"
+            throw IllegalArgumentException("negative path bounds")
+        }) {
+            calls += "input"
+            fallbackResult
+        }
+        assertEquals(fallbackResult, result)
+        assertEquals(listOf("build", "input"), calls)
+    }
+
+    @Test
     fun failedPrivilegedFallbackIsReported() = runTest {
         val failure = ToolResult(false, "no privileges")
         assertEquals(failure, performGestureWithFallback(100, success, { false }) { failure })

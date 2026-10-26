@@ -310,14 +310,14 @@ class UiActions(
         } else {
             ViewConfiguration.getTapTimeout().toLong().coerceAtLeast(1L)
         }
-        val path = Path().apply { moveTo(center.first.toFloat(), center.second.toFloat()) }
-        val gesture = GestureDescription.Builder()
-            .addStroke(GestureDescription.StrokeDescription(path, 0, durationMs))
-            .build()
         return performGestureWithFallback(
             timeoutMs = durationMs + GESTURE_TIMEOUT_MS,
             success = ToolResult(true, "Удалось $verb (узел №$index, жест доступности)"),
             dispatch = { complete ->
+                val path = Path().apply { moveTo(center.first.toFloat(), center.second.toFloat()) }
+                val gesture = GestureDescription.Builder()
+                    .addStroke(GestureDescription.StrokeDescription(path, 0, durationMs))
+                    .build()
                 service?.dispatchGesture(
                     gesture,
                     object : AccessibilityService.GestureResultCallback() {
