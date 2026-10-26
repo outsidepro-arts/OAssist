@@ -439,6 +439,7 @@ private var turnTranscript: List<ChatMessage> = emptyList()
             when (effect) {
                 AssistVoiceEffect.StartStt -> startStt()
                 AssistVoiceEffect.CancelStt -> {
+                    if (listening) sounds?.playIfEnabled(AgentSound.VOICE_FINISH, soundEnabled)
                     listening = false
                     sttPreview = ""
                     voice?.cancelStt()
@@ -483,6 +484,7 @@ private var turnTranscript: List<ChatMessage> = emptyList()
                 voiceFlow.onSttStartFailed()
             } else {
                 listening = true
+                sounds?.playIfEnabled(AgentSound.VOICE_START, soundEnabled)
             }
             refreshSessionNotification(force = true)
         }
@@ -498,6 +500,7 @@ private var turnTranscript: List<ChatMessage> = emptyList()
         override fun onFinal(text: String) {
             sttPreview = ""
             listening = false
+            sounds?.playIfEnabled(AgentSound.VOICE_FINISH, soundEnabled)
             refreshSessionNotification(force = true)
             execute(voiceFlow.onSttFinal(text))
         }
@@ -505,6 +508,7 @@ private var turnTranscript: List<ChatMessage> = emptyList()
         override fun onSttError(error: SttError) {
             sttPreview = ""
             listening = false
+            sounds?.playIfEnabled(AgentSound.VOICE_FINISH, soundEnabled)
             hintText = when (error) {
                 SttError.NO_SPEECH -> getString(R.string.assistant_mic_empty)
                 SttError.NETWORK,

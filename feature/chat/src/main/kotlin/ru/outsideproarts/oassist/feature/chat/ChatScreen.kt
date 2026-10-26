@@ -630,12 +630,14 @@ fun ChatScreen(
 
         override fun onFinal(text: String) {
             sttPreview = ""
+            sounds?.playIfEnabled(AgentSound.VOICE_FINISH, soundEnabled)
             if (hold == null) sendRecognizedText(text) else hold.onFinal(text)?.let(::sendRecognizedText)
         }
 
         override fun onSttError(error: SttError) {
             hold?.onError()
             sttPreview = ""
+            sounds?.playIfEnabled(AgentSound.VOICE_FINISH, soundEnabled)
             Toast.makeText(
                 context,
                 when (error) {
@@ -670,7 +672,9 @@ fun ChatScreen(
             if (handle == null || !handle.isSttAvailable(stt.recognizerComponent)) {
                 sttErrorToast(CaptureError.NO_RECOGNIZER)
             } else {
-                handle.startStt(stt.language, sttListener(), stt.recognizerComponent)?.let { sttErrorToast(it) }
+                val error = handle.startStt(stt.language, sttListener(), stt.recognizerComponent)
+                if (error != null) sttErrorToast(error)
+                else sounds?.playIfEnabled(AgentSound.VOICE_START, soundEnabled)
             }
         } else {
             Toast.makeText(context, micDeniedText, Toast.LENGTH_LONG).show()
@@ -690,6 +694,7 @@ fun ChatScreen(
                     handle.stopStt()
                 } else {
                     handle.cancelRaw()
+                    sounds?.playIfEnabled(AgentSound.VOICE_FINISH, soundEnabled)
                 }
             }
             else -> {
@@ -700,7 +705,9 @@ fun ChatScreen(
                 if (context.checkSelfPermission(Manifest.permission.RECORD_AUDIO) ==
                     PackageManager.PERMISSION_GRANTED
                 ) {
-                    handle.startStt(stt.language, sttListener(), stt.recognizerComponent)?.let { sttErrorToast(it) }
+                    val error = handle.startStt(stt.language, sttListener(), stt.recognizerComponent)
+                    if (error != null) sttErrorToast(error)
+                    else sounds?.playIfEnabled(AgentSound.VOICE_START, soundEnabled)
                 } else {
                     micPermissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
                 }
@@ -724,14 +731,23 @@ fun ChatScreen(
             else ru.outsideproarts.oassist.core.speech.CaptureMode.STT,
         )
         if (hold.mode == ru.outsideproarts.oassist.core.speech.CaptureMode.RAW) {
-            handle.startRaw()?.let { sttErrorToast(it); return false }
+            val error = handle.startRaw()
+            if (error != null) {
+                sttErrorToast(error)
+                return false
+            }
+            sounds?.playIfEnabled(AgentSound.VOICE_START, soundEnabled)
         } else {
             if (!handle.isSttAvailable(stt.recognizerComponent)) {
                 sttErrorToast(CaptureError.NO_RECOGNIZER)
                 return false
             }
-            handle.startStt(stt.language, sttListener(hold), stt.recognizerComponent)
-                ?.let { sttErrorToast(it); return false }
+            val error = handle.startStt(stt.language, sttListener(hold), stt.recognizerComponent)
+            if (error != null) {
+                sttErrorToast(error)
+                return false
+            }
+            sounds?.playIfEnabled(AgentSound.VOICE_START, soundEnabled)
         }
         holdSession = hold
         return true
@@ -741,10 +757,12 @@ fun ChatScreen(
         val hold = holdSession ?: return
         holdSession = null
         if (hold.cancel()) {
+            val wasListening = handle.captureState().value is CaptureState.Listening
             when (hold.mode) {
                 ru.outsideproarts.oassist.core.speech.CaptureMode.STT -> handle.cancelStt()
                 ru.outsideproarts.oassist.core.speech.CaptureMode.RAW -> handle.cancelRaw()
             }
+            if (wasListening) sounds?.playIfEnabled(AgentSound.VOICE_FINISH, soundEnabled)
         }
         sttPreview = ""
         if (tooShort) Toast.makeText(context, voiceShortText, Toast.LENGTH_SHORT).show()
@@ -761,7 +779,9 @@ fun ChatScreen(
                 else if (hold.captureActive) handle.stopStt()
             }
             ru.outsideproarts.oassist.core.speech.CaptureMode.RAW -> {
+                val wasListening = handle.captureState().value is CaptureState.Listening
                 val wav = handle.stopRaw()
+                if (wasListening) sounds?.playIfEnabled(AgentSound.VOICE_FINISH, soundEnabled)
                 if (wav == null) {
                     Toast.makeText(context, voiceShortText, Toast.LENGTH_SHORT).show()
                 } else {

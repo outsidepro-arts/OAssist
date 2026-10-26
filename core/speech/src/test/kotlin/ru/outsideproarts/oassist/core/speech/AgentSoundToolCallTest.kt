@@ -38,5 +38,7 @@ class AgentSoundToolCallTest {
     fun resNames_matchRawResources() {
         assertEquals("tool_call_read", AgentSound.TOOL_CALL_READ.resName)
         assertEquals("tool_call_write", AgentSound.TOOL_CALL_WRITE.resName)
+        assertEquals("voice_start", AgentSound.VOICE_START.resName)
+        assertEquals("voice_finish", AgentSound.VOICE_FINISH.resName)
     }
 }

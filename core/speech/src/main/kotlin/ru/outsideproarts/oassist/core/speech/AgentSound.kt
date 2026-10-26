@@ -18,7 +18,9 @@ enum class AgentSound(val resName: String) {
     PERMISSION_REQUEST("permission_request"),
     THINKING("thinking"),
     TOOL_CALL_READ("tool_call_read"),
-    TOOL_CALL_WRITE("tool_call_write");
+    TOOL_CALL_WRITE("tool_call_write"),
+    VOICE_FINISH("voice_finish"),
+    VOICE_START("voice_start");
 
     companion object {
         /**
