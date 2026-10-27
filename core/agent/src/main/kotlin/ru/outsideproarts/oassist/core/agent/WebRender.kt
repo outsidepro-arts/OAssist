@@ -23,7 +23,11 @@ data class RenderedPage(
     val title: String?,
     val finalUrl: String,
     val html: String,
+    val bodyTruncated: Boolean = false,
 )
+
+internal fun cappedRenderedPage(title: String?, url: String, html: String): RenderedPage =
+    RenderedPage(title, url, html.take(WebRenderActions.MAX_RENDER_CHARS), html.length > WebRenderActions.MAX_RENDER_CHARS)
 
 /**
  * Тяжёлый tier чтения веба: рендер через встроенный WebView (системный движок),
@@ -144,7 +148,7 @@ class WebRenderActions(
             if (html.isNullOrBlank()) {
                 done.complete(Result.failure(IllegalStateException("Пустой DOM после рендера")))
             } else {
-                done.complete(Result.success(RenderedPage(title, finishedUrl, html!!)))
+                done.complete(Result.success(cappedRenderedPage(title, finishedUrl, html!!)))
             }
         }
         view.evaluateJavascript("(function(){return document.title})()") {
@@ -152,7 +156,7 @@ class WebRenderActions(
             tryFinish()
         }
         view.evaluateJavascript(
-            "(function(){return document.documentElement.outerHTML.slice(0,$MAX_RENDER_CHARS)})()",
+            "(function(){return document.documentElement.outerHTML.slice(0,${MAX_RENDER_CHARS + 1})})()",
         ) {
             html = decodeJsString(it)
             tryFinish()
@@ -165,7 +169,7 @@ class WebRenderActions(
         private const val WIPE_TIMEOUT_MS = 2000L
         private const val VIEWPORT_WIDTH = 1280
         private const val VIEWPORT_HEIGHT = 800
-        private const val MAX_RENDER_CHARS = 500_000
+        internal const val MAX_RENDER_CHARS = 500_000
         const val MIN_STATIC_CHARS = 500
     }
 }

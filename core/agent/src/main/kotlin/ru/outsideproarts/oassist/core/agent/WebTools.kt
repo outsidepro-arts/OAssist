@@ -62,7 +62,9 @@ class WebFetchTool(private val fetcher: WebFetcher) : Tool {
         return fetcher.fetch(url, mode, maxChars, renderMode, images).fold(
             onSuccess = { page ->
                 val tier = if (page.tier == FetchTier.RENDERED) "rendered" else "static"
-                val header = "[web_fetch $tier] ${page.title ?: page.finalUrl}\n${page.finalUrl}\n\n"
+                val clipping = if (page.truncated) "обнаружено усечение" else "усечение по лимиту не обнаружено"
+                val modeName = if (mode == FetchMode.GIST) "gist (краткий режим)" else "full"
+                val header = "[web_fetch $tier; режим запроса: $modeName; $clipping] ${page.title ?: page.finalUrl}\n${page.finalUrl}\n\n"
                 ToolResult(true, header + page.markdown)
             },
             onFailure = { ToolResult(false, "Не удалось прочитать страницу: ${mapFetchError(it)}") },
