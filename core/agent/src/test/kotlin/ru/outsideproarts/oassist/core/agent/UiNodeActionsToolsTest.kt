@@ -35,9 +35,9 @@ class UiNodeActionsToolsTest {
     fun `схема списка требует индекс элемента`() {
         val schema = UiGetActionsTool(ui()).schema
         assertEquals("ui_get_actions", schema.name)
-        assertEquals(setOf("index"), schema.parameters["properties"]!!.jsonObject.keys)
+        assertEquals(setOf("index", "snapshot_id"), schema.parameters["properties"]!!.jsonObject.keys)
         assertEquals(
-            listOf("index"),
+            listOf("index", "snapshot_id"),
             schema.parameters["required"]!!.jsonArray.map { it.jsonPrimitive.content },
         )
         assertEquals(
@@ -50,14 +50,14 @@ class UiNodeActionsToolsTest {
     fun `схема выполнения требует оба индекса`() {
         val schema = UiPerformActionTool(ui()).schema
         assertEquals("ui_perform_action", schema.name)
-        assertEquals(setOf("index", "action_index"), schema.parameters["properties"]!!.jsonObject.keys)
+        assertEquals(setOf("index", "snapshot_id", "action_index"), schema.parameters["properties"]!!.jsonObject.keys)
         assertEquals(
-            setOf("index", "action_index"),
+            setOf("index", "snapshot_id", "action_index"),
             schema.parameters["required"]!!.jsonArray.map { it.jsonPrimitive.content }.toSet(),
         )
         schema.parameters["properties"]!!.jsonObject.forEach { (name, prop) ->
             assertEquals(
-                "integer",
+                if (name == "snapshot_id") "string" else "integer",
                 prop.jsonObject["type"]!!.jsonPrimitive.content,
             )
             assertTrue(prop.jsonObject["description"]!!.jsonPrimitive.content.isNotBlank())
@@ -99,7 +99,7 @@ class UiNodeActionsToolsTest {
         val performNoArgs = UiPerformActionTool(ui()).execute(JsonObject(emptyMap()))
         assertFalse(performNoArgs.success)
         assertEquals("Не указан index", performNoArgs.output)
-        val noActionIndex = UiPerformActionTool(ui()).execute(args("index" to "5"))
+        val noActionIndex = UiPerformActionTool(ui()).execute(args("index" to "5", "snapshot_id" to "snapshot"))
         assertFalse(noActionIndex.success)
         assertEquals("Не указан action_index", noActionIndex.output)
     }
@@ -113,18 +113,18 @@ class UiNodeActionsToolsTest {
 
     @Test
     fun `без доступа к сервису — явная диагностика`() = runBlocking {
-        val list = UiGetActionsTool(ui(granted = false)).execute(args("index" to "3"))
+        val list = UiGetActionsTool(ui(granted = false)).execute(args("index" to "3", "snapshot_id" to "snapshot"))
         assertFalse(list.success)
         assertEquals(UiActions.SERVICE_DISABLED_MESSAGE, list.output)
         val perform = UiPerformActionTool(ui(granted = false))
-            .execute(args("index" to "3", "action_index" to "0"))
+            .execute(args("index" to "3", "action_index" to "0", "snapshot_id" to "snapshot"))
         assertFalse(perform.success)
         assertEquals(UiActions.SERVICE_DISABLED_MESSAGE, perform.output)
     }
 
     @Test
     fun `доступ выдан, но сервис не подключился — тоже явная диагностика`() = runBlocking {
-        val result = UiGetActionsTool(ui(granted = true)).execute(args("index" to "3"))
+        val result = UiGetActionsTool(ui(granted = true)).execute(args("index" to "3", "snapshot_id" to "snapshot"))
         assertFalse(result.success)
         assertEquals(UiActions.SERVICE_NOT_CONNECTED_MESSAGE, result.output)
     }

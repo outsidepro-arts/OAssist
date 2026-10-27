@@ -48,9 +48,9 @@ class UiScreenshotToolsTest {
     fun `схема узла требует один индекс`() {
         val schema = UiScreenshotNodeTool(ui()).schema
         assertEquals("ui_screenshot_node", schema.name)
-        assertEquals(setOf("index"), schema.parameters["properties"]!!.jsonObject.keys)
+        assertEquals(setOf("index", "snapshot_id"), schema.parameters["properties"]!!.jsonObject.keys)
         assertEquals(
-            listOf("index"),
+            listOf("index", "snapshot_id"),
             schema.parameters["required"]!!.jsonArray.map { it.jsonPrimitive.content },
         )
         assertEquals(

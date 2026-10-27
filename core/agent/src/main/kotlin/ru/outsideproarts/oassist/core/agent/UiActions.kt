@@ -13,6 +13,8 @@ import android.view.accessibility.AccessibilityNodeInfo
 import android.view.accessibility.AccessibilityWindowInfo
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.withTimeoutOrNull
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import ru.outsideproarts.oassist.core.device.NoopExecutor
 import ru.outsideproarts.oassist.core.provider.ImageCodec
 import ru.outsideproarts.oassist.core.model.ImagePart
@@ -39,6 +41,9 @@ class UiActions(
 ) {
 
     private val curtain = ScreenCurtain(privProvider)
+    private val observationMutex = Mutex()
+    private val observations = UiObservationRegistry<AccessibilityNodeInfo> { it.recycle() }
+    private val STALE_SNAPSHOT_MESSAGE = "Снимок или элемент устарел — вызови ui_get_screen заново"
 
     private suspend fun serviceOrError(): Result<AccessibilityService> {
         serviceProvider()?.let { return Result.success(it) }
@@ -92,163 +97,158 @@ class UiActions(
         return RootPick(fallback, fallback?.packageName?.toString() == own)
     }
 
-    /** Свежий снимок дерева активного окна. */
-    @Suppress("DEPRECATION")
-    suspend fun snapshot(): Result<UiSnapshotResult> = overlayHidden(settleMs = SNAPSHOT_SETTLE_MS) { snapshotDirect() }
+    suspend fun snapshot(): Result<UiSnapshotResult> = observationMutex.withLock {
+        observations.clear()
+        overlayHidden(settleMs = SNAPSHOT_SETTLE_MS) { snapshotDirect(publish = true) }
+    }
 
     @Suppress("DEPRECATION")
-    private suspend fun snapshotDirect(): Result<UiSnapshotResult> {
+    private suspend fun snapshotDirect(publish: Boolean = false): Result<UiSnapshotResult> {
         val service = serviceOrError().getOrElse { return Result.failure(it) }
         val pick = targetRoot(service)
-        val root = pick.root
-            ?: return Result.failure(IllegalStateException("Нет активного окна"))
+        val root = pick.root ?: return Result.failure(IllegalStateException("Нет активного окна"))
         return try {
             val walk = collectCandidates(root)
-            val screenHeight = runCatching { service.resources.displayMetrics.heightPixels }.getOrDefault(0)
-            val shown = selectPositions(walk.nodes, SHOW_NODES, screenHeight)
-                .mapIndexed { display, pos -> walk.nodes[pos].copy(index = display) }
-            Result.success(UiSnapshotResult(shown, walk.total, screenHeight, pick.fromOwnWindow))
-        } finally {
-            root.recycle()
-        }
-    }
-
-    suspend fun click(index: Int): ToolResult {
-        val direct = performOnNode(index, "нажать") { node ->
-            node.isClickable && node.performAction(AccessibilityNodeInfo.ACTION_CLICK)
-        }
-        if (direct.success) return direct
-        return gestureThrough { touchNodeCenter(index, "нажать", longClick = false) }
-    }
-
-    suspend fun longClick(index: Int): ToolResult {
-        val direct = performOnNode(index, "долго нажать") { node ->
-            node.isLongClickable && node.performAction(AccessibilityNodeInfo.ACTION_LONG_CLICK)
-        }
-        if (direct.success) return direct
-        return gestureThrough { touchNodeCenter(index, "долго нажать", longClick = true) }
-    }
-
-    suspend fun setText(index: Int, text: String): ToolResult = performOnNode(index, "ввести текст") { node ->
-        if (!node.isEditable && node.className?.toString() != "android.widget.EditText") return@performOnNode false
-        node.performAction(AccessibilityNodeInfo.ACTION_FOCUS)
-        val args = Bundle().apply {
-            putCharSequence(AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE, text)
-        }
-        node.performAction(AccessibilityNodeInfo.ACTION_SET_TEXT, args)
-    }
-
-    suspend fun scroll(index: Int?, direction: String): ToolResult {
-        val forward = when (direction.lowercase()) {
-            "down", "forward", "вниз" -> true
-            "up", "backward", "вверх" -> false
-            else -> return ToolResult(false, "Направление: down/up")
-        }
-        val nodes = snapshotDirect().map { it.nodes }.getOrElse { return ToolResult(false, it.message ?: "Нет снимка") }
-        val target = if (index != null) {
-            nodes.find { it.index == index }
-                ?: return ToolResult(false, "Узел №$index не найден")
-        } else {
-            nodes.firstOrNull { it.scrollable }
-                ?: return ToolResult(false, "Прокручиваемых узлов нет")
-        }
-        if (!target.scrollable) return ToolResult(false, "Узел №${target.index} не прокручивается")
-        val action = if (forward) {
-            AccessibilityNodeInfo.ACTION_SCROLL_FORWARD
-        } else {
-            AccessibilityNodeInfo.ACTION_SCROLL_BACKWARD
-        }
-        return performOnFreshNode(target.index, "прокрутить") { it.performAction(action) }
-    }
-
-    /**
-     * Список скрытых действий узла по индексу снимка (`ui_get_actions`).
-     * Узел ищется свежим обходом (индексы протухают), оверлей не прячем —
-     * как у `click`, действие привязано к узлу, а не к координатам.
-     */
-    suspend fun nodeActions(index: Int): ToolResult {
-        val service = serviceOrError().getOrElse { return ToolResult(false, it.message ?: "Сервис недоступен") }
-        val root = targetRoot(service).root
-            ?: return ToolResult(false, "Нет активного окна")
-        val screenH = runCatching { service.resources.displayMetrics.heightPixels }.getOrDefault(0)
-        return try {
-            val hit = findNodeByIndex(root, index, screenH)
-                ?: return ToolResult(false, "Узел №$index не найден на экране — вызови ui_get_screen заново и возьми индекс оттуда")
             try {
-                val label = hit.node.label ?: hit.node.className.substringAfterLast('.')
-                ToolResult(true, formatNodeActions(index, label, hiddenActions(actionListOf(hit.info))))
+                val screenHeight = runCatching { service.resources.displayMetrics.heightPixels }.getOrDefault(0)
+                val positions = selectPositions(walk.nodes, SHOW_NODES, screenHeight)
+                val shown = positions.mapIndexed { display, pos -> walk.nodes[pos].copy(index = display) }
+                val snapshotId = if (publish) java.util.UUID.randomUUID().toString() else null
+                if (snapshotId != null) {
+                    val retained = positions.mapIndexed { display, pos ->
+                        val ref = walk.refs[pos]
+                        UiObservedNode(AccessibilityNodeInfo.obtain(ref), fingerprint(ref, shown[display]))
+                    }
+                    observations.publish(snapshotId, retained)
+                }
+                Result.success(UiSnapshotResult(shown, walk.total, screenHeight, pick.fromOwnWindow, snapshotId))
             } finally {
-                hit.info.recycle()
+                walk.refs.forEach { it.recycle() }
             }
         } finally {
             root.recycle()
         }
     }
 
-    /**
-     * Выполнить скрытое действие узла по индексам снимка и списка (`ui_perform_action`).
-     * Список действий пересчитывается на свежей ноде: индексы между вызовами
-     * могли сдвинуться — тогда честная ошибка с актуальным списком для самовосстановления.
-     */
-    suspend fun performNodeAction(index: Int, actionIndex: Int): ToolResult {
-        val service = serviceOrError().getOrElse { return ToolResult(false, it.message ?: "Сервис недоступен") }
-        val root = targetRoot(service).root
-            ?: return ToolResult(false, "Нет активного окна")
-        val screenH = runCatching { service.resources.displayMetrics.heightPixels }.getOrDefault(0)
-        return try {
-            val hit = findNodeByIndex(root, index, screenH)
-                ?: return ToolResult(false, "Узел №$index не найден на экране — вызови ui_get_screen заново и возьми индекс оттуда")
+    suspend fun click(index: Int, snapshotId: String?): ToolResult = observationMutex.withLock {
+        try {
+            val direct = performOnFreshNode(index, snapshotId, "нажать") { node ->
+                node.isClickable && node.performAction(AccessibilityNodeInfo.ACTION_CLICK)
+            }
+            if (direct.success) direct
+            else gestureThrough { touchNodeCenter(index, snapshotId, "нажать", longClick = false) }
+        } finally { observations.clear() }
+    }
+
+    suspend fun longClick(index: Int, snapshotId: String?): ToolResult = observationMutex.withLock {
+        try {
+            val direct = performOnFreshNode(index, snapshotId, "долго нажать") { node ->
+                node.isLongClickable && node.performAction(AccessibilityNodeInfo.ACTION_LONG_CLICK)
+            }
+            if (direct.success) direct
+            else gestureThrough { touchNodeCenter(index, snapshotId, "долго нажать", longClick = true) }
+        } finally { observations.clear() }
+    }
+
+    suspend fun setText(index: Int, text: String, snapshotId: String?): ToolResult = observationMutex.withLock {
+        try {
+            performOnFreshNode(index, snapshotId, "ввести текст") { node ->
+                if (!node.isEditable && node.className?.toString() != "android.widget.EditText") return@performOnFreshNode false
+                node.performAction(AccessibilityNodeInfo.ACTION_FOCUS)
+                val args = Bundle().apply {
+                    putCharSequence(AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE, text)
+                }
+                node.performAction(AccessibilityNodeInfo.ACTION_SET_TEXT, args)
+            }
+        } finally { observations.clear() }
+    }
+
+    suspend fun scroll(index: Int?, direction: String, snapshotId: String?): ToolResult = observationMutex.withLock {
+        val forward = when (direction.lowercase()) {
+            "down", "forward", "вниз" -> true
+            "up", "backward", "вверх" -> false
+            else -> return@withLock ToolResult(false, "Направление: down/up")
+        }
+        val action = if (forward) AccessibilityNodeInfo.ACTION_SCROLL_FORWARD else AccessibilityNodeInfo.ACTION_SCROLL_BACKWARD
+        try {
+            if (index != null) {
+                performOnFreshNode(index, snapshotId, "прокрутить") { it.isScrollable && it.performAction(action) }
+            } else {
+                val service = serviceOrError().getOrElse { return@withLock ToolResult(false, it.message ?: "Сервис недоступен") }
+                val root = targetRoot(service).root ?: return@withLock ToolResult(false, "Нет активного окна")
+                try {
+                    val walk = collectCandidates(root)
+                    try {
+                        val target = walk.refs.firstOrNull { it.isScrollable }
+                            ?: return@withLock ToolResult(false, "Прокручиваемых узлов нет")
+                        if (target.performAction(action)) ToolResult(true, "Удалось прокрутить")
+                        else ToolResult(false, "Не удалось прокрутить")
+                    } finally { walk.refs.forEach { it.recycle() } }
+                } finally { root.recycle() }
+            }
+        } finally { observations.clear() }
+    }
+
+    suspend fun nodeActions(index: Int, snapshotId: String?): ToolResult = observationMutex.withLock {
+        val hit = resolveCurrentNode(index, snapshotId).getOrElse {
+            return@withLock ToolResult(false, it.message ?: STALE_SNAPSHOT_MESSAGE)
+        }
+        try {
+            val actions = hiddenActions(actionListOf(hit.info))
+            if (!observations.advertise(snapshotId, index, actions)) {
+                observations.clear()
+                return@withLock ToolResult(false, STALE_SNAPSHOT_MESSAGE)
+            }
+            val label = hit.node.label ?: hit.node.className.substringAfterLast('.')
+            ToolResult(true, formatNodeActions(index, label, actions))
+        } finally { hit.info.recycle() }
+    }
+
+    suspend fun performNodeAction(index: Int, actionIndex: Int, snapshotId: String?): ToolResult = observationMutex.withLock {
+        try {
+            val hit = resolveCurrentNode(index, snapshotId).getOrElse {
+                return@withLock ToolResult(false, it.message ?: STALE_SNAPSHOT_MESSAGE)
+            }
             try {
-                val label = hit.node.label ?: hit.node.className.substringAfterLast('.')
                 val actions = hiddenActions(actionListOf(hit.info))
-                val action = actions.getOrNull(actionIndex)
-                    ?: return ToolResult(
-                        false,
-                        "Действия №$actionIndex у элемента №$index сейчас нет — вот актуальный список:\n" +
-                            formatNodeActions(index, label, actions),
-                    )
+                val action = observations.action(snapshotId, index, actionIndex, actions)
+                    ?: return@withLock ToolResult(false, "Список действий изменился или не был запрошен — вызови ui_get_screen и ui_get_actions заново")
                 val name = actionName(action)
                 if (hit.info.performAction(action.id)) {
                     ToolResult(true, "Выполнено действие $name (элемент №$index)")
                 } else {
-                    ToolResult(
-                        false,
-                        "Не удалось выполнить действие $name (элемент №$index) — возможно, элемент устарел " +
-                            "или действию нужны аргументы; перечитай ui_get_screen и повтори",
-                    )
+                    ToolResult(false, "Не удалось выполнить действие $name (элемент №$index)")
                 }
-            } finally {
-                hit.info.recycle()
+            } finally { hit.info.recycle() }
+        } finally { observations.clear() }
+    }
+
+    suspend fun globalAction(action: String): ToolResult = observationMutex.withLock {
+        try {
+            val service = serviceOrError().getOrElse { return@withLock ToolResult(false, it.message ?: "Сервис недоступен") }
+            val global = when (action.lowercase()) {
+                "back", "назад" -> AccessibilityService.GLOBAL_ACTION_BACK
+                "home", "домой" -> AccessibilityService.GLOBAL_ACTION_HOME
+                "recents", "недавние" -> AccessibilityService.GLOBAL_ACTION_RECENTS
+                else -> return@withLock ToolResult(false, "Действие: back/home/recents")
             }
-        } finally {
-            root.recycle()
-        }
+            if (service.performGlobalAction(global)) return@withLock ToolResult(true, "Выполнено: $action")
+            val keyCode = when (action.lowercase()) {
+                "back", "назад" -> 4
+                "home", "домой" -> 3
+                else -> 187
+            }
+            privProvider().inputKeyevent(keyCode).fold(
+                onSuccess = { ToolResult(true, "Выполнено: $action (фолбэк input)") },
+                onFailure = { ToolResult(false, "Не удалось выполнить $action: ${it.message}") },
+            )
+        } finally { observations.clear() }
     }
 
-    suspend fun globalAction(action: String): ToolResult {
-        val service = serviceOrError().getOrElse { return ToolResult(false, it.message ?: "Сервис недоступен") }
-        val global = when (action.lowercase()) {
-            "back", "назад" -> AccessibilityService.GLOBAL_ACTION_BACK
-            "home", "домой" -> AccessibilityService.GLOBAL_ACTION_HOME
-            "recents", "недавние" -> AccessibilityService.GLOBAL_ACTION_RECENTS
-            else -> return ToolResult(false, "Действие: back/home/recents")
-        }
-        if (service.performGlobalAction(global)) {
-            return ToolResult(true, "Выполнено: $action")
-        }
-        val keyCode = when (action.lowercase()) {
-            "back", "назад" -> 4
-            "home", "домой" -> 3
-            else -> 187 // APP_SWITCH
-        }
-        return privProvider().inputKeyevent(keyCode).fold(
-            onSuccess = { ToolResult(true, "Выполнено: $action (фолбэк input)") },
-            onFailure = { ToolResult(false, "Не удалось выполнить $action: ${it.message}") },
-        )
+    suspend fun swipe(fromX: Int, fromY: Int, toX: Int, toY: Int, durationMs: Long): ToolResult = observationMutex.withLock {
+        try { gestureThrough { swipeInternal(fromX, fromY, toX, toY, durationMs) } }
+        finally { observations.clear() }
     }
-
-    suspend fun swipe(fromX: Int, fromY: Int, toX: Int, toY: Int, durationMs: Long): ToolResult =
-        gestureThrough { swipeInternal(fromX, fromY, toX, toY, durationMs) }
 
     private suspend fun swipeInternal(fromX: Int, fromY: Int, toX: Int, toY: Int, durationMs: Long): ToolResult {
         val service = serviceOrError().getOrElse { return ToolResult(false, it.message ?: "Сервис недоступен") }
@@ -294,15 +294,16 @@ class UiActions(
         onFailure = { ToolResult(false, "$reason: ${it.message}") },
     )
 
-    /** Центр узла из свежего снимка — для фолбэка тапов. */
-    private suspend fun nodeCenter(index: Int): Pair<Int, Int>? {
-        val node = snapshotDirect().getOrNull()?.nodes?.find { it.index == index } ?: return null
-        val b = node.bounds
-        return ((b.left + b.right) / 2) to ((b.top + b.bottom) / 2)
+    private suspend fun nodeCenter(index: Int, snapshotId: String?): Pair<Int, Int>? {
+        val hit = resolveCurrentNode(index, snapshotId).getOrNull() ?: return null
+        return try {
+            val b = hit.node.bounds
+            ((b.left + b.right) / 2) to ((b.top + b.bottom) / 2)
+        } finally { hit.info.recycle() }
     }
 
-    private suspend fun touchNodeCenter(index: Int, verb: String, longClick: Boolean): ToolResult {
-        val center = nodeCenter(index) ?: return ToolResult(false, "Узел №$index не найден")
+    private suspend fun touchNodeCenter(index: Int, snapshotId: String?, verb: String, longClick: Boolean): ToolResult {
+        val center = nodeCenter(index, snapshotId) ?: return ToolResult(false, STALE_SNAPSHOT_MESSAGE)
         val priv = privProvider()
         val result = if (longClick) {
             priv.inputSwipe(center.first, center.second, center.first, center.second, 800)
@@ -315,8 +316,8 @@ class UiActions(
         )
     }
 
-    /** Ждать появления текста на экране (опрос снимков, лимит [timeoutMs]). */
-    suspend fun waitForText(text: String, timeoutMs: Long): ToolResult = overlayHidden { waitForTextLoop(text, timeoutMs) }
+    suspend fun waitForText(text: String, timeoutMs: Long): ToolResult =
+        observationMutex.withLock { overlayHidden { waitForTextLoop(text, timeoutMs) } }
 
     private suspend fun waitForTextLoop(text: String, timeoutMs: Long): ToolResult {
         val deadline = System.currentTimeMillis() + timeoutMs.coerceIn(1, MAX_WAIT_MS)
@@ -334,33 +335,24 @@ class UiActions(
 
     private suspend fun performOnNode(
         index: Int,
+        snapshotId: String?,
         verb: String,
         action: (AccessibilityNodeInfo) -> Boolean,
-    ): ToolResult = performOnFreshNode(index, verb, action)
+    ): ToolResult = performOnFreshNode(index, snapshotId, verb, action)
 
-    @Suppress("DEPRECATION")
     private suspend fun performOnFreshNode(
         index: Int,
+        snapshotId: String?,
         verb: String,
         action: (AccessibilityNodeInfo) -> Boolean,
     ): ToolResult {
-        val service = serviceOrError().getOrElse { return ToolResult(false, it.message ?: "Сервис недоступен") }
-        val pick = targetRoot(service)
-        val root = pick.root
-            ?: return ToolResult(false, "Нет активного окна")
-        val screenH = runCatching { service.resources.displayMetrics.heightPixels }.getOrDefault(0)
-        return try {
-            val node = findByIndex(root, index, screenH)
-                ?: return ToolResult(false, "Узел №$index не найден")
-            try {
-                if (action(node)) ToolResult(true, "Удалось $verb (узел №$index)")
-                else ToolResult(false, "Не удалось $verb (узел №$index)")
-            } finally {
-                node.recycle()
-            }
-        } finally {
-            root.recycle()
+        val hit = resolveCurrentNode(index, snapshotId).getOrElse {
+            return ToolResult(false, it.message ?: STALE_SNAPSHOT_MESSAGE)
         }
+        return try {
+            if (action(hit.info)) ToolResult(true, "Удалось $verb (узел №$index)")
+            else ToolResult(false, "Не удалось $verb (узел №$index)")
+        } finally { hit.info.recycle() }
     }
 
     private class Walk(val refs: List<AccessibilityNodeInfo>, val nodes: List<UiNode>, val total: Int)
@@ -370,6 +362,7 @@ class UiActions(
         runCatching { node.actionList.orEmpty() }.getOrDefault(emptyList())
             .mapIndexed { i, action -> UiNodeAction(i, action.id, action.label?.toString()) }
 
+    @Suppress("DEPRECATION")
     private fun collectCandidates(root: AccessibilityNodeInfo): Walk {
         val refs = mutableListOf<AccessibilityNodeInfo>()
         val out = mutableListOf<UiNode>()
@@ -378,6 +371,9 @@ class UiActions(
         var total = 0
         while (queue.isNotEmpty()) {
             val (node, depth) = queue.removeFirst()
+            if (depth < MAX_DEPTH) {
+                for (i in 0 until node.childCount) node.getChild(i)?.let { queue.add(it to depth + 1) }
+            }
             val text = node.text?.toString()
             val desc = node.contentDescription?.toString()
             val hasHidden = actionListOf(node).any { isHiddenAction(it.id, it.label) }
@@ -389,7 +385,7 @@ class UiActions(
                 if (out.size < MAX_CANDIDATES) {
                     val bounds = Rect()
                     node.getBoundsInScreen(bounds)
-                    refs.add(node)
+                    refs.add(AccessibilityNodeInfo.obtain(node))
                     out.add(
                         UiNode(
                             index = out.size,
@@ -405,12 +401,7 @@ class UiActions(
                     )
                 }
             }
-            if (depth < MAX_DEPTH) {
-                for (i in 0 until node.childCount) {
-                    // Дочерние ссылки живут до recycle корня; объём ограничен MAX_CANDIDATES.
-                    node.getChild(i)?.let { queue.add(it to depth + 1) }
-                }
-            }
+            if (node !== root) node.recycle()
         }
         return Walk(refs, out, total)
     }
@@ -418,19 +409,37 @@ class UiActions(
     /** Узел снимка вместе с живой ссылкой — нужен и для действия, и для снимка элемента. */
     private class NodeHit(val node: UiNode, val info: AccessibilityNodeInfo)
 
-    private fun findNodeByIndex(
-        root: AccessibilityNodeInfo,
-        index: Int,
-        screenHeight: Int,
-    ): NodeHit? {
-        // Индексы соответствуют показанному снапшоту: тот же BFS + selectPositions.
-        val walk = collectCandidates(root)
-        val pos = selectPositions(walk.nodes, SHOW_NODES, screenHeight).getOrNull(index) ?: return null
-        return NodeHit(walk.nodes[pos].copy(index = index), walk.refs[pos])
+    private fun fingerprint(info: AccessibilityNodeInfo, node: UiNode): UiNodeFingerprint =
+        UiNodeFingerprint(
+            node = node,
+            windowId = info.windowId,
+            packageName = info.packageName?.toString(),
+            resourceId = info.viewIdResourceName,
+            enabled = info.isEnabled,
+            longClickable = info.isLongClickable,
+            visible = info.isVisibleToUser,
+        )
+
+    @Suppress("DEPRECATION")
+    private suspend fun resolveCurrentNode(index: Int, snapshotId: String?): Result<NodeHit> {
+        val service = serviceOrError().getOrElse { return Result.failure(it) }
+        val expected = observations.expected(snapshotId, index)
+            ?: return Result.failure(IllegalStateException(STALE_SNAPSHOT_MESSAGE))
+        val root = targetRoot(service).root
+            ?: return Result.failure(IllegalStateException("Нет активного окна"))
+        return try {
+            val walk = collectCandidates(root)
+            try {
+                val position = walk.refs.indices.firstOrNull { pos ->
+                    val node = walk.nodes[pos].copy(index = index)
+                    observations.matches(snapshotId, index, walk.refs[pos], fingerprint(walk.refs[pos], node))
+                }
+                if (position == null) Result.failure(IllegalStateException(STALE_SNAPSHOT_MESSAGE))
+                else Result.success(NodeHit(expected.fingerprint.node, AccessibilityNodeInfo.obtain(walk.refs[position])))
+            } finally { walk.refs.forEach { it.recycle() } }
+        } finally { root.recycle() }
     }
 
-    private fun findByIndex(root: AccessibilityNodeInfo, index: Int, screenHeight: Int): AccessibilityNodeInfo? =
-        findNodeByIndex(root, index, screenHeight)?.info
 
 /**
      * Скриншот текущего окна (панель ассистента скрыта). При чёрном кадре — best-effort
@@ -475,24 +484,11 @@ class UiActions(
             shot.toResult("Снимок области [$left,$top-$right,$bottom]")
         }
 
-    /**
-     * Снимок элемента интерфейса по индексу из `ui_get_screen`. Индекс протухает, поэтому
-     * снимок перечитывается; если элемента уже нет — честная подсказка перечитать список,
-     * а не снимок соседнего узла, который модель приняла бы за запрошенный.
-     */
-    suspend fun screenshotNode(index: Int): ToolResult = overlayHidden(settleMs = SNAPSHOT_SETTLE_MS) {
-        val service = serviceOrError().getOrElse {
-            return@overlayHidden ToolResult(false, it.message ?: "Сервис недоступен")
-        }
-        val root = targetRoot(service).root
-            ?: return@overlayHidden ToolResult(false, "Нет активного окна для снимка")
-        val screenHeight = runCatching { service.resources.displayMetrics.heightPixels }.getOrDefault(0)
-        try {
-            val hit = findNodeByIndex(root, index, screenHeight)
-                ?: return@overlayHidden ToolResult(
-                    false,
-                    "Узел №$index не найден на экране — вызови ui_get_screen заново и возьми индекс оттуда",
-                )
+    suspend fun screenshotNode(index: Int, snapshotId: String? = null): ToolResult = observationMutex.withLock {
+        overlayHidden(settleMs = SNAPSHOT_SETTLE_MS) {
+            val hit = resolveCurrentNode(index, snapshotId).getOrElse {
+                return@overlayHidden ToolResult(false, it.message ?: STALE_SNAPSHOT_MESSAGE)
+            }
             try {
                 val bounds = Rect()
                 hit.info.getBoundsInScreen(bounds)
@@ -502,11 +498,7 @@ class UiActions(
                 val shot = captureShot(bounds).getOrElse { return@overlayHidden screenshotError(it) }
                 val name = hit.node.label ?: hit.node.className.substringAfterLast('.')
                 shot.toResult("Снимок элемента №$index «$name»")
-            } finally {
-                hit.info.recycle()
-            }
-        } finally {
-            root.recycle()
+            } finally { hit.info.recycle() }
         }
     }
 

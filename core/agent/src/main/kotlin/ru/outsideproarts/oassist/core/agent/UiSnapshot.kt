@@ -72,6 +72,7 @@ data class UiSnapshotResult(
     val total: Int,
     val screenHeight: Int,
     val fromOwnWindow: Boolean,
+    val snapshotId: String? = null,
 )
 
 /**
