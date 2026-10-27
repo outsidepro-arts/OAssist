@@ -90,6 +90,7 @@ class AssistantOverlayService : LifecycleService(), SavedStateRegistryOwner {
     private val windowManager by lazy { getSystemService(WindowManager::class.java) }
     private var overlayView: android.view.View? = null
     private val voiceFlow = AssistVoiceFlow()
+    private val pendingSttStart = PendingSttStart(serviceScope)
     private var turnJob: Job? = null
     private var mediaRouter: MediaButtonRouter? = null
 
@@ -275,6 +276,7 @@ private var turnTranscript: List<ChatMessage> = emptyList()
     }
 
     override fun onDestroy() {
+        pendingSttStart.cancel()
         ru.outsideproarts.oassist.core.agent.OverlayControl.unregister(overlayControlImpl)
         execute(voiceFlow.onClose())
         sounds?.playIfEnabled(AgentSound.OVERLAY_STOP, soundEnabled)
@@ -456,6 +458,7 @@ private var turnTranscript: List<ChatMessage> = emptyList()
             when (effect) {
                 AssistVoiceEffect.StartStt -> startStt()
                 AssistVoiceEffect.CancelStt -> {
+                    pendingSttStart.cancel()
                     if (listening) sounds?.playIfEnabled(AgentSound.VOICE_FINISH, soundEnabled)
                     listening = false
                     sttPreview = ""
@@ -476,37 +479,34 @@ private var turnTranscript: List<ChatMessage> = emptyList()
     }
 
     private fun startStt() {
-        serviceScope.launch {
-            // Запоздавший StartStt (быстрый toggle) не должен поднимать микрофон поверх нового состояния.
-            if (voiceFlow.state.value !is AssistVoiceState.Listening) return@launch
+        pendingSttStart.start { isCurrent ->
+            if (!isCurrent() || voiceFlow.state.value !is AssistVoiceState.Listening) return@start
             val handle = voice
             if (handle == null || !handle.isSttAvailable(sttRecognizerComponent)) {
                 hintText = getString(R.string.assistant_no_recognizer)
                 voiceFlow.onSttStartFailed()
                 refreshSessionNotification(force = true)
-                return@launch
+                return@start
             }
             if (checkSelfPermission(Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) {
                 hintText = getString(R.string.assistant_mic_denied)
                 voiceFlow.onSttStartFailed()
                 refreshSessionNotification(force = true)
-                return@launch
+                return@start
             }
-            // BLUETOOTH_CONNECT — один раз через ConsentActivity (сервис сам показать
-            // системный диалог не может); отказ не блокирует запись с микрофона.
+            // Сервис просит Bluetooth-разрешение через ConsentActivity; отказ не блокирует микрофон.
             if (handle.bluetoothInputDecision(sttBluetoothInput) ==
                 ru.outsideproarts.oassist.core.speech.BtInputDecision.ASK_PERMISSION
             ) {
                 handle.markBluetoothPermissionRequested()
                 requestBluetoothPermission()
-                // Запоздавший старт после диалога не должен поднимать микрофон
-                // поверх нового состояния (toggle во время диалога).
-                if (voiceFlow.state.value !is AssistVoiceState.Listening) return@launch
             }
+            if (!isCurrent() || voiceFlow.state.value !is AssistVoiceState.Listening) return@start
             hintText = null
             // Тишина нашего TTS перед стартом: движок распознавания падает поверх звука.
             speech?.stop()
             val error = handle.startStt(sttLanguage, sttListener(), sttRecognizerComponent, sttBluetoothInput)
+            if (!isCurrent() || voiceFlow.state.value !is AssistVoiceState.Listening) return@start
             if (error != null) {
                 hintText = sttErrorText(error)
                 voiceFlow.onSttStartFailed()
@@ -564,17 +564,11 @@ private var turnTranscript: List<ChatMessage> = emptyList()
      * Результат не обрабатывается: отказ/таймаут — запись с микрофона.
      */
     private suspend fun requestBluetoothPermission() {
-        val permissions = listOf(Manifest.permission.BLUETOOTH_CONNECT)
-        val requestId = PermissionRequestBridge.register(permissions)
-        val intent = ConsentActivity.permissionIntent(this, requestId, permissions)
-            .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-        val started = runCatching { startActivity(intent) }.isSuccess
-        if (!started) {
-            PermissionRequestBridge.cancel(requestId)
-            return
-        }
-        // Короткий таймаут ответа: состояние «Слушаю…» не должно висеть минутами.
-        val outcome = PermissionRequestBridge.await(requestId, userTimeoutMs = 60_000L)
+        val outcome = awaitBluetoothPermission { requestId, permissions ->
+            val intent = ConsentActivity.permissionIntent(this, requestId, permissions)
+                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            runCatching { startActivity(intent) }.isSuccess
+        } ?: return
         ru.outsideproarts.oassist.core.model.OAssistLog.info(
             "AssistVoice",
             "Bluetooth permission request outcome=$outcome",
