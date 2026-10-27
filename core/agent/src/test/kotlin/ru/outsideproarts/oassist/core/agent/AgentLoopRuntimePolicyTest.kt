@@ -66,6 +66,7 @@ class AgentLoopRuntimePolicyTest {
             "",
             "Custom owner prompt.",
             "Legacy default: dangerous actions only after confirmation.",
+            "Когда пользователь прощается или благодарит - коротко попрощайся и вызови инструмент bye.",
             "Before every call, ask me separately in chat.",
         )
         val scopes = listOf("CHAT", "ASSISTANT", "SHARE")
@@ -94,8 +95,11 @@ class AgentLoopRuntimePolicyTest {
                 }
                 systems.forEachIndexed { attempt, system ->
                     assertEquals("$scope / $ownerPrompt / attempt $attempt", 1, system.occurrences(RUNTIME_TRUST_POLICY))
+                    assertTrue(system.contains("при самостоятельной благодарности без новой просьбы и незавершённой задачи"))
+                    assertTrue(system.contains("Благодарность с продолжением запроса не завершает диалог"))
                     if (!ownerPrompt.isNullOrBlank()) {
                         assertTrue("$scope / owner prompt was changed", system.contains(ownerPrompt))
+                        assertTrue("$scope / app policy must precede owner prompt", system.indexOf(RUNTIME_TRUST_POLICY) < system.indexOf(ownerPrompt))
                     }
                 }
                 assertEquals("early retry must resend the same prompt", systems[0], systems[1])
