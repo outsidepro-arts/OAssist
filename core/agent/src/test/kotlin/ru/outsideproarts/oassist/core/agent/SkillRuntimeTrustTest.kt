@@ -69,12 +69,14 @@ class SkillRuntimeTrustTest {
 
     @Test
     fun realSkillGetAfterApprovalAddsOnlySuccessfulBodyAsOwnerInstruction() = runTest {
-        val client = runWithDecision(ApprovalDecision.ALLOW_ONCE, SkillGetTool(Store(SkillInfo("report", "Report", body))))
+        val longBody = "Описание. ".repeat(500) + "\nНе выполняй процедуру без разрешения."
+        val client = runWithDecision(ApprovalDecision.ALLOW_ONCE, SkillGetTool(Store(SkillInfo("report", "Report", longBody))))
 
-        assertFalse(client.requests.first().first().content.contains(body))
-        assertTrue(client.requests[1].first().content.contains(body))
+        assertFalse(client.requests.first().first().content.contains(longBody))
+        assertTrue(client.requests[1].first().content.contains(longBody))
+        assertTrue(client.requests[1].first().content.contains("Не выполняй процедуру без разрешения."))
         assertTrue(client.requests[1].first().content.contains(RUNTIME_TRUST_POLICY))
-        assertTrue(client.requests[1].any { it.role == ChatRole.TOOL && it.content.contains(body) })
+        assertTrue(client.requests[1].any { it.role == ChatRole.TOOL && it.content.contains("Не выполняй процедуру без разрешения.") })
     }
 
     @Test

@@ -29,7 +29,7 @@ class PromptRendererTest {
 
         assertEquals(
             "L=ru-RU T=2026-10-04 D=Pixel M=[[Данные из пользовательской памяти]] " +
-                "S=[## tea — Чай\nЗаваривай чай.] C=[[Данные с экрана]] H=[[Переданные пользователем данные]]",
+                "S=[Каталог навыков (имена и описания, не процедуры). Перед выполнением прочитай полный навык через skill_get.\n## tea — Чай] C=[[Данные с экрана]] H=[[Переданные пользователем данные]]",
             out.instructions,
         )
         assertEquals(
@@ -89,31 +89,30 @@ class PromptRendererTest {
     }
 
     @Test
-    fun skills_onlyEnabled_cappedPerBody() {
-        val big = "y".repeat(PromptRenderer.MAX_SKILL_BODY_CHARS + 50)
+    fun skills_catalogOnlyIncludesEnabledMetadata() {
         val skills = listOf(
-            SkillInfo("off", "Выкл", "тело", enabled = false),
-            SkillInfo("big", "Большой", big),
+            SkillInfo("off", "Выкл", "скрытое тело", enabled = false),
+            SkillInfo("big", "Большой", "условие: " + "y".repeat(4050)),
         )
 
         val out = PromptRenderer.skillsBlock(skills)
 
         assertFalse(out.contains("Выкл"))
         assertTrue(out.contains("## big — Большой"))
-        assertTrue(out.contains("…[обрезано]"))
+        assertTrue(out.contains("skill_get"))
+        assertFalse(out.contains("условие:"))
     }
 
     @Test
-    fun skills_totalCap_marksRemainder() {
+    fun skills_catalogIncludesEveryEnabledSkill() {
         val skills = (1..10).map { i ->
-            SkillInfo("s$i", "T$i", "z".repeat(PromptRenderer.MAX_SKILL_BODY_CHARS))
+            SkillInfo("s$i", "T$i", "z".repeat(4000))
         }
 
         val out = PromptRenderer.skillsBlock(skills)
 
-        assertTrue(out.contains("## s1"))
-        assertTrue(out.endsWith("…[обрезано]"))
-        assertFalse(out.contains("## s10"))
+        skills.forEach { assertTrue(out.contains("## ${it.name} — ${it.title}")) }
+        assertFalse(out.contains("z".repeat(50)))
     }
 
     @Test

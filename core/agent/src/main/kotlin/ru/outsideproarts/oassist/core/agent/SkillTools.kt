@@ -9,7 +9,7 @@ import kotlinx.serialization.json.put
 import ru.outsideproarts.oassist.core.data.skill.SkillStore
 
 /**
- * Навыки агента: чтение — свободно (включённые уже в системном промпте,
+ * Навыки агента: чтение — свободно (в системном промпте только каталог,
  * `skill_get` подтягивает полное тело по имени). Вкл/выкл и правки —
  * только из настроек, не тулами.
  */
@@ -17,7 +17,7 @@ class SkillListTool(private val skills: SkillStore) : Tool {
     override val schema = ToolSchema(
         name = "skill_list",
         description = "Список включённых навыков (имя — краткое описание). " +
-            "Полное тело навыка — через skill_get.",
+            "Каталог содержит только сведения для выбора. Перед выполнением процедуры прочитай полный навык через skill_get.",
         parameters = buildJsonObject {
             put("type", "object")
             put("properties", buildJsonObject { })
@@ -34,13 +34,13 @@ class SkillListTool(private val skills: SkillStore) : Tool {
 class SkillGetTool(private val skills: SkillStore) : Tool {
     override val schema = ToolSchema(
         name = "skill_get",
-        description = "Прочитать полное тело навыка по имени (инструкция для выполнения).",
+        description = "Прочитать полное тело включённого навыка по имени. Успешное чтение необходимо перед выполнением его процедуры.",
         parameters = buildJsonObject {
             put("type", "object")
             put("properties", buildJsonObject {
                 put("name", buildJsonObject {
                     put("type", "string")
-                    put("description", "Имя навыка из skill_list")
+                    put("description", "Имя навыка из каталога или skill_list")
                 })
             })
             put("required", buildJsonArray { add(kotlinx.serialization.json.JsonPrimitive("name")) })
