@@ -125,6 +125,7 @@ fun ChatScreen(
     speakSentence: ((String) -> Unit)? = null,
     /** Стоп / barge-in для озвучки. */
     stopSpeech: (() -> Unit)? = null,
+    isSpeaking: Boolean = false,
     /** Озвучивать комментарии к вызовам тулов (флаг TtsConfig режима). Тип тула нем всегда. */
     speakToolCalls: Boolean = true,
     /** Звуковое сопровождение действий агента (флаг ModeConfig режима). */
@@ -192,6 +193,8 @@ fun ChatScreen(
     val emptyBody = stringResource(R.string.chat_empty_body)
     val sendLabel = stringResource(R.string.chat_send)
     val stopLabel = stringResource(R.string.chat_stop)
+    val stopSpeechLabel = stringResource(R.string.chat_stop_speech)
+    val speakingLabel = stringResource(R.string.chat_speaking)
     val inputLabel = stringResource(R.string.chat_input_hint)
     val speakAnswerLabel = stringResource(R.string.chat_speak_answer)
     val context = LocalContext.current
@@ -713,6 +716,7 @@ fun ChatScreen(
         if (isStreaming) {
             cancelTurn()
         }
+        stopSpeech?.invoke()
         when (val current = handle.captureState().value) {
             is CaptureState.Listening -> {
                 if (current.mode == ru.outsideproarts.oassist.core.speech.CaptureMode.STT) {
@@ -747,6 +751,7 @@ fun ChatScreen(
     // MODEL_AUDIO без флага AUDIO_IN у модели — молча в STT (fail-safe).
     fun useRawCapture(): Boolean = stt.engine == SttEngine.MODEL_AUDIO && audioIn
     fun startHold(): Boolean {
+        stopSpeech?.invoke()
         val handle = voice ?: return false
         if (handle.captureState().value is CaptureState.Listening) return false
         if (context.checkSelfPermission(Manifest.permission.RECORD_AUDIO) !=
@@ -1017,6 +1022,10 @@ fun ChatScreen(
                         actionContent = stopLabel
                         Icons.Default.Stop
                     }
+                    isSpeaking -> {
+                        actionContent = stopSpeechLabel
+                        Icons.Default.Stop
+                    }
                     input.text.isBlank() -> {
                         actionContent = holdHintText
                         Icons.Default.Mic
@@ -1028,24 +1037,30 @@ fun ChatScreen(
                 }
                 ChatInputButton(
                     icon = actionIcon,
-                    label = if (input.text.isBlank() && !isStreaming && !capturing) {
+                    label = if (input.text.isBlank() && !isStreaming && !capturing && !isSpeaking) {
                         "$micLabel. $holdHintText"
                     } else {
                         actionContent
                     },
                     holdLabel = holdActionLabel,
-                    canStartHold = input.text.isBlank() && !isStreaming && !capturing,
-                    holdEnabled = !isStreaming && (input.text.isBlank() || capturing),
+                    canStartHold = (input.text.isBlank() || isSpeaking) && !isStreaming && !capturing,
+                    holdEnabled = !isStreaming &&
+                        (input.text.isBlank() || capturing || isSpeaking || holdSession != null),
+                    onVoiceAction = ::toggleSttMic,
                     onHoldStart = ::startHold,
                     onHoldRelease = ::stopHold,
                     onHoldCancel = ::cancelHold,
-                    voiceActionLabel = if (!isStreaming && (input.text.isBlank() || capturing)) {
+                    voiceActionLabel = if (!isStreaming && (input.text.isBlank() || capturing || isSpeaking)) {
                         if (capturing) stopVoiceLabel else startVoiceLabel
                     } else {
                         null
                     },
-                    voiceStateLabel = if (!isStreaming && (input.text.isBlank() || capturing)) {
-                        if (capturing) listeningText else micIdleLabel
+                    voiceStateLabel = if (!isStreaming && (input.text.isBlank() || capturing || isSpeaking)) {
+                        when {
+                            capturing -> listeningText
+                            isSpeaking -> speakingLabel
+                            else -> micIdleLabel
+                        }
                     } else {
                         null
                     },
@@ -1059,6 +1074,10 @@ fun ChatScreen(
                         }
                         if (capturing) {
                             toggleSttMic()
+                            return@ChatInputButton
+                        }
+                        if (isSpeaking) {
+                            stopSpeech?.invoke()
                             return@ChatInputButton
                         }
                         if (input.text.isNotBlank()) {

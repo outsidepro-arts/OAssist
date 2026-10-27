@@ -54,6 +54,7 @@ fun ChatInputButton(
     voiceActionLabel: String? = null,
     voiceStateLabel: String? = null,
     nowMillis: () -> Long = SystemClock::uptimeMillis,
+    onVoiceAction: () -> Unit = onClick,
 ) {
     val interactions = remember { MutableInteractionSource() }
     var press by remember { mutableStateOf<PressInteraction.Press?>(null) }
@@ -99,7 +100,7 @@ fun ChatInputButton(
     }
 
     val voiceSemantics = voiceActionLabel?.let { action ->
-        Modifier.oassistCustomAction(action) { onClick(); true }
+        Modifier.oassistCustomAction(action) { onVoiceAction(); true }
     } ?: Modifier
     val stateSemantics = voiceStateLabel?.let { Modifier.oassistStateDescription(it) } ?: Modifier
     Box(
@@ -111,7 +112,7 @@ fun ChatInputButton(
                 contentDescription = label
                 if (holdEnabled) {
                     // Semantic activation cannot represent a physical hold and release.
-                    onLongClick(label = voiceActionLabel ?: label) { onClick(); true }
+                    onLongClick(label = voiceActionLabel ?: label) { onVoiceAction(); true }
                 }
             }
             .combinedClickable(
@@ -124,7 +125,7 @@ fun ChatInputButton(
                     {
                         val currentPress = press
                         if (!pointerPressed || currentPress == null || !canStartHold) {
-                            onClick()
+                            onVoiceAction()
                         } else if (onHoldStart()) {
                             captureStartedAt = now()
                             heldPress = currentPress

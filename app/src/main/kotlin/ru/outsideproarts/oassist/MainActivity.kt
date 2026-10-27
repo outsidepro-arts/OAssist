@@ -185,6 +185,7 @@ private fun OAssistApp(
                 val modeConfigs by graph.providers.observeModeConfigs()
                     .collectAsStateWithLifecycle(initialValue = emptyList())
                 val chatConfig = modeConfigs.find { it.mode == AssistMode.CHAT }
+                val isSpeaking by graph.speechOutput.speaking.collectAsStateWithLifecycle()
                 val context = LocalContext.current
                 // Флаг AUDIO_IN — только ручной Switch capabilities модели.
                 var chatModels by remember { mutableStateOf(emptyList<ru.outsideproarts.oassist.core.model.ModelInfo>()) }
@@ -266,6 +267,7 @@ private fun OAssistApp(
                     },
                     speakSentence = { graph.speechOutput.speak(it) },
                     stopSpeech = { graph.speechOutput.stop() },
+                    isSpeaking = isSpeaking,
                     speakToolCalls = chatConfig?.effectiveTts()?.speakToolCalls ?: true,
                     soundEnabled = chatConfig?.effectiveSoundEnabled() ?: true,
                     stt = chatConfig?.effectiveStt() ?: ru.outsideproarts.oassist.core.model.SttConfig.DEFAULT,
