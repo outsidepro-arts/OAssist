@@ -388,7 +388,7 @@ class AgentLoop(
             ApprovalDecision.ALWAYS_DENY -> approvalPolicy.setRemembered(groupKey, ApprovalState.DENY)
             ApprovalDecision.ALLOW_ONCE, ApprovalDecision.DENY -> Unit
         }
-        val note = buildNote(decision, locked)
+        val note = buildNote(decision, groupKey, locked)
         return if (decision == ApprovalDecision.DENY || decision == ApprovalDecision.ALWAYS_DENY) {
             ToolResult(false, DENIED_MESSAGE + note)
         } else {
@@ -398,14 +398,14 @@ class AgentLoop(
     }
 
     /** Пометка модели о решении (и о блокировке экрана — чтобы попросила разблокировать). */
-    private fun buildNote(decision: ApprovalDecision, locked: Boolean): String {
+    private fun buildNote(decision: ApprovalDecision, groupKey: String, locked: Boolean): String {
         val sb = StringBuilder()
         when (decision) {
-            ApprovalDecision.ALLOW_ONCE -> sb.append("Пользователь разрешил действие. ")
-            ApprovalDecision.ALLOW_SESSION -> sb.append("Пользователь разрешил действие на текущую сессию. ")
-            ApprovalDecision.ALWAYS_ALLOW -> sb.append("Пользователь разрешил действие навсегда. ")
-            ApprovalDecision.DENY -> sb.append("Действие отклонено пользователем. ")
-            ApprovalDecision.ALWAYS_DENY -> sb.append("Пользователь запретил это действие. ")
+            ApprovalDecision.ALLOW_ONCE -> sb.append("Пользователь разрешил только этот вызов инструмента. ")
+            ApprovalDecision.ALLOW_SESSION -> sb.append("Пользователь разрешил инструменты группы «$groupKey» на текущую сессию режима «$sessionScope». ")
+            ApprovalDecision.ALWAYS_ALLOW -> sb.append("Пользователь сохранил разрешение инструментов группы «$groupKey» до изменения настройки. ")
+            ApprovalDecision.DENY -> sb.append("Пользователь отклонил запрошенное действие. ")
+            ApprovalDecision.ALWAYS_DENY -> sb.append("Пользователь сохранил запрет инструментов группы «$groupKey» до изменения настройки. ")
         }
         if (locked) {
             sb.append("Внимание: экран был заблокирован — попросите пользователя разблокировать экран. ")
