@@ -56,6 +56,7 @@ interface SttListener {
     fun onPartial(text: String)
     fun onFinal(text: String)
     fun onSttError(error: SttError)
+    fun onSttCancelled() = Unit
 }
 
 /** Сырой результат захвата для модели (транзитный, не сравнивается). */

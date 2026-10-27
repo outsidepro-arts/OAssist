@@ -162,7 +162,7 @@ class VoiceListener(
             val engine = recognizerFor(startSession.component)
             engine.setRecognitionListener(SttProxy(startSession, token).also { sttProxy = it })
             engine.startListening(intent)
-            _state.value = CaptureState.Listening(CaptureMode.STT, System.currentTimeMillis())
+            if (sttSession === startSession) _state.value = CaptureState.Listening(CaptureMode.STT, System.currentTimeMillis())
             null
         } catch (e: Exception) {
             releaseRecognizer()
@@ -266,8 +266,21 @@ class VoiceListener(
         runCatching { recognizer?.stopListening() }
     }
 
+    internal fun stopStt(owner: SttListener): Boolean {
+        if (sttSession?.listener !== owner) return false
+        stopStt()
+        return true
+    }
+
+    internal fun cancelStt(owner: SttListener): Boolean {
+        if (sttSession?.listener !== owner) return false
+        cancelStt()
+        return true
+    }
+
     /** Жёсткая отмена без финала и без общих callback со следующим захватом. */
     fun cancelStt() {
+        val listener = sttSession?.listener
         cancelPendingRetry()
         sttGate.invalidate()
         if (sttSession != null) {
@@ -275,6 +288,7 @@ class VoiceListener(
             releaseRecognizer()
         }
         finishSttSession()
+        listener?.onSttCancelled()
     }
 
     /** Освободить распознаватель, когда владелец VoiceListener больше не нужен. */

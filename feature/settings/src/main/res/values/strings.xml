@@ -288,8 +288,8 @@
     <string name="tool_media_now_playing_desc">Название, исполнитель и позиция играющего трека (медиа-сессии; работает без уведомлений плеера)</string>
     <string name="tool_voice_listen_start_title">Начать слушать</string>
     <string name="tool_voice_listen_start_desc">Включить микрофон и ждать голосовой ответ</string>
-    <string name="tool_voice_listen_stop_title">Остановить и распознать</string>
-    <string name="tool_voice_listen_stop_desc">Остановить запись и вернуть распознанный текст</string>
+    <string name="tool_voice_listen_stop_title">Остановить прослушивание</string>
+    <string name="tool_voice_listen_stop_desc">Остановить активное прослушивание агента</string>
     <string name="tool_shell_exec_title">Системная команда</string>
     <string name="tool_shell_exec_desc">Read-only команды через Shizuku/root (нужен Shizuku или root)</string>
     <string name="tool_shell_get_setting_title">Чтение настройки</string>
