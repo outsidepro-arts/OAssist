@@ -344,6 +344,11 @@ class AppGraph private constructor(context: Context) {
                 sessionScope = mode.name,
                 permissionRequester = permissionRequester,
                 screenLocked = { keyguardLockState.isLocked() },
+                fallbackFarewell = appContext.createConfigurationContext(
+                    android.content.res.Configuration(appContext.resources.configuration).apply {
+                        setLocale(java.util.Locale.forLanguageTag(promptLanguage()))
+                    },
+                ).getString(ru.outsideproarts.oassist.core.agent.R.string.bye_fallback),
             )
         }
 
@@ -479,6 +484,7 @@ class AppGraph private constructor(context: Context) {
             override fun speak(sentence: String) = speechOutput.speak(sentence)
             override suspend fun speakWhenReady(text: String): Boolean =
                 speechOutput.speakWhenReady(text)
+            override suspend fun awaitIdle() = speechOutput.awaitIdle()
             override fun stop() = speechOutput.stop()
             override val speaking: kotlinx.coroutines.flow.StateFlow<Boolean>
                 get() = speechOutput.speaking

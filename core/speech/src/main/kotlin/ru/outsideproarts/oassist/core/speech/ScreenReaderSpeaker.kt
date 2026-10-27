@@ -1,6 +1,12 @@
 package ru.outsideproarts.oassist.core.speech
 
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.CoroutineStart
+import kotlinx.coroutines.Deferred
+import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.withContext
+import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
@@ -35,96 +41,154 @@ class ScreenReaderSpeaker(
     private val scope: CoroutineScope =
         scope ?: CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
 
+    private data class Announcement(
+        val text: String,
+        val generation: Long,
+        val receipt: kotlinx.coroutines.CompletableDeferred<Unit>,
+    )
+
     private val mutex = Mutex()
-    private val pending = ArrayDeque<String>()
+    private val admissionLock = Any()
+    private val receipts = SpeechCompletionTracker()
+    private val pending = ArrayDeque<Announcement>()
+    private var generation = 0L
+    private var accepting = true
+    @Volatile
     private var worker: Job? = null
+    private var workerGeneration = -1L
     private val _speaking = MutableStateFlow(false)
 
     /** true, пока очередь не пуста (для гейта автопродолжения диалога). */
     val speaking: StateFlow<Boolean> = _speaking
 
     fun setOutput(output: (String) -> Unit) {
-        this.output = output
+        synchronized(admissionLock) { this.output = output }
     }
 
     /** Поставить фразу в очередь (пустые отбрасываются). */
-    fun announce(text: String) {
+    fun announce(text: String): Boolean {
         val clean = text.trim()
-        if (clean.isEmpty()) return
-        scope.launch {
-            mutex.withLock { pending.addLast(clean) }
-            ensureWorker()
+        if (clean.isEmpty()) return false
+        val item = synchronized(admissionLock) {
+            if (!accepting || scope.coroutineContext[Job]?.isActive == false) return false
+            Announcement(clean, generation, receipts.register()).also { _speaking.value = true }
         }
+        val admitted = java.util.concurrent.atomic.AtomicBoolean(false)
+        scope.launch {
+            mutex.withLock {
+                val current = synchronized(admissionLock) { accepting && item.generation == generation }
+                if (current) {
+                    pending.addLast(item)
+                    admitted.set(true)
+                    ensureWorker()
+                }
+            }
+        }.invokeOnCompletion {
+            if (!admitted.get()) {
+                receipts.complete(item.receipt)
+                synchronized(admissionLock) {
+                    if (item.generation == generation && worker?.isActive != true && receipts.snapshot().isEmpty()) {
+                        _speaking.value = false
+                    }
+                }
+            }
+        }
+        return true
     }
 
-    /**
-     * Срочное объявление (ошибка/подтверждение): очередь сбрасывается,
-     * фраза уходит немедленно.
-     */
+    /** Срочное объявление прерывает ожидающую очередь. */
     fun announceAssertive(text: String) {
         val clean = text.trim()
         if (clean.isEmpty()) return
-        scope.launch {
-            mutex.withLock {
-                pending.clear()
-                worker?.cancel()
-                worker = null
-                _speaking.value = false
-            }
-            output(clean)
-        }
+        stop()
+        announce(clean)
     }
+
+    /** Ожидание только тех объявлений, которые уже приняты на момент вызова. */
+    suspend fun awaitIdle() {
+        pendingReceipts().awaitAll()
+    }
+
+    internal fun pendingReceipts(): List<Deferred<Unit>> = receipts.snapshot()
 
     /** Стоп / barge-in: очередь сбрасывается, недоговорённое не звучит. */
     fun stop() {
+        val cutoff = synchronized(admissionLock) {
+            generation += 1
+            receipts.completeAll()
+            _speaking.value = false
+            generation
+        }
         scope.launch {
             mutex.withLock {
-                pending.clear()
-                worker?.cancel()
-                worker = null
-                _speaking.value = false
+                pending.removeAll { it.generation < cutoff }
+                if (workerGeneration < cutoff) {
+                    worker?.cancel()
+                    worker = null
+                    workerGeneration = -1L
+                }
+                if (pending.isNotEmpty()) ensureWorker()
             }
         }
     }
 
     fun shutdown() {
-        scope.launch {
-            mutex.withLock {
-                pending.clear()
-                worker?.cancel()
-                worker = null
-                _speaking.value = false
-            }
-        }
+        synchronized(admissionLock) { accepting = false }
+        stop()
         if (ownsScope) scope.cancel()
     }
 
+    /** Caller holds mutex; old workers may finish after their replacement starts. */
     private fun ensureWorker() {
         if (worker?.isActive == true) return
-        worker = scope.launch {
-            _speaking.value = true
+        val nextGeneration = pending.firstOrNull()?.generation ?: return
+        workerGeneration = nextGeneration
+        val nextWorker = scope.launch(start = CoroutineStart.LAZY) {
+            val self = currentCoroutineContext()[Job]
             try {
                 while (true) {
                     val next = mutex.withLock {
-                        if (pending.isEmpty()) null else pending.removeFirst()
+                        if (pending.firstOrNull()?.generation == nextGeneration) pending.removeFirst() else null
                     } ?: break
-                    output(next)
+                    try {
+                        synchronized(admissionLock) {
+                            if (accepting && next.generation == generation) output(next.text)
+                        }
+                    } finally {
+                        receipts.complete(next.receipt)
+                    }
                     delayer(INTER_ANNOUNCE_DELAY_MS)
                 }
             } finally {
-                mutex.withLock {
-                    if (pending.isEmpty()) {
-                        worker = null
-                        _speaking.value = false
-                    } else {
-                        worker = null
-                        ensureWorker()
+                withContext(NonCancellable) {
+                    mutex.withLock {
+                        if (worker === self) {
+                            worker = null
+                            workerGeneration = -1L
+                            if (pending.isNotEmpty()) {
+                                ensureWorker()
+                            } else {
+                                synchronized(admissionLock) {
+                                    if (receipts.snapshot().isEmpty()) _speaking.value = false
+                                }
+                            }
+                        }
                     }
                 }
             }
         }
+        worker = nextWorker
+        nextWorker.invokeOnCompletion {
+            if (scope.coroutineContext[Job]?.isActive == false) {
+                synchronized(admissionLock) {
+                    accepting = false
+                    receipts.completeAll()
+                    _speaking.value = false
+                }
+            }
+        }
+        nextWorker.start()
     }
-
     companion object {
         /**
          * Пауза между постами: события `TYPE_ANNOUNCEMENT` склеенные в одну

@@ -45,4 +45,5 @@
     <string name="assistant_permission_needed">Требуется разрешение</string>
     <string name="assistant_permission_grant">Выдать</string>
     <string name="assistant_notifications_required">Режим из уведомлений требует разрешения на уведомления</string>
+    <string name="assistant_farewell_speech_unavailable">Не удалось озвучить прощание</string>
 </resources>

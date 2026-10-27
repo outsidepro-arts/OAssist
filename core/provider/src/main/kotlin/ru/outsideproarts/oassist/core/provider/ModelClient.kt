@@ -39,7 +39,7 @@ sealed interface ChatChunk {
      * текст, которым агент сопровождает вызовы инструментов («ищу контакт…»).
      * Клиенты провайдеров всегда эмитят `false`; дефолт держит все места сборки.
      */
-    data class Content(val delta: String, val isToolComment: Boolean = false) : ChatChunk
+    data class Content(val delta: String, val isToolComment: Boolean = false, val isTerminalFarewell: Boolean = false) : ChatChunk
     /**
      * Кусок «мыслей» модели (DeepSeek `reasoning_content`, Gemini thought-части,
      * Anthropic `thinking_delta`, события reasoning у Responses). Эмитится клиентами
@@ -90,6 +90,7 @@ sealed interface ChatChunk {
         val reason: String?,
         val abrupt: Boolean = false,
         val usage: ProviderUsage? = null,
+        val closeSession: Boolean = false,
     ) : ChatChunk
 }
 
