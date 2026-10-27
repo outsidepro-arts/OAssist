@@ -30,8 +30,6 @@ data class RuntimePrompt(
  */
 object PromptRenderer {
     const val MAX_MEMORY_CHARS = 8000
-    const val MAX_SKILL_BODY_CHARS = 4000
-    const val MAX_SKILLS_TOTAL_CHARS = 12000
 
     fun render(template: String, inputs: PromptInputs): RuntimePrompt {
         val russian = inputs.locale.startsWith("ru", ignoreCase = true)
@@ -83,23 +81,12 @@ object PromptRenderer {
     fun skillsBlock(skills: List<SkillInfo>, russian: Boolean = true): String {
         val enabled = skills.filter { it.enabled }
         if (enabled.isEmpty()) return ""
-        val sb = StringBuilder()
-        var used = 0
-        for (skill in enabled) {
-            val body = if (skill.body.length > MAX_SKILL_BODY_CHARS) {
-                skill.body.take(MAX_SKILL_BODY_CHARS).trimEnd() + truncatedMark(russian)
-            } else {
-                skill.body
-            }
-            if (used > 0 && used + body.length > MAX_SKILLS_TOTAL_CHARS) {
-                sb.append(truncatedMark(russian)).append('\n')
-                break
-            }
-            sb.append("## ").append(skill.name).append(" — ").append(skill.title).append('\n')
-            sb.append(body).append("\n\n")
-            used += body.length
+        val header = if (russian) {
+            "Каталог навыков (имена и описания, не процедуры). Перед выполнением прочитай полный навык через skill_get."
+        } else {
+            "Skill catalog (names and descriptions, not procedures). Read the complete skill with skill_get before following it."
         }
-        return sb.toString().trim()
+        return enabled.joinToString("\n", prefix = "$header\n") { "## ${it.name} — ${it.title}" }
     }
 
     private fun truncatedMark(russian: Boolean): String =
