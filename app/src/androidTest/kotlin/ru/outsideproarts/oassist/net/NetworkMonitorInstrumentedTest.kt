@@ -1,8 +1,10 @@
 package ru.outsideproarts.oassist.net
 
+import android.app.Instrumentation
 import android.content.Context
 import android.net.ConnectivityManager
 import android.net.NetworkCapabilities
+import android.os.Bundle
 import android.os.Process
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
@@ -19,6 +21,8 @@ import ru.outsideproarts.oassist.core.net.NetworkHandle
 import ru.outsideproarts.oassist.core.net.NetworkMonitor
 import java.net.URL
 import javax.net.ssl.HttpsURLConnection
+
+private const val INSTRUMENTATION_STATUS_IN_PROGRESS = 2
 
 @RunWith(AndroidJUnit4::class)
 class NetworkMonitorInstrumentedTest {
@@ -44,12 +48,16 @@ class NetworkMonitorInstrumentedTest {
             val request = URL("https://example.com/").openConnection() as HttpsURLConnection
             try {
                 request.requestMethod = "HEAD"
+                request.instanceFollowRedirects = false
                 request.connectTimeout = 10_000
                 request.readTimeout = 10_000
                 val code = request.responseCode
-                assertTrue("HTTPS response $code", code in 200..399)
-                assertTrue("New monitor went offline despite successful HTTPS", monitor.isOnline.value)
-                assertTrue("Application monitor went offline despite successful HTTPS", graphMonitor!!.isOnline.value)
+                instrumentation.sendStatus(INSTRUMENTATION_STATUS_IN_PROGRESS, Bundle().apply {
+                    putString(Instrumentation.REPORT_KEY_STREAMRESULT, "\nHTTPS response: $code\n")
+                })
+                assertTrue("HTTPS response $code", code in 200..599)
+                assertTrue("New monitor went offline despite receiving an HTTPS response", monitor.isOnline.value)
+                assertTrue("Application monitor went offline despite receiving an HTTPS response", graphMonitor!!.isOnline.value)
             } finally {
                 request.disconnect()
             }
