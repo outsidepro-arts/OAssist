@@ -2,28 +2,21 @@ package ru.outsideproarts.oassist.core.agent
 
 import android.Manifest
 import kotlinx.serialization.json.JsonObject
-import kotlinx.serialization.json.buildJsonArray
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.intOrNull
 import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.put
 import ru.outsideproarts.oassist.core.speech.AgentVoiceCapture
 import ru.outsideproarts.oassist.core.speech.VoiceCaptureController
+import ru.outsideproarts.oassist.core.speech.VoiceCaptureResult
 
-/**
- * Голосовые тулы: модель задаёт вопрос вслух (через TTS-озвучку своего
- * комментария) и слушает ответ пользователя.
- *
- * `voice_listen_start` — неблокирующий («слушаю»), `voice_listen_stop` —
- * останавливает и возвращает транскрипт результатом тула; дальше агент
- * читает ответ из истории tool-хода, [AgentLoop] менять не надо.
- * Режим захвата — всегда STT (модели нужен текст, не байты).
- */
+/** Голосовые инструменты агента используют системное распознавание и возвращают текст. */
 class VoiceListenStartTool(private val capture: VoiceCaptureController) : Tool {
     override val schema = ToolSchema(
         name = "voice_listen_start",
-        description = "Начать слушать микрофон и ждать голосовой ответ пользователя. " +
-            "Неблокирующий: сразу возвращает статус. Ответ забирается voice_listen_stop.",
+        description = "Начать слушать микрофон и дождаться одного голосового ответа пользователя. " +
+            "Возвращает распознанный текст или причину, почему ответа нет. " +
+            "Для получения ответа вызывать voice_listen_stop не нужно.",
         parameters = buildJsonObject {
             put("type", "object")
             put("properties", buildJsonObject {
@@ -39,7 +32,6 @@ class VoiceListenStartTool(private val capture: VoiceCaptureController) : Tool {
         },
     )
 
-    /** Включение микрофона по воле агента — прайваси-чувствительно, спрашиваем. */
     override val requiredPermissions = listOf(Manifest.permission.RECORD_AUDIO)
 
     override fun describeForConfirmation(arguments: JsonObject): String =
@@ -49,25 +41,36 @@ class VoiceListenStartTool(private val capture: VoiceCaptureController) : Tool {
         val timeout = arguments["timeout_sec"]?.jsonPrimitive?.intOrNull ?: 60
         val language = runCatching { arguments["language"]?.jsonPrimitive?.content }
             .getOrNull()?.takeIf { it.isNotBlank() } ?: "ru-RU"
-        return ToolResult(true, capture.startCapture(language, timeout))
+        return capture.startCapture(language, timeout).toToolResult()
     }
 }
 
 class VoiceListenStopTool(private val capture: VoiceCaptureController) : Tool {
     override val schema = ToolSchema(
         name = "voice_listen_stop",
-        description = "Остановить прослушивание и транскрибировать ответ пользователя. " +
-            "Возвращает распознанный текст (или диагноз: тишина/таймаут).",
+        description = "Остановить активное прослушивание этого агента и дождаться результата. " +
+            "После завершения voice_listen_start ответ уже возвращён; stop не возвращает прошлые ответы.",
         parameters = buildJsonObject {
             put("type", "object")
-            put("properties", buildJsonObject {
-            })
+            put("properties", buildJsonObject { })
         },
     )
 
-    /** Выключение микрофона безопасно — без подтверждения. */
     override val requiredPermissions = listOf(Manifest.permission.RECORD_AUDIO)
 
-    override suspend fun execute(arguments: JsonObject): ToolResult =
-        ToolResult(true, capture.stopCapture())
+    override suspend fun execute(arguments: JsonObject): ToolResult = capture.stopCapture().toToolResult()
+}
+
+private fun VoiceCaptureResult.toToolResult(): ToolResult = when (this) {
+    is VoiceCaptureResult.Transcript -> if (text.isBlank()) {
+        ToolResult(false, AgentVoiceCapture.SILENCE)
+    } else {
+        ToolResult(true, text)
+    }
+    VoiceCaptureResult.NoSpeech -> ToolResult(false, AgentVoiceCapture.SILENCE)
+    is VoiceCaptureResult.Timeout -> ToolResult(false, "Время вышло ($seconds с) — ответа не расслышано.")
+    is VoiceCaptureResult.StartFailed -> ToolResult(false, AgentVoiceCapture.failureText(error))
+    is VoiceCaptureResult.RecognitionFailed -> ToolResult(false, AgentVoiceCapture.failureText(error))
+    VoiceCaptureResult.Cancelled -> ToolResult(false, "Прослушивание прервано.")
+    VoiceCaptureResult.NotRecording -> ToolResult(true, "Нет активного прослушивания для этого запроса; другие записи не остановлены.")
 }

@@ -54,6 +54,9 @@ rg -n -F "Выбор RecognitionService" docs/history/development-log-2026-10-26
 
 ## Последующие записи
 
+- [Протокол голосовых инструментов, 2026-10-27](agent-voice-protocol-2026-10-27.md) —
+  ожидающий start, владение микрофоном, отмена и совместимость stop.
+
 - [Rebase runtime-промптов, 2026-10-27](runtime-prompts-rebase-2026-10-27.md) —
   сохранение трёх патчей поверх нового master, повторная проверка и граница build-доступа.
 

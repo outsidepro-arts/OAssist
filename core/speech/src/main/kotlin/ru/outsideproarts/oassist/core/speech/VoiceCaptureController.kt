@@ -1,67 +1,121 @@
 package ru.outsideproarts.oassist.core.speech
 
 import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
 
-/**
- * Захват микрофона для тулов агента (`voice_listen_start/stop`).
- * Режим — всегда STT: модели нужен текст ответа, а не байты
- * (байты — только PTT-холд человека в чате).
- *
- * Старт неблокирующий («слушаю»), стоп — блокирующий до финала/таймаута.
- * Все тексты — для модели (русские, как остальные тул-результаты).
- * `SpeechRecognizer` требует главный поток — переключаемся сами.
- */
-interface VoiceCaptureController {
-    /** Начать слушать. Возвращает статус для модели. */
-    suspend fun startCapture(language: String, timeoutSec: Int): String
-
-    /** Остановить и транскрибировать. Возвращает текст/диагноз для модели. */
-    suspend fun stopCapture(): String
+sealed interface VoiceCaptureResult {
+    data class Transcript(val text: String) : VoiceCaptureResult
+    data object NoSpeech : VoiceCaptureResult
+    data class Timeout(val seconds: Int) : VoiceCaptureResult
+    data class StartFailed(val error: CaptureError) : VoiceCaptureResult
+    data class RecognitionFailed(val error: SttError) : VoiceCaptureResult
+    data object Cancelled : VoiceCaptureResult
+    data object NotRecording : VoiceCaptureResult
 }
 
-class AgentVoiceCapture(private val voice: VoiceListener) : VoiceCaptureController {
+/** Захват одного голосового ответа для агента. */
+interface VoiceCaptureController {
+    /** Дождаться окончательного результата распознавания либо таймаута. */
+    suspend fun startCapture(language: String, timeoutSec: Int): VoiceCaptureResult
 
-    private var pending: CompletableDeferred<String>? = null
+    /** Остановить активный агентский захват и дождаться его результата. */
+    suspend fun stopCapture(): VoiceCaptureResult
+}
 
-    override suspend fun startCapture(language: String, timeoutSec: Int): String {
-        if (pending != null) return "Уже слушаю — сначала остановите запись (voice_listen_stop)."
-        val timeout = timeoutSec.coerceIn(MIN_TIMEOUT_SEC, MAX_TIMEOUT_SEC)
-        val error = withContext(Dispatchers.Main) {
-            voice.startStt(language, object : SttListener {
-                override fun onPartial(text: String) = Unit
-                override fun onFinal(text: String) {
-                    pending?.complete(text)
-                    pending = null
-                }
+internal interface AgentSttBackend {
+    fun start(language: String, listener: SttListener): CaptureError?
+    fun stop(listener: SttListener): Boolean
+    fun cancel(listener: SttListener): Boolean
+}
 
-                override fun onSttError(error: SttError) {
-                    pending?.complete(failureText(error))
-                    pending = null
-                }
-            })
-        }
-        if (error != null) return failureText(error)
-        val deferred = CompletableDeferred<String>()
-        pending = deferred
-        val heard = withTimeoutOrNull(timeout * 1000L) { deferred.await() }
-        if (heard != null) return heard
-        withContext(Dispatchers.Main) { voice.cancelStt() }
-        pending = null
-        return "Время вышло ($timeout с) — ответа не расслышано."
+private class VoiceListenerBackend(private val voice: VoiceListener) : AgentSttBackend {
+    override fun start(language: String, listener: SttListener): CaptureError? =
+        voice.startStt(language, listener)
+
+    override fun stop(listener: SttListener): Boolean = voice.stopStt(listener)
+    override fun cancel(listener: SttListener): Boolean = voice.cancelStt(listener)
+}
+
+class AgentVoiceCapture internal constructor(
+    private val backend: AgentSttBackend,
+    private val dispatcher: CoroutineDispatcher,
+) : VoiceCaptureController {
+    constructor(voice: VoiceListener) : this(VoiceListenerBackend(voice), Dispatchers.Main.immediate)
+
+    private class Capture {
+        val result = CompletableDeferred<VoiceCaptureResult>()
+        lateinit var listener: SttListener
     }
 
-    override suspend fun stopCapture(): String {
-        val deferred = pending ?: return "Сейчас ничего не записывается."
-        withContext(Dispatchers.Main) { voice.stopStt() }
-        // Финал приходит колбэком; страховка — 10 с, дальше жёсткая отмена.
-        val heard = withTimeoutOrNull(STOP_GRACE_MS) { deferred.await() }
-        if (heard != null) return heard.ifBlank { SILENCE }
-        withContext(Dispatchers.Main) { voice.cancelStt() }
-        pending = null
-        return "Не удалось распознать — тишина или ошибка."
+    private var active: Capture? = null
+
+    override suspend fun startCapture(language: String, timeoutSec: Int): VoiceCaptureResult {
+        var capture: Capture? = null
+        try {
+            return withContext(dispatcher) {
+                if (active != null) return@withContext VoiceCaptureResult.StartFailed(CaptureError.BUSY)
+                val current = Capture()
+                capture = current
+                current.listener = object : SttListener {
+                    override fun onPartial(text: String) = Unit
+                    override fun onFinal(text: String) {
+                        complete(current, if (text.isBlank()) VoiceCaptureResult.NoSpeech else VoiceCaptureResult.Transcript(text))
+                    }
+                    override fun onSttError(error: SttError) {
+                        complete(current, if (error == SttError.NO_SPEECH) VoiceCaptureResult.NoSpeech else VoiceCaptureResult.RecognitionFailed(error))
+                    }
+                    override fun onSttCancelled() {
+                        complete(current, VoiceCaptureResult.Cancelled)
+                    }
+                }
+                active = current
+                backend.start(language, current.listener)?.let {
+                    complete(current, VoiceCaptureResult.StartFailed(it))
+                }
+                val timeout = timeoutSec.coerceIn(MIN_TIMEOUT_SEC, MAX_TIMEOUT_SEC)
+                val result = withTimeoutOrNull(timeout * 1000L) { current.result.await() }
+                if (result != null) return@withContext result
+                if (active === current) {
+                    complete(current, VoiceCaptureResult.Timeout(timeout))
+                    backend.cancel(current.listener)
+                }
+                current.result.await()
+            }
+        } finally {
+            withContext(NonCancellable + dispatcher) {
+                capture?.let { current ->
+                    if (active === current) {
+                        complete(current, VoiceCaptureResult.Cancelled)
+                        backend.cancel(current.listener)
+                    }
+                }
+            }
+        }
+    }
+
+    override suspend fun stopCapture(): VoiceCaptureResult = withContext(dispatcher) {
+        val current = active ?: return@withContext VoiceCaptureResult.NotRecording
+        if (!backend.stop(current.listener)) {
+            complete(current, VoiceCaptureResult.Cancelled)
+            return@withContext current.result.await()
+        }
+        val result = withTimeoutOrNull(STOP_GRACE_MS) { current.result.await() }
+        if (result != null) return@withContext result
+        if (active === current) {
+            complete(current, VoiceCaptureResult.Timeout((STOP_GRACE_MS / 1000L).toInt()))
+            backend.cancel(current.listener)
+        }
+        current.result.await()
+    }
+
+    private fun complete(capture: Capture, result: VoiceCaptureResult) {
+        if (active !== capture) return
+        active = null
+        capture.result.complete(result)
     }
 
     companion object {

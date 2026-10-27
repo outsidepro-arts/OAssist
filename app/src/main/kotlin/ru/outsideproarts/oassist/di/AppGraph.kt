@@ -275,10 +275,9 @@ class AppGraph private constructor(context: Context) {
         ru.outsideproarts.oassist.core.speech.VoiceListener(appContext, recognitionServices)
     }
 
-    /** Контроллер голосовых тулов (`voice_listen_start/stop`, всегда STT-режим). */
-    val voiceCapture: ru.outsideproarts.oassist.core.speech.VoiceCaptureController by lazy {
-        ru.outsideproarts.oassist.core.speech.AgentVoiceCapture(voiceListener)
-    }
+    /** Новый контроллер на каталог: stop не управляет захватом другого агента; VoiceListener общий. */
+    val voiceCapture: ru.outsideproarts.oassist.core.speech.VoiceCaptureController
+        get() = ru.outsideproarts.oassist.core.speech.AgentVoiceCapture(voiceListener)
 
     suspend fun modelClientFor(profile: ProviderProfile): ModelClient =
         ModelClient.create(
