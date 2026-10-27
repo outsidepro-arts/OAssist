@@ -42,11 +42,28 @@ class StoredTurnTest {
     }
 
     @Test
-    fun modelMessages_withoutMedia() {
+    fun modelMessages_withoutTranscriptOrAnswer_keepsOnlyUser() {
+        for (answer in listOf("", "  ")) {
+            val messages = StoredTurn(userText = "привет", answer = answer).modelMessages()
+            assertEquals(listOf(ChatMessage(ChatRole.USER, "привет")), messages)
+        }
+    }
+
+    @Test
+    fun modelMessages_withTranscript_doesNotAppendDisplayAnswer() {
+        val transcript = listOf(ChatMessage(ChatRole.ASSISTANT, "Сохранённая реплика"))
+        val messages = StoredTurn(userText = "вопрос", answer = "Текст для интерфейса", turn = transcript).modelMessages()
+        assertEquals(listOf(ChatMessage(ChatRole.USER, "вопрос")) + transcript, messages)
+    }
+
+    @Test
+    fun modelMessages_withoutTranscript_replaysSavedAnswer() {
         val stored = StoredTurn(userText = "привет", answer = "здравствуйте")
         val messages = stored.modelMessages()
-        assertEquals(1, messages.size)
-        assertEquals(ChatRole.USER, messages[0].role)
+        assertEquals(
+            listOf(ChatMessage(ChatRole.USER, "привет"), ChatMessage(ChatRole.ASSISTANT, "здравствуйте")),
+            messages,
+        )
         assertTrue(messages[0].images.isEmpty())
     }
 }

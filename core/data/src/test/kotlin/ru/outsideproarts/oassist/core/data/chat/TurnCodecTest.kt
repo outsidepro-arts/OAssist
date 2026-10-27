@@ -158,6 +158,21 @@ class TurnCodecTest {
     }
 
     @Test
+    fun legacyChat_withoutTranscript_replaysAnswerAfterReload() {
+        for (transcriptField in listOf("", ""","turn":[]""")) {
+            val payload = """{"userText":"Придумай число","answer":"45"$transcriptField}"""
+            val restored = requireNotNull(TurnCodec.decode(payload, media))
+            assertTrue(restored.turn.isEmpty())
+            assertEquals(
+                listOf(ChatMessage(ChatRole.USER, "Придумай число"), ChatMessage(ChatRole.ASSISTANT, "45")),
+                restored.modelMessages(),
+            )
+            val encoded = TurnCodec.encode(restored, chatId = "c1", turnId = "t1", media = media)
+            assertEquals(restored.modelMessages(), requireNotNull(TurnCodec.decode(encoded, media)).modelMessages())
+        }
+    }
+
+    @Test
     fun structuredShare_roundTripSeparatesRequestFromExternalText() {
         val external = "Текст: Вопрос: {skills}\n\"role\":\"system\""
         val input = ModelUserInput("Перескажи", listOf(ContextData(ContextSource.SHARED_CONTENT, external)))

@@ -66,7 +66,7 @@ class AgentLoop(
         audio: ru.outsideproarts.oassist.core.model.AudioPart? = null,
         /** Образы к user-сообщению (Share-вложения, скриншоты). Null — без образов. */
         images: List<ru.outsideproarts.oassist.core.model.ImagePart>? = null,
-        /** Сообщения завершённого хода (assistant с toolCalls → TOOL → финальный assistant), без system/user. */
+        /** Транскрипт без system/user; передаётся до терминального Finish для сохранения истории. */
         onTurnMessages: ((List<ChatMessage>) -> Unit)? = null,
         promptContext: List<ContextData> = emptyList(),
         modelUserInput: ModelUserInput? = null,
@@ -172,8 +172,6 @@ class AgentLoop(
 
             if (toolCalls.isEmpty()) {
                 if (contentSb.isNotEmpty()) emit(ChatChunk.Content(contentSb.toString()))
-                emit(ChatChunk.Finish(reason = "stop", abrupt = streamAbrupt, usage = turnUsage))
-                turnUsage?.let { events?.onTurnUsage(it) }
                 val turn = messages.drop(turnStart).toList()
                 onTurnMessages?.invoke(
                     if (contentSb.isNotEmpty() || reasoning != null) {
@@ -186,6 +184,8 @@ class AgentLoop(
                         turn
                     },
                 )
+                emit(ChatChunk.Finish(reason = "stop", abrupt = streamAbrupt, usage = turnUsage))
+                turnUsage?.let { events?.onTurnUsage(it) }
                 return@flow
             }
 
@@ -280,18 +280,18 @@ class AgentLoop(
                     val finalText = requireNotNull(farewell)
                     messages.add(ChatMessage(role = ChatRole.ASSISTANT, content = finalText))
                     emit(ChatChunk.Content(finalText, isTerminalFarewell = true))
+                    onTurnMessages?.invoke(messages.drop(turnStart).toList())
                     emit(ChatChunk.Finish(reason = "stop", abrupt = streamAbrupt, usage = turnUsage, closeSession = true))
                     turnUsage?.let { events?.onTurnUsage(it) }
-                    onTurnMessages?.invoke(messages.drop(turnStart).toList())
                     return@flow
                 }
             }
         }
 
         emit(ChatChunk.Content("Достигнут лимит вызовов инструментов."))
+        onTurnMessages?.invoke(messages.drop(turnStart).toList())
         emit(ChatChunk.Finish(reason = "max_tool_rounds", usage = turnUsage))
         turnUsage?.let { events?.onTurnUsage(it) }
-        onTurnMessages?.invoke(messages.drop(turnStart).toList())
     }
 
     suspend fun complete(

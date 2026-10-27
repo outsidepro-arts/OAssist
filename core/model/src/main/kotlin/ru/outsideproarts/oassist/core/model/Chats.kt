@@ -64,7 +64,7 @@ data class StoredTurn(
     /** New typed user request/context. Null keeps legacy userText replay behavior. */
     val modelUserInput: ModelUserInput? = null,
 ) {
-    /** История для модели: реплика пользователя + транскрипт хода. */
+    /** История для модели; при пустом транскрипте старого чата восстанавливается сохранённый ответ. */
     fun modelMessages(): List<ChatMessage> = listOf(
         ChatMessage(
             role = ChatRole.USER,
@@ -73,5 +73,7 @@ data class StoredTurn(
             images = userImages,
             contextData = modelUserInput?.context.orEmpty(),
         ),
-    ) + turn
+    ) + turn.ifEmpty {
+        if (answer.isNotBlank()) listOf(ChatMessage(ChatRole.ASSISTANT, answer)) else emptyList()
+    }
 }
