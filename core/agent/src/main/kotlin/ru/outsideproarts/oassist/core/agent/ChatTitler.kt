@@ -29,13 +29,19 @@ object ChatTitler {
     /**
      * Название от модели режима [mode]; null — не удалось (нет модели/провайдера,
      * сеть, мусорный ответ) — вызывающий оставляет плейсхолдер.
+     *
+     * [firstAnswer] — ответ ассистента на первый ход: используется как материал
+     * для названия, когда текста пользователя нет (аудиосообщение для модели).
      */
     suspend fun generateTitle(
         mode: AssistMode,
         firstMessage: String,
         factory: AgentFactory,
+        firstAnswer: String = "",
     ): String? {
-        if (firstMessage.isBlank()) return null
+        val byAnswer = firstMessage.isBlank()
+        val seed = if (byAnswer) firstAnswer else firstMessage
+        if (seed.isBlank()) return null
         return try {
             val profile = factory.providerForMode(mode) ?: return null
             val modelId = factory.modeConfig(mode).modelId?.takeIf { it.isNotBlank() } ?: return null
@@ -44,7 +50,7 @@ object ChatTitler {
                 modelId = modelId,
                 systemPrompt = null,
                 history = emptyList(),
-                userMessage = prompt(firstMessage),
+                userMessage = prompt(seed, byAnswer),
             )
             parseTitle(raw)
         } catch (e: CancellationException) {
@@ -68,8 +74,15 @@ object ChatTitler {
         return cleaned.take(MAX_TITLE_LENGTH)
     }
 
-    private fun prompt(firstMessage: String): String =
-        "Придумай короткое название диалога (до 5 слов) по первому сообщению пользователя. " +
-            "Ответ — только название: без кавычек, точек и пояснений.\n\nСообщение:\n" +
-            firstMessage.take(MAX_PROMPT_MESSAGE)
+    private fun prompt(seed: String, byAnswer: Boolean): String {
+        val task = if (byAnswer) {
+            "Придумай короткое название диалога (до 5 слов) по ответу ассистента " +
+                "на аудиосообщение пользователя. Ответ — только название: без кавычек, " +
+                "точек и пояснений.\n\nОтвет ассистента:\n"
+        } else {
+            "Придумай короткое название диалога (до 5 слов) по первому сообщению пользователя. " +
+                "Ответ — только название: без кавычек, точек и пояснений.\n\nСообщение:\n"
+        }
+        return task + seed.take(MAX_PROMPT_MESSAGE)
+    }
 }

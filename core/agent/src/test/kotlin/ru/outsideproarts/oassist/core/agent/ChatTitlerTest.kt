@@ -7,6 +7,7 @@ import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
+import org.junit.Assert.assertTrue
 import org.junit.Test
 import ru.outsideproarts.oassist.core.model.AssistMode
 import ru.outsideproarts.oassist.core.model.ChatMessage
@@ -63,7 +64,32 @@ class ChatTitlerTest {
         assertNull(ChatTitler.generateTitle(AssistMode.CHAT, "   ", fakeFactory(response = "x")))
     }
 
-    private fun fakeFactory(response: String, withModel: Boolean = true): AgentFactory {
+    @Test
+    fun generateTitle_blankMessage_usesAnswer() = runTest {
+        val prompts = mutableListOf<String>()
+        val factory = fakeFactory(response = "«Варенье из клубники»", prompts = prompts)
+        val title = ChatTitler.generateTitle(
+            AssistMode.CHAT,
+            "   ",
+            factory,
+            firstAnswer = "Варенье из клубники варят так: ягоды, сахар, вода.",
+        )
+        assertEquals("Варенье из клубники", title)
+        val prompt = prompts.single()
+        assertTrue(prompt.contains("аудиосообщение"))
+        assertTrue(prompt.contains("Варенье из клубники варят так"))
+    }
+
+    @Test
+    fun generateTitle_blankMessageAndAnswer_returnsNull() = runTest {
+        assertNull(ChatTitler.generateTitle(AssistMode.CHAT, "  ", fakeFactory(response = "x"), firstAnswer = " "))
+    }
+
+    private fun fakeFactory(
+        response: String,
+        withModel: Boolean = true,
+        prompts: MutableList<String> = mutableListOf(),
+    ): AgentFactory {
         val client = object : ModelClient {
             override suspend fun fetchModels(): List<ModelInfo> = emptyList()
             override fun chatCompletionStream(
@@ -71,7 +97,10 @@ class ChatTitlerTest {
                 messages: List<ChatMessage>,
                 tools: List<ToolSchemaDto>,
                 reasoningEnabled: Boolean,
-            ): Flow<ChatChunk> = flowOf(ChatChunk.Content(response), ChatChunk.Finish("stop"))
+            ): Flow<ChatChunk> {
+                prompts += messages.joinToString("\n") { it.content }
+                return flowOf(ChatChunk.Content(response), ChatChunk.Finish("stop"))
+            }
         }
         return object : AgentFactory {
             override suspend fun modeConfig(mode: AssistMode): ModeConfig =

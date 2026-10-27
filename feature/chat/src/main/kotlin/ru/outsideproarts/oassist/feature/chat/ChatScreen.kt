@@ -225,11 +225,11 @@ fun ChatScreen(
         if (chatKind == ChatKind.ASSISTANT) AssistMode.ASSISTANT else AssistMode.CHAT
 
     /** Фоновое имя диалога от модели; до ответа остаётся плейсхолдер. */
-    fun generateTitle(userMsg: String) {
+    fun generateTitle(userMsg: String, answer: String) {
         if (titleLocked) return
         scope.launch {
             val generated = runCatching {
-                ChatTitler.generateTitle(sendMode(), userMsg, AgentFactory.get())
+                ChatTitler.generateTitle(sendMode(), userMsg, AgentFactory.get(), answer)
             }.getOrNull() ?: return@launch
             if (!titleLocked) {
                 chatTitle = generated
@@ -266,6 +266,8 @@ fun ChatScreen(
         val currentId = chatId
         val stored = turnStore.last()
         val isFirstTurn = turnStore.size == 1
+        // Аудио-ход для модели не имеет текста: имя строится по ответу ассистента.
+        val nameSeed = userMsg.ifBlank { answer }
         when {
             currentId != null -> {
                 if (repo != null) {
@@ -273,20 +275,20 @@ fun ChatScreen(
                 }
             }
             autoSaveChats -> {
-                val placeholder = ChatTitler.placeholder(userMsg)
+                val placeholder = ChatTitler.placeholder(nameSeed)
                 if (isFirstTurn && chatTitle.isBlank()) chatTitle = placeholder
                 if (repo != null) {
                     scope.launch {
                         val id = repo.createChat(sendMode(), chatTitle.ifBlank { placeholder })
                         chatId = id
                         repo.appendTurn(id, stored)
-                        if (isFirstTurn) generateTitle(userMsg)
+                        if (isFirstTurn) generateTitle(userMsg, answer)
                     }
                 }
             }
             isFirstTurn -> {
-                if (chatTitle.isBlank()) chatTitle = ChatTitler.placeholder(userMsg)
-                generateTitle(userMsg)
+                if (chatTitle.isBlank()) chatTitle = ChatTitler.placeholder(nameSeed)
+                generateTitle(userMsg, answer)
             }
         }
     }
@@ -549,7 +551,11 @@ fun ChatScreen(
         val repo = ChatHandle.get() ?: return
         if (chatId != null || turnStore.isEmpty()) return
         val turns = turnStore.toList()
-        val fallbackTitle = ChatTitler.placeholder(turns.firstOrNull()?.userText.orEmpty())
+        // Аудио-ход без текста: имя — из первого текстового хода или ответа.
+        val fallbackTitle = ChatTitler.placeholder(
+            turns.firstOrNull { it.userText.isNotBlank() }?.userText
+                ?: turns.firstOrNull { it.answer.isNotBlank() }?.answer.orEmpty(),
+        )
         if (chatTitle.isBlank()) chatTitle = fallbackTitle
         val title = chatTitle
         scope.launch {
