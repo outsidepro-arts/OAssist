@@ -24,10 +24,12 @@ data class NotifyItem(
 fun isOwnNotification(packageName: String?, ownPackage: String?): Boolean = packageName == ownPackage
 
 /** Компактный список уведомлений для модели. */
-fun formatNotifications(items: List<NotifyItem>): String {
-    if (items.isEmpty()) return "Активных уведомлений нет"
+fun formatNotifications(items: List<NotifyItem>, total: Int = items.size): String {
+    if (items.isEmpty()) return "Доступных активных уведомлений других приложений нет (показано 0 из $total)"
     val timeFormat = SimpleDateFormat("HH:mm", Locale.getDefault())
-    return items.joinToString("\n") { item ->
+    val header = "Доступные уведомления других приложений: показано ${items.size} из $total" +
+        if (items.size < total) " (частичный список)" else ""
+    return items.joinToString("\n", prefix = "$header\n") { item ->
         val title = item.title?.takeIf { it.isNotBlank() } ?: "(без заголовка)"
         val text = item.text?.takeIf { it.isNotBlank() }?.let { " — $it" } ?: ""
         val time = timeFormat.format(Date(item.time))
@@ -63,12 +65,11 @@ class NotifyActions(
     suspend fun list(): ToolResult {
         val service = serviceOrError().getOrElse { return ToolResult(false, it.message ?: "Сервис недоступен") }
         return runCatching {
-            val items = service.activeNotifications
-                ?.filter { !isOwnNotification(it.packageName, service.packageName) }
-                ?.take(MAX_ITEMS)
-                ?.map { it.toItem() }
-                ?: emptyList()
-            ToolResult(true, formatNotifications(items))
+            val notifications = service.activeNotifications
+                ?: return@runCatching ToolResult(false, "Не удалось получить список активных уведомлений")
+            val visible = notifications.filter { !isOwnNotification(it.packageName, service.packageName) }
+            val items = visible.take(MAX_ITEMS).map { it.toItem() }
+            ToolResult(true, formatNotifications(items, visible.size))
         }.getOrElse { ToolResult(false, "Не удалось прочитать уведомления: ${it.message}") }
     }
 

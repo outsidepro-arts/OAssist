@@ -70,21 +70,21 @@ class WebFetcher(
             (it.title.orEmpty().length + it.excerpt.orEmpty().length + it.contentHtml.length)
         } ?: 0
         if (article != null && articleTextLength >= WebRenderActions.MIN_STATIC_CHARS) {
-            return Result.success(renderResult(raw.finalUrl, article, mode, cap, FetchTier.STATIC))
+            return Result.success(renderResult(raw.finalUrl, article, mode, cap, FetchTier.STATIC, raw.bodyTruncated))
         }
 
         // Статика бедная: пробуем Markdown-вариант (дешёвый tier для док-сайтов).
         content.fetchMarkdownVariant(raw.finalUrl).getOrNull()?.let { md ->
-            val capped = capText(md, cap)
+            val capped = capText(md.body, cap)
             return Result.success(
-                FetchedResult(raw.finalUrl, null, capped.markdown, FetchTier.STATIC, capped.truncated, md.length),
+                FetchedResult(md.finalUrl, null, capped.markdown, FetchTier.STATIC, md.bodyTruncated || capped.truncated, md.body.length),
             )
         }
 
         if (renderMode == RenderMode.NEVER || render == null) {
             val fallback = htmlToPlainText(raw.body, raw.finalUrl, cap)
             return Result.success(
-                FetchedResult(raw.finalUrl, article?.title, fallback.markdown, FetchTier.STATIC, fallback.truncated, fallback.totalChars),
+                FetchedResult(raw.finalUrl, article?.title, fallback.markdown, FetchTier.STATIC, raw.bodyTruncated || fallback.truncated, fallback.totalChars),
             )
         }
         return renderTier(raw.finalUrl, mode, cap, loadImages, render)
@@ -105,11 +105,11 @@ class WebFetcher(
                 FetchedResult(
                     rendered.finalUrl, rendered.title,
                     PARTIAL_RENDER_NOTE + fallback.markdown,
-                    FetchTier.RENDERED, fallback.truncated, fallback.totalChars,
+                    FetchTier.RENDERED, rendered.bodyTruncated || fallback.truncated, fallback.totalChars,
                 ),
             )
         }
-        return Result.success(renderResult(rendered.finalUrl, article, mode, cap, FetchTier.RENDERED))
+        return Result.success(renderResult(rendered.finalUrl, article, mode, cap, FetchTier.RENDERED, rendered.bodyTruncated))
     }
 
     private fun renderResult(
@@ -118,6 +118,7 @@ class WebFetcher(
         mode: FetchMode,
         cap: Int,
         tier: FetchTier,
+        sourceTruncated: Boolean,
     ): FetchedResult {
         val effectiveCap = if (mode == FetchMode.GIST) minOf(cap, GIST_CAP) else cap
         val md = if (mode == FetchMode.GIST) {
@@ -125,7 +126,7 @@ class WebFetcher(
         } else {
             articleToMarkdown(article.title, article.contentHtml, finalUrl, effectiveCap)
         }
-        return FetchedResult(finalUrl, article.title, md.markdown, tier, md.truncated, md.totalChars)
+        return FetchedResult(finalUrl, article.title, md.markdown, tier, sourceTruncated || md.truncated, md.totalChars)
     }
 
     private fun capText(text: String, cap: Int): Capped {

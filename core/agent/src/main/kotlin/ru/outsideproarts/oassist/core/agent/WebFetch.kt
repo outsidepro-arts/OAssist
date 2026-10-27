@@ -73,7 +73,7 @@ class WebContentActions(private val httpClient: HttpClient) {
      * Проба Markdown-варианта для док-сайтов (`url + .md`).
      * Только по уже деградировавшему пути: один лишний запрос допустим.
      */
-    suspend fun fetchMarkdownVariant(url: String): Result<String> {
+    suspend fun fetchMarkdownVariant(url: String): Result<RawFetch> {
         val variant = url.trimEnd('/') + ".md"
         return runCatching {
             val response = withTimeoutOrNull(STATIC_TIMEOUT_MS) {
@@ -85,11 +85,11 @@ class WebContentActions(private val httpClient: HttpClient) {
             if (!type.contains("markdown") && !type.contains("plain")) {
                 throw IllegalStateException("Нет Markdown-варианта ($type)")
             }
-            val text = withTimeoutOrNull(BODY_TIMEOUT_MS) {
-                readCapped(response.bodyAsChannel(), responseCharset(response), MAX_BODY_BYTES).text
+            val body = withTimeoutOrNull(BODY_TIMEOUT_MS) {
+                readCapped(response.bodyAsChannel(), responseCharset(response), MAX_BODY_BYTES)
             } ?: throw java.util.concurrent.TimeoutException("Таймаут чтения тела: $variant")
-            if (text.length < MIN_MARKDOWN_CHARS) throw IllegalStateException("Markdown-вариант пуст")
-            text
+            if (body.text.length < MIN_MARKDOWN_CHARS) throw IllegalStateException("Markdown-вариант пуст")
+            RawFetch(response.request.url.toString(), type, body.text, body.truncated)
         }
     }
 
@@ -107,7 +107,11 @@ class WebContentActions(private val httpClient: HttpClient) {
         var truncated = false
         while (true) {
             if (total >= capBytes) {
-                truncated = true
+                var extra: Int
+                do {
+                    extra = channel.readAvailable(buf, 0, 1)
+                } while (extra == 0)
+                truncated = extra > 0
                 break
             }
             val n = channel.readAvailable(buf, 0, minOf(buf.size, capBytes - total))
