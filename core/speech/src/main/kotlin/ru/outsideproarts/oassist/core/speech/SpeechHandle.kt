@@ -16,6 +16,9 @@ interface SpeechHandle {
      */
     suspend fun speakWhenReady(text: String): Boolean
 
+    /** Дождаться обработки уже принятых фраз текущих каналов. */
+    suspend fun awaitIdle()
+
     /** Стоп / barge-in. */
     fun stop()
 

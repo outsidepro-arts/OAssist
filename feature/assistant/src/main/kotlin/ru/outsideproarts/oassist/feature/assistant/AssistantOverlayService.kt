@@ -634,9 +634,8 @@ private var turnTranscript: List<ChatMessage> = emptyList()
                     speak = { if (autoSpeak) speech?.speak(it) },
                     speakToolCalls = tts.speakToolCalls,
                 )
-                val answerSpeaker = StreamSpeaker(
+                val answerSpeaker = AssistantAnswerSpeech(
                     speak = { if (autoSpeak) speech?.speak(it) },
-                    speakToolCalls = true,
                 )
                 val screenImage = session.screenImage
                 session.screenImage = null
@@ -679,12 +678,11 @@ private var turnTranscript: List<ChatMessage> = emptyList()
                             } else {
                                 timeline.onChunk(chunk)
                                 answer = timeline.answerText
-                                answerSpeaker.onText(timeline.answerText, false)
+                                answerSpeaker.onText(timeline.answerText, chunk.isTerminalFarewell)
                             }
                             refreshSessionNotification()
                         }
                         is ChatChunk.ToolCall -> {
-                            if (chunk.name == BYE_TOOL_NAME) pendingBye = true
                             timeline.onChunk(chunk)
                             workEvents = timeline.work
                             sounds?.playToolCallIfEnabled(chunk.name, soundEnabled)
@@ -726,7 +724,8 @@ private var turnTranscript: List<ChatMessage> = emptyList()
                         is ChatChunk.Finish -> {
                             timeline.onChunk(chunk)
                             thoughtSpeaker.onFinish(timeline.commentText)
-                            answerSpeaker.onFinish(timeline.answerText)
+                            answerSpeaker.onFinish(timeline.answerText, chunk.closeSession)
+                            pendingBye = chunk.closeSession
                             turnUsage = timeline.usage
                             answer = timeline.answerText
                             workEvents = timeline.work
@@ -760,12 +759,30 @@ private var turnTranscript: List<ChatMessage> = emptyList()
                         android.widget.Toast.LENGTH_LONG,
                     ).show()
                 }
-                speech?.speaking?.first { !it }
-                refreshSessionNotification(force = true)
                 if (pendingBye) {
+                    val accepted = answerSpeaker.finishTerminal(
+                        autoSpeak = autoSpeak,
+                        speakWhenReady = { speech?.speakWhenReady(it) ?: false },
+                        awaitIdle = { speech?.awaitIdle() },
+                        stop = { speech?.stop() },
+                    )
+                    if (!accepted && autoSpeak && (
+                            tts.channel == ru.outsideproarts.oassist.core.model.SpeechOutputChannel.SYSTEM_TTS ||
+                                tts.channel == ru.outsideproarts.oassist.core.model.SpeechOutputChannel.SCREEN_READER
+                            )
+                    ) {
+                        android.widget.Toast.makeText(
+                            this@AssistantOverlayService,
+                            R.string.assistant_farewell_speech_unavailable,
+                            android.widget.Toast.LENGTH_LONG,
+                        ).show()
+                    }
+                    refreshSessionNotification(force = true)
                     stopSelf()
                     return@launch
                 }
+                speech?.speaking?.first { !it }
+                refreshSessionNotification(force = true)
                 execute(voiceFlow.onTurnFinished(continueDialog))
             } finally {
                 persistAssistantTurn(text)
@@ -931,6 +948,5 @@ private var turnTranscript: List<ChatMessage> = emptyList()
         const val CMD_MIC = "mic"
         const val CMD_CLOSE = "close"
         const val CMD_REPLY = "reply"
-        private const val BYE_TOOL_NAME = "bye"
     }
 }

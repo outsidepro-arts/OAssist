@@ -16,10 +16,12 @@ class ByeToolTest {
     }
 
     @Test
-    fun schema_isServiceGroupWithoutParameters() {
+    fun schema_isServiceGroupWithFarewell() {
         val tool = ByeTool()
         assertEquals("bye", tool.schema.name)
         assertEquals(ru.outsideproarts.oassist.core.model.ToolGroups.SERVICE, tool.groupKey)
+        assertTrue(tool.schema.parameters.toString().contains("\"farewell\""))
+        assertTrue(tool.schema.parameters.toString().contains("\"required\""))
     }
 
     @Test

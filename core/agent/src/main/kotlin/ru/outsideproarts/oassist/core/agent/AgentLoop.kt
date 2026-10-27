@@ -4,6 +4,7 @@ import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.flow
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.jsonObject
 import ru.outsideproarts.oassist.core.model.ApprovalDecision
 import ru.outsideproarts.oassist.core.model.ApprovalRequest
@@ -49,6 +50,7 @@ class AgentLoop(
     private val permissionRequester: PermissionRequester? = null,
     /** Заблокирован ли экран в момент запроса (пометка модели и подписи диалога). */
     private val screenLocked: () -> Boolean = { false },
+    private val fallbackFarewell: String? = null,
 ) {
 
     /** Ответить на запрос подтверждения; `false` — такого ожидания нет. */
@@ -187,7 +189,11 @@ class AgentLoop(
                 return@flow
             }
 
-            if (contentSb.isNotEmpty()) {
+            val includesBuiltinBye = toolCalls.any { toolRegistry?.find(it.name) is ByeTool }
+            val terminalBye = includesBuiltinBye && toolCalls.size == 1
+            val invalidByeBatch = includesBuiltinBye && toolCalls.size != 1
+
+            if (contentSb.isNotEmpty() && !includesBuiltinBye) {
                 // Текст перед тул-чунками — комментарий агента к вызовам
                 // («ищу контакт…»): UI решает, озвучивать ли его, по флагу режима.
                 emit(ChatChunk.Content(contentSb.toString(), isToolComment = true))
@@ -210,18 +216,36 @@ class AgentLoop(
             )
 
             for (tc in toolCalls) {
-                emit(ChatChunk.ToolCall(id = tc.id, name = tc.name, argumentsJson = tc.argumentsJson))
-                val args = runCatching {
+                if (!invalidByeBatch) {
+                    emit(ChatChunk.ToolCall(id = tc.id, name = tc.name, argumentsJson = tc.argumentsJson))
+                }
+                val parsedArgs = runCatching {
                     Json.parseToJsonElement(tc.argumentsJson).jsonObject
-                }.getOrElse { kotlinx.serialization.json.buildJsonObject { } }
+                }
+                val args = parsedArgs.getOrElse { kotlinx.serialization.json.buildJsonObject { } }
+                val farewellElement = if (terminalBye) args["farewell"] else null
+                val invalidFarewell = terminalBye && (
+                    parsedArgs.isFailure || (farewellElement != null &&
+                        (farewellElement !is JsonPrimitive || !farewellElement.isString))
+                    )
+                val farewell = if (terminalBye && !invalidFarewell) {
+                    (farewellElement as? JsonPrimitive)?.content?.trim()?.takeIf { it.isNotBlank() }
+                        ?: contentSb.toString().trim().takeIf { it.isNotBlank() }
+                        ?: fallbackFarewell?.trim()?.takeIf { it.isNotBlank() }
+                } else null
                 val toolSummary = toolRegistry?.find(tc.name)?.describeForConfirmation(args)
                     ?: "${tc.name}: ${tc.argumentsJson}"
-                events?.onToolCall(tc.name, tc.argumentsJson, toolSummary)
-                val result = executeOneTool(tc, args) { emit(it) }
+                if (!includesBuiltinBye) events?.onToolCall(tc.name, tc.argumentsJson, toolSummary)
+                val result = when {
+                    invalidByeBatch -> ToolResult(false, "bye должен быть единственным вызовом раунда; повторите запрос отдельно")
+                    invalidFarewell -> ToolResult(false, "Некорректные аргументы bye: farewell должен быть строкой")
+                    terminalBye && farewell == null -> ToolResult(false, "Для bye не задан текст прощания")
+                    else -> executeOneTool(tc, args) { emit(it) }
+                }
                 if (result.success && toolRegistry?.find(tc.name) is SkillGetTool) {
                     result.ownerInstructions?.takeIf { it.isNotBlank() }?.let(liveSkillInstructions::add)
                 }
-                events?.onToolResult(tc.name, result.output, result.success)
+                if (!includesBuiltinBye) events?.onToolResult(tc.name, result.output, result.success)
                 // Результат — отдельной сущностью ToolResult (в полотно «Ход работы»,
                 // не в основной ответ; в синтез не идёт). Текстовый маркер
                 // `[name: output]` больше не эмитим — модель получает результат
@@ -252,6 +276,15 @@ class AgentLoop(
                     ),
                 )
                 liveToolStatuses[messages.lastIndex] = result.success
+                if (terminalBye && result.success) {
+                    val finalText = requireNotNull(farewell)
+                    messages.add(ChatMessage(role = ChatRole.ASSISTANT, content = finalText))
+                    emit(ChatChunk.Content(finalText, isTerminalFarewell = true))
+                    emit(ChatChunk.Finish(reason = "stop", abrupt = streamAbrupt, usage = turnUsage, closeSession = true))
+                    turnUsage?.let { events?.onTurnUsage(it) }
+                    onTurnMessages?.invoke(messages.drop(turnStart).toList())
+                    return@flow
+                }
             }
         }
 

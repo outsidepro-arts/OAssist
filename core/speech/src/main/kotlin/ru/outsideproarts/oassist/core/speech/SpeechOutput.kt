@@ -8,6 +8,7 @@ import android.os.Bundle
 import android.speech.tts.TextToSpeech
 import android.speech.tts.UtteranceProgressListener
 import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -102,6 +103,8 @@ class SpeechOutput(
 
     private val pendingLock = Any()
     private val pendingUtterances = mutableSetOf<String>()
+    private val ttsReceipts = SpeechCompletionTracker()
+    private val utteranceReceipts = mutableMapOf<String, CompletableDeferred<Unit>>()
     private val _speaking = MutableStateFlow(false)
 
     /**
@@ -165,12 +168,17 @@ class SpeechOutput(
         override fun onError(utteranceId: String?, errorCode: Int) {
             utteranceFinished(utteranceId)
         }
+
+        override fun onStop(utteranceId: String?, interrupted: Boolean) {
+            utteranceFinished(utteranceId)
+        }
     }
 
     private fun utteranceFinished(utteranceId: String?) {
         if (utteranceId == null) return
         synchronized(pendingLock) {
             if (pendingUtterances.remove(utteranceId)) {
+                utteranceReceipts.remove(utteranceId)?.let(ttsReceipts::complete)
                 focusWindow.onUtteranceFinished()
                 if (pendingUtterances.isEmpty()) _speaking.value = false
             }
@@ -180,6 +188,7 @@ class SpeechOutput(
     private fun utteranceStarted(utteranceId: String) {
         synchronized(pendingLock) {
             pendingUtterances.add(utteranceId)
+            utteranceReceipts[utteranceId] = ttsReceipts.register()
             _speaking.value = true
             focusWindow.onUtteranceStarted()
         }
@@ -188,6 +197,8 @@ class SpeechOutput(
     private fun resetUtterances() {
         synchronized(pendingLock) {
             pendingUtterances.clear()
+            utteranceReceipts.clear()
+            ttsReceipts.completeAll()
             _speaking.value = false
             focusWindow.reset()
         }
@@ -366,12 +377,7 @@ class SpeechOutput(
                 ensureTts()
                 val engine = tts
                 if (engine != null && ready.value) {
-                    val params = Bundle().apply {
-                        putFloat(TextToSpeech.Engine.KEY_PARAM_VOLUME, volume)
-                    }
-                    val utteranceId = "oassist-${System.nanoTime()}"
-                    utteranceStarted(utteranceId)
-                    engine.speak(text, TextToSpeech.QUEUE_ADD, params, utteranceId)
+                    submitTts(engine, text)
                 }
             }
             SpeechOutputChannel.SCREEN_READER -> {
@@ -406,8 +412,7 @@ class SpeechOutput(
         if (clean.isEmpty()) return false
         when (channel) {
             SpeechOutputChannel.SCREEN_READER -> {
-                screenReader.announce(clean)
-                return true
+                return screenReader.announce(clean)
             }
             SpeechOutputChannel.OFF, SpeechOutputChannel.ONLINE_TTS -> return false
             SpeechOutputChannel.SYSTEM_TTS -> Unit
@@ -419,14 +424,31 @@ class SpeechOutput(
             if (!ok) return false
         }
         // Пока ждали, движок могли пересоздать (смена движка) — говорит актуальный.
-        val live = tts?.takeIf { it === engine } ?: return false
+        val live = tts?.takeIf { it === engine && channel == SpeechOutputChannel.SYSTEM_TTS } ?: return false
+        return submitTts(live, clean)
+    }
+
+    private fun submitTts(engine: TextToSpeech, text: String): Boolean {
         val params = Bundle().apply {
             putFloat(TextToSpeech.Engine.KEY_PARAM_VOLUME, volume)
         }
         val utteranceId = "oassist-${System.nanoTime()}"
         utteranceStarted(utteranceId)
-        live.speak(clean, TextToSpeech.QUEUE_ADD, params, utteranceId)
-        return true
+        val accepted = try {
+            engine.speak(text, TextToSpeech.QUEUE_ADD, params, utteranceId) == TextToSpeech.SUCCESS
+        } catch (error: Exception) {
+            OAssistLog.warn(TAG, "TTS rejected speech", error)
+            false
+        }
+        if (!accepted) utteranceFinished(utteranceId)
+        return accepted
+    }
+
+    /** Waits for submissions already accepted by TTS or the screen-reader queue. */
+    suspend fun awaitIdle() {
+        val ttsSnapshot = synchronized(pendingLock) { ttsReceipts.snapshot() }
+        val screenReaderSnapshot = screenReader.pendingReceipts()
+        (ttsSnapshot + screenReaderSnapshot).awaitAll()
     }
 
     /**
