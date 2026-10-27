@@ -14,7 +14,7 @@ class UiGetScreenTool(private val ui: UiActions) : Tool {
     override val schema = ToolSchema(
         name = "ui_get_screen",
         description = "Снимок экрана: список элементов с индексами, текстами и координатами. " +
-            "Вызывай перед нажатиями. Флаг has_actions — у элемента есть скрытые действия (ui_get_actions).",
+            "Сохрани snapshot_id и передавай его вместе с индексом каждому инструменту элемента. Флаг has_actions — у элемента есть скрытые действия (ui_get_actions).",
         parameters = buildJsonObject {
             put("type", "object")
             put("properties", buildJsonObject { })
@@ -23,7 +23,7 @@ class UiGetScreenTool(private val ui: UiActions) : Tool {
 
     override suspend fun execute(arguments: JsonObject): ToolResult {
         return ui.snapshot().fold(
-            onSuccess = { ToolResult(true, formatSnapshot(it.nodes, it.total, it.screenHeight, it.fromOwnWindow)) },
+            onSuccess = { ToolResult(true, "snapshot_id=${it.snapshotId}\n" + formatSnapshot(it.nodes, it.total, it.screenHeight, it.fromOwnWindow)) },
             onFailure = { ToolResult(false, it.message ?: "Нет снимка") },
         )
     }
@@ -36,12 +36,16 @@ class UiClickTool(private val ui: UiActions) : Tool {
         parameters = buildJsonObject {
             put("type", "object")
             put("properties", buildJsonObject {
+                put("snapshot_id", buildJsonObject {
+                    put("type", "string")
+                    put("description", "snapshot_id из ui_get_screen; обязателен при указании index")
+                })
                 put("index", buildJsonObject {
                     put("type", "integer")
                     put("description", "Индекс узла из снимка")
                 })
             })
-            put("required", kotlinx.serialization.json.buildJsonArray { add(kotlinx.serialization.json.JsonPrimitive("index")) })
+            put("required", kotlinx.serialization.json.buildJsonArray { add(kotlinx.serialization.json.JsonPrimitive("index")); add(kotlinx.serialization.json.JsonPrimitive("snapshot_id")) })
         },
     )
 
@@ -53,7 +57,9 @@ class UiClickTool(private val ui: UiActions) : Tool {
     override suspend fun execute(arguments: JsonObject): ToolResult {
         val index = arguments["index"]?.jsonPrimitive?.content?.toIntOrNull()
             ?: return ToolResult(false, "Не указан index")
-        return ui.click(index)
+        val snapshotId = arguments["snapshot_id"]?.jsonPrimitive?.content?.takeIf { it.isNotBlank() }
+            ?: return ToolResult(false, "Не указан snapshot_id — вызови ui_get_screen")
+        return ui.click(index, snapshotId)
     }
 }
 
@@ -64,12 +70,16 @@ class UiLongClickTool(private val ui: UiActions) : Tool {
         parameters = buildJsonObject {
             put("type", "object")
             put("properties", buildJsonObject {
+                put("snapshot_id", buildJsonObject {
+                    put("type", "string")
+                    put("description", "snapshot_id из ui_get_screen; обязателен при указании index")
+                })
                 put("index", buildJsonObject {
                     put("type", "integer")
                     put("description", "Индекс узла из снимка")
                 })
             })
-            put("required", kotlinx.serialization.json.buildJsonArray { add(kotlinx.serialization.json.JsonPrimitive("index")) })
+            put("required", kotlinx.serialization.json.buildJsonArray { add(kotlinx.serialization.json.JsonPrimitive("index")); add(kotlinx.serialization.json.JsonPrimitive("snapshot_id")) })
         },
     )
 
@@ -81,7 +91,9 @@ class UiLongClickTool(private val ui: UiActions) : Tool {
     override suspend fun execute(arguments: JsonObject): ToolResult {
         val index = arguments["index"]?.jsonPrimitive?.content?.toIntOrNull()
             ?: return ToolResult(false, "Не указан index")
-        return ui.longClick(index)
+        val snapshotId = arguments["snapshot_id"]?.jsonPrimitive?.content?.takeIf { it.isNotBlank() }
+            ?: return ToolResult(false, "Не указан snapshot_id — вызови ui_get_screen")
+        return ui.longClick(index, snapshotId)
     }
 }
 
@@ -92,6 +104,10 @@ class UiSetTextTool(private val ui: UiActions) : Tool {
         parameters = buildJsonObject {
             put("type", "object")
             put("properties", buildJsonObject {
+                put("snapshot_id", buildJsonObject {
+                    put("type", "string")
+                    put("description", "snapshot_id из ui_get_screen; обязателен при указании index")
+                })
                 put("index", buildJsonObject {
                     put("type", "integer")
                     put("description", "Индекс поля ввода из снимка")
@@ -102,7 +118,7 @@ class UiSetTextTool(private val ui: UiActions) : Tool {
                 })
             })
             put("required", kotlinx.serialization.json.buildJsonArray {
-                add(kotlinx.serialization.json.JsonPrimitive("index"))
+                add(kotlinx.serialization.json.JsonPrimitive("index")); add(kotlinx.serialization.json.JsonPrimitive("snapshot_id"))
                 add(kotlinx.serialization.json.JsonPrimitive("text"))
             })
         },
@@ -117,19 +133,25 @@ class UiSetTextTool(private val ui: UiActions) : Tool {
     override suspend fun execute(arguments: JsonObject): ToolResult {
         val index = arguments["index"]?.jsonPrimitive?.content?.toIntOrNull()
             ?: return ToolResult(false, "Не указан index")
+        val snapshotId = arguments["snapshot_id"]?.jsonPrimitive?.content?.takeIf { it.isNotBlank() }
+            ?: return ToolResult(false, "Не указан snapshot_id — вызови ui_get_screen")
         val text = arguments["text"]?.jsonPrimitive?.content
             ?: return ToolResult(false, "Не указан text")
-        return ui.setText(index, text)
+        return ui.setText(index, text, snapshotId)
     }
 }
 
 class UiScrollTool(private val ui: UiActions) : Tool {
     override val schema = ToolSchema(
         name = "ui_scroll",
-        description = "Прокрутить список на экране. Без index — первый прокручиваемый узел.",
+        description = "Прокрутить список на экране. Без index — первый прокручиваемый узел; с index обязателен snapshot_id из ui_get_screen.",
         parameters = buildJsonObject {
             put("type", "object")
             put("properties", buildJsonObject {
+                put("snapshot_id", buildJsonObject {
+                    put("type", "string")
+                    put("description", "snapshot_id из ui_get_screen; обязателен при указании index")
+                })
                 put("index", buildJsonObject {
                     put("type", "integer")
                     put("description", "Индекс прокручиваемого узла (необязательно)")
@@ -150,9 +172,12 @@ class UiScrollTool(private val ui: UiActions) : Tool {
 
     override suspend fun execute(arguments: JsonObject): ToolResult {
         val index = arguments["index"]?.jsonPrimitive?.content?.toIntOrNull()
+        if (arguments.containsKey("index") && index == null) return ToolResult(false, "Некорректный index")
+        val snapshotId = arguments["snapshot_id"]?.jsonPrimitive?.content?.takeIf { it.isNotBlank() }
+        if (index != null && snapshotId == null) return ToolResult(false, "Не указан snapshot_id — вызови ui_get_screen")
         val direction = arguments["direction"]?.jsonPrimitive?.content
             ?: return ToolResult(false, "Не указан direction")
-        return ui.scroll(index, direction)
+        return ui.scroll(index, direction, snapshotId)
     }
 }
 
@@ -332,12 +357,16 @@ class UiScreenshotNodeTool(private val ui: UiActions) : Tool {
         parameters = buildJsonObject {
             put("type", "object")
             put("properties", buildJsonObject {
+                put("snapshot_id", buildJsonObject {
+                    put("type", "string")
+                    put("description", "snapshot_id из ui_get_screen; обязателен при указании index")
+                })
                 put("index", buildJsonObject {
                     put("type", "integer")
                     put("description", "Индекс узла из снимка ui_get_screen")
                 })
             })
-            put("required", kotlinx.serialization.json.buildJsonArray { add(kotlinx.serialization.json.JsonPrimitive("index")) })
+            put("required", kotlinx.serialization.json.buildJsonArray { add(kotlinx.serialization.json.JsonPrimitive("index")); add(kotlinx.serialization.json.JsonPrimitive("snapshot_id")) })
         },
     )
 
@@ -349,7 +378,9 @@ class UiScreenshotNodeTool(private val ui: UiActions) : Tool {
     override suspend fun execute(arguments: JsonObject): ToolResult {
         val index = arguments["index"]?.jsonPrimitive?.content?.toIntOrNull()
             ?: return ToolResult(false, "Не указан index")
-        return ui.screenshotNode(index)
+        val snapshotId = arguments["snapshot_id"]?.jsonPrimitive?.content?.takeIf { it.isNotBlank() }
+            ?: return ToolResult(false, "Не указан snapshot_id — вызови ui_get_screen")
+        return ui.screenshotNode(index, snapshotId)
     }
 }
 
@@ -367,12 +398,16 @@ class UiGetActionsTool(private val ui: UiActions) : Tool {
         parameters = buildJsonObject {
             put("type", "object")
             put("properties", buildJsonObject {
+                put("snapshot_id", buildJsonObject {
+                    put("type", "string")
+                    put("description", "snapshot_id из ui_get_screen; обязателен при указании index")
+                })
                 put("index", buildJsonObject {
                     put("type", "integer")
                     put("description", "Индекс узла из снимка ui_get_screen")
                 })
             })
-            put("required", kotlinx.serialization.json.buildJsonArray { add(kotlinx.serialization.json.JsonPrimitive("index")) })
+            put("required", kotlinx.serialization.json.buildJsonArray { add(kotlinx.serialization.json.JsonPrimitive("index")); add(kotlinx.serialization.json.JsonPrimitive("snapshot_id")) })
         },
     )
 
@@ -384,7 +419,9 @@ class UiGetActionsTool(private val ui: UiActions) : Tool {
     override suspend fun execute(arguments: JsonObject): ToolResult {
         val index = arguments["index"]?.jsonPrimitive?.content?.toIntOrNull()
             ?: return ToolResult(false, "Не указан index")
-        return ui.nodeActions(index)
+        val snapshotId = arguments["snapshot_id"]?.jsonPrimitive?.content?.takeIf { it.isNotBlank() }
+            ?: return ToolResult(false, "Не указан snapshot_id — вызови ui_get_screen")
+        return ui.nodeActions(index, snapshotId)
     }
 }
 
@@ -401,6 +438,10 @@ class UiPerformActionTool(private val ui: UiActions) : Tool {
         parameters = buildJsonObject {
             put("type", "object")
             put("properties", buildJsonObject {
+                put("snapshot_id", buildJsonObject {
+                    put("type", "string")
+                    put("description", "snapshot_id из ui_get_screen; обязателен при указании index")
+                })
                 put("index", buildJsonObject {
                     put("type", "integer")
                     put("description", "Индекс узла из снимка ui_get_screen")
@@ -411,7 +452,7 @@ class UiPerformActionTool(private val ui: UiActions) : Tool {
                 })
             })
             put("required", kotlinx.serialization.json.buildJsonArray {
-                add(kotlinx.serialization.json.JsonPrimitive("index"))
+                add(kotlinx.serialization.json.JsonPrimitive("index")); add(kotlinx.serialization.json.JsonPrimitive("snapshot_id"))
                 add(kotlinx.serialization.json.JsonPrimitive("action_index"))
             })
         },
@@ -426,8 +467,10 @@ class UiPerformActionTool(private val ui: UiActions) : Tool {
     override suspend fun execute(arguments: JsonObject): ToolResult {
         val index = arguments["index"]?.jsonPrimitive?.content?.toIntOrNull()
             ?: return ToolResult(false, "Не указан index")
+        val snapshotId = arguments["snapshot_id"]?.jsonPrimitive?.content?.takeIf { it.isNotBlank() }
+            ?: return ToolResult(false, "Не указан snapshot_id — вызови ui_get_screen")
         val actionIndex = arguments["action_index"]?.jsonPrimitive?.content?.toIntOrNull()
             ?: return ToolResult(false, "Не указан action_index")
-        return ui.performNodeAction(index, actionIndex)
+        return ui.performNodeAction(index, actionIndex, snapshotId)
     }
 }
