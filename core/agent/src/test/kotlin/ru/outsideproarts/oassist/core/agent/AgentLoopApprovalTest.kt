@@ -27,13 +27,19 @@ import ru.outsideproarts.oassist.core.provider.openai.ToolSchemaDto
 class AgentLoopApprovalTest {
 
     private class ScriptedClient(private val rounds: ArrayDeque<List<ChatChunk>>) : ModelClient {
+        val requests = mutableListOf<List<ru.outsideproarts.oassist.core.model.ChatMessage>>()
         override suspend fun fetchModels(): List<ModelInfo> = emptyList()
         override fun chatCompletionStream(
             modelId: String,
             messages: List<ru.outsideproarts.oassist.core.model.ChatMessage>,
             tools: List<ToolSchemaDto>,
             reasoningEnabled: Boolean,
-        ): Flow<ChatChunk> = flowOf(*(rounds.removeFirstOrNull() ?: listOf(ChatChunk.Finish("stop"))).toTypedArray())
+        ): Flow<ChatChunk> {
+            requests += messages.toList()
+            return flowOf(*(rounds.removeFirstOrNull() ?: listOf(ChatChunk.Finish("stop"))).toTypedArray())
+        }
+
+        fun toolOutput(callId: String): String = requests.last().single { it.toolCallId == callId }.content
     }
 
     private class CountingTool(
@@ -107,7 +113,7 @@ class AgentLoopApprovalTest {
         assertEquals("Тестовое действие danger_call", approval.request.summary)
         val result = chunks.filterIsInstance<ChatChunk.ToolResult>().single()
         assertTrue(result.output.contains("выполнено:danger_call"))
-        assertTrue(result.output.contains("Пользователь разрешил действие"))
+        assertTrue(client.toolOutput("call-1").contains("Пользователь разрешил только этот вызов инструмента"))
         assertEquals(ChatChunk.Finish("stop"), chunks.last())
     }
 
@@ -133,23 +139,25 @@ class AgentLoopApprovalTest {
 
         assertEquals(0, tool.executions)
         assertTrue(chunks.any { it is ChatChunk.ToolResult && it.output.contains("Отклонено пользователем") })
+        assertTrue(client.toolOutput("call-1").contains("Пользователь отклонил запрошенное действие"))
     }
 
     @Test
     fun allowSession_coversNextCalls_untilSessionCleared() = runTest {
         val tool = CountingTool("danger_call")
+        val sibling = CountingTool("other_action", groupKey = tool.groupKey)
         val client = ScriptedClient(
             ArrayDeque(
                 listOf(
                     listOf(toolCall("call-1", "danger_call"), ChatChunk.Finish("tool_calls")),
-                    listOf(toolCall("call-2", "danger_call"), ChatChunk.Finish("tool_calls")),
+                    listOf(toolCall("call-2", "other_action"), ChatChunk.Finish("tool_calls")),
                     listOf(toolCall("call-3", "danger_call"), ChatChunk.Finish("tool_calls")),
                     listOf(ChatChunk.Content("три"), ChatChunk.Finish("stop")),
                 ),
             ),
         )
         val policy = InMemoryApprovalPolicy()
-        val agent = AgentLoop(client, ToolRegistry(listOf(tool)), approvalPolicy = policy)
+        val agent = AgentLoop(client, ToolRegistry(listOf(tool, sibling)), approvalPolicy = policy)
 
         val job = async {
             agent.stream("m", null, emptyList(), "три раза").toList()
@@ -158,8 +166,12 @@ class AgentLoopApprovalTest {
         assertTrue(agent.resolveApproval("call-1", ApprovalDecision.ALLOW_SESSION))
         val chunks = job.await()
 
-        assertEquals(3, tool.executions)
+        assertEquals(2, tool.executions)
+        assertEquals(1, sibling.executions)
         assertEquals(1, chunks.filterIsInstance<ChatChunk.ApprovalNeeded>().size)
+        assertTrue(client.toolOutput("call-1").contains("инструменты группы «${tool.groupKey}» на текущую сессию режима «CHAT»"))
+        assertEquals(ApprovalState.ALLOW, policy.state(tool.groupKey, "CHAT"))
+        assertEquals(ApprovalState.ASK, policy.state(tool.groupKey, "ASSISTANT"))
 
         // Конец сессии — «на текущую сессию» забывается, следующий вызов спросит снова.
         policy.clearSession("CHAT")
@@ -203,6 +215,7 @@ class AgentLoopApprovalTest {
 
         assertEquals(2, tool.executions)
         assertEquals(1, chunks.filterIsInstance<ChatChunk.ApprovalNeeded>().size)
+        assertTrue(client.toolOutput("call-1").contains("сохранил разрешение инструментов группы «${tool.groupKey}» до изменения настройки"))
         assertEquals(ApprovalState.ALLOW, policy.state(tool.groupKey, "CHAT"))
     }
 
@@ -233,6 +246,7 @@ class AgentLoopApprovalTest {
         val denials = chunks.filterIsInstance<ChatChunk.ToolResult>()
         assertEquals(2, denials.size)
         denials.forEach { assertTrue(it.output.contains("Отклонено пользователем")) }
+        assertTrue(client.toolOutput("call-1").contains("сохранил запрет инструментов группы «${tool.groupKey}» до изменения настройки"))
         assertEquals(ApprovalState.DENY, policy.state(tool.groupKey, "CHAT"))
     }
 
