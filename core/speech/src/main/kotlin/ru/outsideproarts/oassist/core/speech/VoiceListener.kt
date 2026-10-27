@@ -34,11 +34,25 @@ import kotlin.concurrent.thread
 class VoiceListener(
     private val context: Context,
     private val recognitionServices: RecognitionServiceCatalog = RecognitionServiceCatalog(context),
+    private val inputRouter: VoiceInputRouter = VoiceInputRouter(
+        AndroidVoiceRouteBackend(context),
+        SharedPrefsBtPermissionFlag(context),
+        logInfo = { OAssistLog.info("VoiceInputRouter", it) },
+    ),
 ) {
 
     private val session = VoiceCaptureSession()
     private val _state = MutableStateFlow<CaptureState>(CaptureState.Idle)
     val state: StateFlow<CaptureState> = _state.asStateFlow()
+
+    /** Аудиомаршрут записи (микрофон/гарнитура); для статусов UI. */
+    val route: StateFlow<VoiceInputRoute> = inputRouter.route
+
+    /** Что делать с BT-входом для этого ввода: маршрут/микрофон/запрос разрешения. */
+    fun bluetoothInputDecision(enabled: Boolean): BtInputDecision = inputRouter.decide(enabled)
+
+    /** Запрос BLUETOOTH_CONNECT состоялся — повторно не спрашиваем. */
+    fun markBluetoothPermissionRequested() = inputRouter.markPermissionRequested()
 
     fun isSttAvailable(recognizerComponent: String? = null): Boolean =
         recognitionServices.resolveComponent(recognizerComponent) != null ||
@@ -100,11 +114,13 @@ class VoiceListener(
     /**
      * Начать системное распознавание. Частичные результаты — в [listener],
      * финал — тоже (там же снимать [state]). Возвращает причину отказа.
+     * [bluetoothInput] — AUTO-маршрут: гарнитура при подключении, иначе микрофон.
      */
     fun startStt(
         language: String,
         listener: SttListener,
         recognizerComponent: String? = null,
+        bluetoothInput: Boolean = true,
     ): CaptureError? {
         session.start(CaptureMode.STT)?.let { return it }
         if (!hasMicPermission()) {
@@ -118,7 +134,8 @@ class VoiceListener(
         }
         val startSession = SttSession(language, listener, component)
         sttSession = startSession
-        // Фокус берём до старта захвата и держим через все retry-попытки одной сессии.
+        // Маршрут и фокус — до старта захвата и держим через все retry-попытки одной сессии.
+        inputRouter.acquire(bluetoothInput)
         listenFocus.open()
         val error = startSttAttempt(startSession, isFirst = true)
         if (error != null) {
@@ -224,8 +241,11 @@ class VoiceListener(
         cancelPendingRetry()
         sttSession = null
         session.reset()
+        // Порядок: сначала Idle (штатный конец), затем снятие маршрута —
+        // UI отличает фолбэк mid-capture (route → микрофон при Listening).
         _state.value = CaptureState.Idle
         listenFocus.close()
+        inputRouter.release()
     }
 
     private fun detachSttProxy() {
@@ -303,10 +323,11 @@ class VoiceListener(
     /**
      * Начать сырую запись (WAV 16 кГц моно). Пик держим в памяти;
      * при [MAX_RAW_SEC] запись сама встаёт (отпускание холда забирает итог).
+     * [bluetoothInput] — AUTO-маршрут: гарнитура при подключении, иначе микрофон.
      */
     // Разрешение проверено выше через hasMicPermission(); lint его не видит.
     @android.annotation.SuppressLint("MissingPermission")
-    fun startRaw(maxSec: Int = MAX_RAW_SEC): CaptureError? {
+    fun startRaw(maxSec: Int = MAX_RAW_SEC, bluetoothInput: Boolean = true): CaptureError? {
         session.start(CaptureMode.RAW)?.let { return it }
         if (!hasMicPermission()) {
             session.reset()
@@ -322,6 +343,7 @@ class VoiceListener(
                 session.reset()
                 return CaptureError.INIT_FAILED
             }
+            inputRouter.acquire(bluetoothInput)
             val record = AudioRecord(
                 MediaRecorder.AudioSource.MIC,
                 RAW_SAMPLE_RATE,
@@ -331,13 +353,22 @@ class VoiceListener(
             )
             if (record.state != AudioRecord.STATE_INITIALIZED) {
                 runCatching { record.release() }
+                inputRouter.release()
                 session.reset()
                 return CaptureError.INIT_FAILED
+            }
+            // Страховка маршрута: setCommunicationDevice выбирает источник сам,
+            // но hint на рекордере исключает расхождения прошивок с AudioSource.MIC.
+            if (inputRouter.route.value == VoiceInputRoute.BLUETOOTH) {
+                context.bluetoothInputDevice()?.let { device ->
+                    runCatching { record.setPreferredDevice(device) }
+                }
             }
             synchronized(rawLock) { rawPcm.clear() }
             rawStop = false
             recorder = record
             record.startRecording()
+            OAssistLog.info("OAssistRaw", "RAW capture routed to device type=${record.routedDevice?.type}")
             val startedAt = System.currentTimeMillis()
             _state.value = CaptureState.Listening(CaptureMode.RAW, startedAt)
             rawThread = thread(name = "oassist-raw-capture", isDaemon = true) {
@@ -360,6 +391,7 @@ class VoiceListener(
             null
         } catch (e: Exception) {
             recorder = null
+            inputRouter.release()
             session.reset()
             CaptureError.INIT_FAILED
         }
@@ -375,7 +407,9 @@ class VoiceListener(
         runCatching { rawThread?.join(2000L) }
         rawThread = null
         recorder = null
+        // Порядок: сначала Idle (штатный конец), затем снятие маршрута.
         _state.value = CaptureState.Idle
+        inputRouter.release()
         if (mode != CaptureMode.RAW) return null
         val pcm = synchronized(rawLock) { rawPcm.toShortArray() }
         if (pcm.size < RAW_SAMPLE_RATE) return null
@@ -390,6 +424,7 @@ class VoiceListener(
         rawThread = null
         recorder = null
         _state.value = CaptureState.Idle
+        inputRouter.release()
     }
 
     private inner class SttProxy(

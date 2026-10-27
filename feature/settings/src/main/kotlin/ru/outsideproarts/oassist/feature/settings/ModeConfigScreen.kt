@@ -1,5 +1,9 @@
 package ru.outsideproarts.oassist.feature.settings
 
+import android.Manifest
+import android.content.pm.PackageManager
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -35,6 +39,7 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
@@ -65,6 +70,8 @@ import ru.outsideproarts.oassist.core.model.SttConfig
 import ru.outsideproarts.oassist.core.model.SttEngine
 import ru.outsideproarts.oassist.core.model.TtsConfig
 import ru.outsideproarts.oassist.core.speech.SpeechHandle
+import ru.outsideproarts.oassist.core.speech.BtInputDecision
+import ru.outsideproarts.oassist.core.speech.VoiceHandle
 import ru.outsideproarts.oassist.core.speech.VoiceInfo
 import ru.outsideproarts.oassist.core.speech.TtsEngineInfo
 import ru.outsideproarts.oassist.core.speech.RecognitionServiceInfo
@@ -147,6 +154,7 @@ fun ModeConfigScreen(
     var sttEngine by remember { mutableStateOf(baseStt.engine) }
     var sttLanguage by remember { mutableStateOf(baseStt.language) }
     var sttRecognizerComponent by remember { mutableStateOf(baseStt.recognizerComponent) }
+    var sttBluetoothInput by remember { mutableStateOf(baseStt.bluetoothInput) }
     var recognitionServices by remember { mutableStateOf(emptyList<RecognitionServiceInfo>()) }
     var engines by remember { mutableStateOf(emptyList<TtsEngineInfo>()) }
     var voices by remember { mutableStateOf(emptyList<VoiceInfo>()) }
@@ -190,6 +198,7 @@ fun ModeConfigScreen(
         sttEngine = stt.engine
         sttLanguage = stt.language
         sttRecognizerComponent = stt.recognizerComponent
+        sttBluetoothInput = stt.bluetoothInput
     }
     LaunchedEffect(Unit) {
         engines = runCatching { loadEngines() }.getOrElse { emptyList() }
@@ -560,6 +569,10 @@ fun ModeConfigScreen(
                 onRefreshRecognitionServices = {
                     recognitionServices = loadRecognitionServices()
                 },
+                bluetoothInput = sttBluetoothInput,
+                onBluetoothInputChange = { sttBluetoothInput = it },
+                onState = onState,
+                offState = offState,
             )
 
             OAssistSectionHeading(text = stringResource(R.string.mode_sounds_title))
@@ -631,6 +644,7 @@ fun ModeConfigScreen(
                                 engine = sttEngine,
                                 language = sttLanguage.ifBlank { SttConfig.DEFAULT.language },
                                 recognizerComponent = sttRecognizerComponent,
+                                bluetoothInput = sttBluetoothInput,
                             ),
                             soundEnabled = soundEnabled,
                             autoSaveChats = autoSaveChats,
@@ -1072,8 +1086,24 @@ private fun SttSection(
     onRecognizerComponentChange: (String?) -> Unit,
     recognitionServices: List<RecognitionServiceInfo>,
     onRefreshRecognitionServices: () -> Unit,
+    bluetoothInput: Boolean,
+    onBluetoothInputChange: (Boolean) -> Unit,
+    onState: String,
+    offState: String,
 ) {
     val groupLabel = stringResource(R.string.mode_stt_title)
+    val context = LocalContext.current
+    val voice = remember { VoiceHandle.get() }
+    var btPermissionGranted by remember {
+        mutableStateOf(
+            context.checkSelfPermission(Manifest.permission.BLUETOOTH_CONNECT) ==
+                PackageManager.PERMISSION_GRANTED,
+        )
+    }
+    // BLUETOOTH_CONNECT запрашивается один раз; отказ не превращается в повторные вопросы.
+    val btPermissionLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.RequestPermission(),
+    ) { granted -> btPermissionGranted = granted }
     val options = listOf(
         SttEngine.SYSTEM to stringResource(R.string.mode_stt_system),
         SttEngine.MODEL_AUDIO to stringResource(R.string.mode_stt_model_audio),
@@ -1194,6 +1224,29 @@ private fun SttSection(
         keyboardOptions = KeyboardOptions(autoCorrectEnabled = false),
         modifier = Modifier.fillMaxWidth(),
     )
+    ModeSwitch(
+        title = stringResource(R.string.mode_stt_bluetooth),
+        checked = bluetoothInput,
+        onCheckedChange = { checked ->
+            onBluetoothInputChange(checked)
+            if (checked &&
+                voice?.bluetoothInputDecision(true) == BtInputDecision.ASK_PERMISSION
+            ) {
+                voice.markBluetoothPermissionRequested()
+                btPermissionLauncher.launch(Manifest.permission.BLUETOOTH_CONNECT)
+            }
+        },
+        onState = onState,
+        offState = offState,
+    )
+    Text(
+        text = stringResource(R.string.mode_stt_bluetooth_hint),
+        style = MaterialTheme.typography.bodySmall,
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+    )
+    if (bluetoothInput && !btPermissionGranted) {
+        OAssistLiveStatus(text = stringResource(R.string.mode_stt_bluetooth_no_permission))
+    }
 }
 
 @Composable

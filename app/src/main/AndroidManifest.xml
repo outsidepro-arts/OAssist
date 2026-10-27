@@ -62,6 +62,10 @@
     <!-- M4.3: микрофон для системного голосового ввода (RecognizerIntent, запрос из UI) -->
     <uses-permission android:name="android.permission.RECORD_AUDIO" />
 
+    <!-- Bluetooth-гарнитура как источник записи: запрос BLUETOOTH_CONNECT — один раз. -->
+    <uses-permission android:name="android.permission.BLUETOOTH_CONNECT" />
+    <uses-permission android:name="android.permission.MODIFY_AUDIO_SETTINGS" />
+
     <!-- M5.3: foreground-сервис долгих операций (гео-фикс, WebView-рендер) -->
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
@@ -75,6 +79,8 @@
     <uses-feature android:name="android.hardware.camera" android:required="false" />
     <!-- Микрофон нужен только голосовому вводу; его отсутствие не блокирует установку -->
     <uses-feature android:name="android.hardware.microphone" android:required="false" />
+
+    <uses-feature android:name="android.hardware.bluetooth" android:required="false" />
 
     <application
         android:name=".OAssistApp"

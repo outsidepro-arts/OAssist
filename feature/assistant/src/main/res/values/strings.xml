@@ -34,6 +34,7 @@
     <string name="assistant_mic_denied">Разрешите доступ к микрофону для голосового ввода</string>
     <string name="assistant_mic_empty">Не расслышал, повторите</string>
     <string name="assistant_mic_error">Ошибка распознавания</string>
+    <string name="assistant_mic_bt_fallback">Bluetooth-гарнитура отключилась; запись с микрофона</string>
     <string name="assistant_listening">Слушаю…</string>
     <string name="assistant_mic_state_on">Слушает</string>
     <string name="assistant_mic_idle">Микрофон выключен</string>

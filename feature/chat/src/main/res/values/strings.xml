@@ -16,6 +16,7 @@
     <string name="chat_mic_start">Начать голосовой ввод</string>
     <string name="chat_mic_stop">Остановить голосовой ввод</string>
     <string name="chat_mic_idle">Микрофон выключен</string>
+    <string name="chat_mic_bt_fallback">Bluetooth-гарнитура отключилась; запись с микрофона</string>
     <string name="chat_voice_short">Слишком коротко — удерживайте дольше</string>
     <string name="chat_listening">Слушаю…</string>
     <string name="chat_open_list">Список чатов</string>

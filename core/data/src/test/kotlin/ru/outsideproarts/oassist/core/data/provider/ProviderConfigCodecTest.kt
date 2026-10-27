@@ -165,6 +165,7 @@ class ProviderConfigCodecTest {
                 engine = SttEngine.MODEL_AUDIO,
                 language = "en-US",
                 recognizerComponent = "org.example.speech/org.example.speech.CustomRecognitionService",
+                bluetoothInput = false,
             ),
         )
 
@@ -186,6 +187,21 @@ class ProviderConfigCodecTest {
         assertEquals(SttEngine.SYSTEM, legacy.effectiveStt().engine)
         assertEquals("ru-RU", legacy.effectiveStt().language)
         assertEquals(null, legacy.effectiveStt().recognizerComponent)
+    }
+
+    @Test
+    fun modeConfig_legacySttWithoutBluetooth_usesAutoRoute() {
+        val legacy = json.decodeFromString<ModeConfig>(
+            """{"mode":"CHAT","stt":{"engine":"MODEL_AUDIO","language":"ru-RU"}}""",
+        )
+
+        assertEquals(true, legacy.effectiveStt().bluetoothInput)
+
+        val explicit = json.decodeFromString<ModeConfig>(
+            """{"mode":"CHAT","stt":{"engine":"SYSTEM","language":"ru-RU","bluetoothInput":false}}""",
+        )
+
+        assertEquals(false, explicit.effectiveStt().bluetoothInput)
     }
 
     @Test

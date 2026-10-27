@@ -16,6 +16,7 @@
     <string name="chat_mic_start">Start voice input</string>
     <string name="chat_mic_stop">Stop voice input</string>
     <string name="chat_mic_idle">Microphone off</string>
+    <string name="chat_mic_bt_fallback">Bluetooth headset disconnected; recording from the microphone</string>
     <string name="chat_voice_short">Too short — hold longer</string>
     <string name="chat_listening">Listening…</string>
     <string name="chat_open_list">Chat list</string>

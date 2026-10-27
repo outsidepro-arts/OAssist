@@ -9,13 +9,26 @@ import kotlinx.coroutines.flow.StateFlow
  */
 interface VoiceHandle {
     fun captureState(): StateFlow<CaptureState>
+    fun routeState(): StateFlow<VoiceInputRoute>
     fun isSttAvailable(recognizerComponent: String? = null): Boolean
 
-    fun startStt(language: String, listener: SttListener, recognizerComponent: String? = null): CaptureError?
+    /** Что делать с BT-входом: маршрут/микрофон/однократный запрос разрешения. */
+    fun bluetoothInputDecision(enabled: Boolean): BtInputDecision
+
+    /** Запрос BLUETOOTH_CONNECT состоялся — повторно не спрашиваем. */
+    fun markBluetoothPermissionRequested()
+
+    fun startStt(
+        language: String,
+        listener: SttListener,
+        recognizerComponent: String? = null,
+        bluetoothInput: Boolean = true,
+    ): CaptureError?
+
     fun stopStt()
     fun cancelStt()
 
-    fun startRaw(maxSec: Int = VoiceListener.MAX_RAW_SEC): CaptureError?
+    fun startRaw(maxSec: Int = VoiceListener.MAX_RAW_SEC, bluetoothInput: Boolean = true): CaptureError?
     fun stopRaw(): WavAudio?
     fun cancelRaw()
 

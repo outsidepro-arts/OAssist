@@ -34,6 +34,7 @@
     <string name="assistant_mic_denied">Allow microphone access for voice input</string>
     <string name="assistant_mic_empty">Didn’t catch that, please repeat</string>
     <string name="assistant_mic_error">Recognition error</string>
+    <string name="assistant_mic_bt_fallback">Bluetooth headset disconnected; recording from the microphone</string>
     <string name="assistant_listening">Listening…</string>
     <string name="assistant_mic_state_on">Listening</string>
     <string name="assistant_mic_idle">Microphone off</string>

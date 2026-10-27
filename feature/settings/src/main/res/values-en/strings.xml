@@ -161,6 +161,9 @@
     <string name="mode_stt_recognizer_missing">Unavailable</string>
     <string name="mode_stt_recognizer_unavailable">Selected recognizer is unavailable; using the system default</string>
     <string name="mode_stt_recognizer_refresh">Refresh recognizer list</string>
+    <string name="mode_stt_bluetooth">Bluetooth headset for recording</string>
+    <string name="mode_stt_bluetooth_hint">Uses the headset when connected, otherwise the microphone</string>
+    <string name="mode_stt_bluetooth_no_permission">Without Bluetooth permission recording uses the microphone</string>
 
     <!-- Approvals -->
     <string name="approvals_title">Confirmations</string>

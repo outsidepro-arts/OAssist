@@ -16,10 +16,12 @@ import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
 import ru.outsideproarts.oassist.core.model.SttConfig
+import ru.outsideproarts.oassist.core.speech.BtInputDecision
 import ru.outsideproarts.oassist.core.speech.CaptureError
 import ru.outsideproarts.oassist.core.speech.CaptureState
 import ru.outsideproarts.oassist.core.speech.SttListener
 import ru.outsideproarts.oassist.core.speech.VoiceHandle
+import ru.outsideproarts.oassist.core.speech.VoiceInputRoute
 import ru.outsideproarts.oassist.core.speech.WavAudio
 import ru.outsideproarts.oassist.feature.chat.ChatScreen
 import ru.outsideproarts.oassist.feature.chat.R as ChatR
@@ -103,8 +105,16 @@ class ChatVoiceHoldLifecycleTest {
         var listener: SttListener? = null
 
         override fun captureState() = state
+        override fun routeState() = MutableStateFlow(VoiceInputRoute.MICROPHONE)
         override fun isSttAvailable(recognizerComponent: String?) = true
-        override fun startStt(language: String, listener: SttListener, recognizerComponent: String?): CaptureError? {
+        override fun bluetoothInputDecision(enabled: Boolean) = BtInputDecision.USE_MIC
+        override fun markBluetoothPermissionRequested() = Unit
+        override fun startStt(
+            language: String,
+            listener: SttListener,
+            recognizerComponent: String?,
+            bluetoothInput: Boolean,
+        ): CaptureError? {
             component = recognizerComponent
             this.listener = listener
             starts += 1
@@ -112,7 +122,7 @@ class ChatVoiceHoldLifecycleTest {
         }
         override fun stopStt() { stops += 1 }
         override fun cancelStt() { cancellations += 1 }
-        override fun startRaw(maxSec: Int): CaptureError? = error("Unexpected RAW capture")
+        override fun startRaw(maxSec: Int, bluetoothInput: Boolean): CaptureError? = error("Unexpected RAW capture")
         override fun stopRaw(): WavAudio? = error("Unexpected RAW capture")
         override fun cancelRaw(): Unit = error("Unexpected RAW capture")
     }

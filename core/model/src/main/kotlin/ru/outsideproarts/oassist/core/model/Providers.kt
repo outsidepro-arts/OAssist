@@ -87,12 +87,15 @@ enum class SttEngine {
 /**
  * Голосовой ввод режима: движок + язык распознавания.
  * Аудио-в-модель — WAV 16 кГц моно (см. `WavEncoder`), кап длины — в захвате.
+ * [bluetoothInput] — AUTO-маршрут записи: при подключённой BT-гарнитуре и
+ * выданном BLUETOOTH_CONNECT писать с неё, иначе — микрофон.
  */
 @Serializable
 data class SttConfig(
     val engine: SttEngine = SttEngine.SYSTEM,
     val language: String = "ru-RU",
     val recognizerComponent: String? = null,
+    val bluetoothInput: Boolean = true,
 ) {
     companion object {
         val DEFAULT = SttConfig()

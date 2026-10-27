@@ -120,6 +120,7 @@ private var turnTranscript: List<ChatMessage> = emptyList()
 
     private var sttLanguage: String = "ru-RU"
     private var sttRecognizerComponent: String? = null
+    private var sttBluetoothInput: Boolean = true
     private var continueDialog: Boolean = false
     private var showOverlay: Boolean = true
     private var soundEnabled: Boolean = true
@@ -207,6 +208,21 @@ private var turnTranscript: List<ChatMessage> = emptyList()
                 refreshSessionNotification(force = true)
             }
         }
+        // Фолбэк с гарнитуры mid-capture: подсказка в панели/уведомлении.
+        // Штатный стоп снимает маршрут уже после конца захвата — без подсказки.
+        serviceScope.launch {
+            var prev = ru.outsideproarts.oassist.core.speech.VoiceInputRoute.MICROPHONE
+            voice?.routeState()?.collect { route ->
+                if (prev == ru.outsideproarts.oassist.core.speech.VoiceInputRoute.BLUETOOTH &&
+                    route == ru.outsideproarts.oassist.core.speech.VoiceInputRoute.MICROPHONE &&
+                    listening
+                ) {
+                    hintText = getString(R.string.assistant_mic_bt_fallback)
+                    refreshSessionNotification(force = true)
+                }
+                prev = route
+            }
+        }
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
@@ -281,6 +297,7 @@ private var turnTranscript: List<ChatMessage> = emptyList()
         }.getOrNull() ?: return
         sttLanguage = config.effectiveStt().language
         sttRecognizerComponent = config.effectiveStt().recognizerComponent
+        sttBluetoothInput = config.effectiveStt().bluetoothInput
         continueDialog = config.assistant?.continueDialog ?: false
         // showOverlay фиксируется при старте сессии: решение «окно или уведомление» структурное,
         // переключение посреди сессии смешивало бы два UI (панель + живое уведомление).
@@ -475,10 +492,21 @@ private var turnTranscript: List<ChatMessage> = emptyList()
                 refreshSessionNotification(force = true)
                 return@launch
             }
+            // BLUETOOTH_CONNECT — один раз через ConsentActivity (сервис сам показать
+            // системный диалог не может); отказ не блокирует запись с микрофона.
+            if (handle.bluetoothInputDecision(sttBluetoothInput) ==
+                ru.outsideproarts.oassist.core.speech.BtInputDecision.ASK_PERMISSION
+            ) {
+                handle.markBluetoothPermissionRequested()
+                requestBluetoothPermission()
+                // Запоздавший старт после диалога не должен поднимать микрофон
+                // поверх нового состояния (toggle во время диалога).
+                if (voiceFlow.state.value !is AssistVoiceState.Listening) return@launch
+            }
             hintText = null
             // Тишина нашего TTS перед стартом: движок распознавания падает поверх звука.
             speech?.stop()
-            val error = handle.startStt(sttLanguage, sttListener(), sttRecognizerComponent)
+            val error = handle.startStt(sttLanguage, sttListener(), sttRecognizerComponent, sttBluetoothInput)
             if (error != null) {
                 hintText = sttErrorText(error)
                 voiceFlow.onSttStartFailed()
@@ -527,6 +555,30 @@ private var turnTranscript: List<ChatMessage> = emptyList()
         CaptureError.BUSY,
         CaptureError.INIT_FAILED,
         -> getString(R.string.assistant_mic_error)
+    }
+
+    /**
+     * Запрос BLUETOOTH_CONNECT через translucent [ConsentActivity] + [PermissionRequestBridge] —
+     * тот же механизм, что у тулов: работает из сервиса, при заблокированном старте окна
+     * фолбэк-действие «Выдать» идёт в сессионном уведомлении (существующий collector blocked).
+     * Результат не обрабатывается: отказ/таймаут — запись с микрофона.
+     */
+    private suspend fun requestBluetoothPermission() {
+        val permissions = listOf(Manifest.permission.BLUETOOTH_CONNECT)
+        val requestId = PermissionRequestBridge.register(permissions)
+        val intent = ConsentActivity.permissionIntent(this, requestId, permissions)
+            .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        val started = runCatching { startActivity(intent) }.isSuccess
+        if (!started) {
+            PermissionRequestBridge.cancel(requestId)
+            return
+        }
+        // Короткий таймаут ответа: состояние «Слушаю…» не должно висеть минутами.
+        val outcome = PermissionRequestBridge.await(requestId, userTimeoutMs = 60_000L)
+        ru.outsideproarts.oassist.core.model.OAssistLog.info(
+            "AssistVoice",
+            "Bluetooth permission request outcome=$outcome",
+        )
     }
 
     private fun startTurn(text: String) {

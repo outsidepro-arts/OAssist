@@ -161,6 +161,9 @@
     <string name="mode_stt_recognizer_missing">Недоступен</string>
     <string name="mode_stt_recognizer_unavailable">Выбранный распознаватель недоступен; используется системный по умолчанию</string>
     <string name="mode_stt_recognizer_refresh">Обновить список распознавателей</string>
+    <string name="mode_stt_bluetooth">Bluetooth-гарнитура для записи</string>
+    <string name="mode_stt_bluetooth_hint">Гарнитура используется при подключении, иначе — микрофон</string>
+    <string name="mode_stt_bluetooth_no_permission">Без разрешения Bluetooth запись идёт с микрофона</string>
 
     <!-- Подтверждения -->
     <string name="approvals_title">Подтверждения</string>

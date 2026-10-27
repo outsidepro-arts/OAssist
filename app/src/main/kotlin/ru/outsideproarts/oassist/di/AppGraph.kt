@@ -487,16 +487,23 @@ class AppGraph private constructor(context: Context) {
         })
         ru.outsideproarts.oassist.core.speech.VoiceHandle.register(object : ru.outsideproarts.oassist.core.speech.VoiceHandle {
             override fun captureState() = voiceListener.state
+            override fun routeState() = voiceListener.route
             override fun isSttAvailable(recognizerComponent: String?): Boolean =
                 voiceListener.isSttAvailable(recognizerComponent)
+            override fun bluetoothInputDecision(enabled: Boolean) =
+                voiceListener.bluetoothInputDecision(enabled)
+            override fun markBluetoothPermissionRequested() =
+                voiceListener.markBluetoothPermissionRequested()
             override fun startStt(
                 language: String,
                 listener: ru.outsideproarts.oassist.core.speech.SttListener,
                 recognizerComponent: String?,
-            ) = voiceListener.startStt(language, listener, recognizerComponent)
+                bluetoothInput: Boolean,
+            ) = voiceListener.startStt(language, listener, recognizerComponent, bluetoothInput)
             override fun stopStt() = voiceListener.stopStt()
             override fun cancelStt() = voiceListener.cancelStt()
-            override fun startRaw(maxSec: Int) = voiceListener.startRaw(maxSec)
+            override fun startRaw(maxSec: Int, bluetoothInput: Boolean) =
+                voiceListener.startRaw(maxSec, bluetoothInput)
             override fun stopRaw() = voiceListener.stopRaw()
             override fun cancelRaw() = voiceListener.cancelRaw()
         })

@@ -73,6 +73,7 @@ import ru.outsideproarts.oassist.core.model.ChatRole
 import ru.outsideproarts.oassist.core.provider.collectSafe
 import ru.outsideproarts.oassist.core.provider.isEarlyRetryable
 import ru.outsideproarts.oassist.core.speech.AgentSound
+import ru.outsideproarts.oassist.core.speech.BtInputDecision
 import ru.outsideproarts.oassist.core.speech.CaptureError
 import ru.outsideproarts.oassist.core.speech.CaptureState
 import ru.outsideproarts.oassist.core.speech.SentenceSplitter
@@ -81,6 +82,7 @@ import ru.outsideproarts.oassist.core.speech.SttError
 import ru.outsideproarts.oassist.core.speech.SttListener
 import ru.outsideproarts.oassist.core.speech.StreamSpeaker
 import ru.outsideproarts.oassist.core.speech.VoiceHandle
+import ru.outsideproarts.oassist.core.speech.VoiceInputRoute
 import ru.outsideproarts.oassist.core.model.SttConfig
 import ru.outsideproarts.oassist.core.model.SttEngine
 import ru.outsideproarts.oassist.core.ui.OAssistDimens
@@ -200,6 +202,7 @@ fun ChatScreen(
     val micErrorText = stringResource(R.string.chat_mic_error)
     val holdHintText = stringResource(R.string.chat_hold_hint)
     val voiceShortText = stringResource(R.string.chat_voice_short)
+    val micBtFallbackText = stringResource(R.string.chat_mic_bt_fallback)
     val listeningText = stringResource(R.string.chat_listening)
     val holdActionLabel = stringResource(R.string.chat_hold_action)
     val startVoiceLabel = stringResource(R.string.chat_mic_start)
@@ -663,22 +666,36 @@ fun ChatScreen(
             Toast.LENGTH_LONG,
         ).show()
     }
+    // Старт toggle-STT после выданных разрешений.
+    fun startToggleStt() {
+        val handle = voice
+        if (handle == null || !handle.isSttAvailable(stt.recognizerComponent)) {
+            sttErrorToast(CaptureError.NO_RECOGNIZER)
+            return
+        }
+        val error = handle.startStt(stt.language, sttListener(), stt.recognizerComponent, stt.bluetoothInput)
+        if (error != null) sttErrorToast(error)
+        else sounds?.playIfEnabled(AgentSound.VOICE_START, soundEnabled)
+    }
     // mic-разрешение выдаём системным диалогом; дальше — сразу слушать.
     val micPermissionLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.RequestPermission(),
     ) { granted ->
         if (granted) {
-            val handle = voice
-            if (handle == null || !handle.isSttAvailable(stt.recognizerComponent)) {
-                sttErrorToast(CaptureError.NO_RECOGNIZER)
-            } else {
-                val error = handle.startStt(stt.language, sttListener(), stt.recognizerComponent)
-                if (error != null) sttErrorToast(error)
-                else sounds?.playIfEnabled(AgentSound.VOICE_START, soundEnabled)
-            }
+            startToggleStt()
         } else {
             Toast.makeText(context, micDeniedText, Toast.LENGTH_LONG).show()
         }
+    }
+    // BLUETOOTH_CONNECT запрашиваем один раз при подключённой гарнитуре; отказ
+    // не блокирует запись с микрофона. Старт возобновляет только toggle — из
+    // холда палец к этому моменту уже поднят.
+    val pendingBtStart = remember { mutableStateOf<(() -> Unit)?>(null) }
+    val btPermissionLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.RequestPermission(),
+    ) { _ ->
+        pendingBtStart.value?.invoke()
+        pendingBtStart.value = null
     }
     // Тап микрофона — toggle STT (доступная альтернатива удержанию).
     fun toggleSttMic() {
@@ -702,15 +719,19 @@ fun ChatScreen(
                     sttErrorToast(CaptureError.NO_RECOGNIZER)
                     return
                 }
-                if (context.checkSelfPermission(Manifest.permission.RECORD_AUDIO) ==
+                if (context.checkSelfPermission(Manifest.permission.RECORD_AUDIO) !=
                     PackageManager.PERMISSION_GRANTED
                 ) {
-                    val error = handle.startStt(stt.language, sttListener(), stt.recognizerComponent)
-                    if (error != null) sttErrorToast(error)
-                    else sounds?.playIfEnabled(AgentSound.VOICE_START, soundEnabled)
-                } else {
                     micPermissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
+                    return
                 }
+                if (handle.bluetoothInputDecision(stt.bluetoothInput) == BtInputDecision.ASK_PERMISSION) {
+                    handle.markBluetoothPermissionRequested()
+                    pendingBtStart.value = { startToggleStt() }
+                    btPermissionLauncher.launch(Manifest.permission.BLUETOOTH_CONNECT)
+                    return
+                }
+                startToggleStt()
             }
         }
     }
@@ -726,12 +747,17 @@ fun ChatScreen(
             micPermissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
             return false
         }
+        if (handle.bluetoothInputDecision(stt.bluetoothInput) == BtInputDecision.ASK_PERMISSION) {
+            handle.markBluetoothPermissionRequested()
+            btPermissionLauncher.launch(Manifest.permission.BLUETOOTH_CONNECT)
+            return false
+        }
         val hold = ChatVoiceHoldSession(
             if (useRawCapture()) ru.outsideproarts.oassist.core.speech.CaptureMode.RAW
             else ru.outsideproarts.oassist.core.speech.CaptureMode.STT,
         )
         if (hold.mode == ru.outsideproarts.oassist.core.speech.CaptureMode.RAW) {
-            val error = handle.startRaw()
+            val error = handle.startRaw(bluetoothInput = stt.bluetoothInput)
             if (error != null) {
                 sttErrorToast(error)
                 return false
@@ -742,7 +768,12 @@ fun ChatScreen(
                 sttErrorToast(CaptureError.NO_RECOGNIZER)
                 return false
             }
-            val error = handle.startStt(stt.language, sttListener(hold), stt.recognizerComponent)
+            val error = handle.startStt(
+                stt.language,
+                sttListener(hold),
+                stt.recognizerComponent,
+                stt.bluetoothInput,
+            )
             if (error != null) {
                 sttErrorToast(error)
                 return false
@@ -793,6 +824,22 @@ fun ChatScreen(
                 }
             }
         }
+    }
+
+    // Фолбэк с гарнитуры mid-capture: route → микрофон при активном захвате.
+    // Штатный стоп снимает маршрут уже после Idle — без объявления.
+    val voiceRouteFlow = remember {
+        voice?.routeState() ?: kotlinx.coroutines.flow.MutableStateFlow(VoiceInputRoute.MICROPHONE)
+    }
+    val voiceRoute = voiceRouteFlow.collectAsState().value
+    var prevVoiceRoute by remember { mutableStateOf(VoiceInputRoute.MICROPHONE) }
+    LaunchedEffect(voiceRoute) {
+        if (prevVoiceRoute == VoiceInputRoute.BLUETOOTH && voiceRoute == VoiceInputRoute.MICROPHONE &&
+            voice?.captureState()?.value is CaptureState.Listening
+        ) {
+            Toast.makeText(context, micBtFallbackText, Toast.LENGTH_LONG).show()
+        }
+        prevVoiceRoute = voiceRoute
     }
 
     LaunchedEffect(messages.size) {
