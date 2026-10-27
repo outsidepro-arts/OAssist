@@ -250,7 +250,7 @@ class WebSearchTool(private val search: SearchActions) : Tool {
 /** Схема вынесена наверх: контракт проверяется в JVM-тестах без DeviceActions/Context. */
 internal fun alarmSetSchema() = ToolSchema(
     name = "alarm_set",
-    description = "Установить будильник. Используй когда пользователь просит поставить будильник или напоминание.",
+    description = "Передать запрос на установку будильника. Используй, когда пользователь просит поставить будильник или напоминание. Успех означает передачу запроса, создание будильника не подтверждено. Не повторяй запрос только из-за отсутствия подтверждения.",
     parameters = buildJsonObject {
         put("type", "object")
         put("properties", buildJsonObject {
@@ -350,7 +350,7 @@ class SmsSendTool(private val actions: DeviceActions) : Tool {
     override val requiredPermissions = listOf(Manifest.permission.SEND_SMS)
     override val schema = ToolSchema(
         name = "sms_send",
-        description = "Отправить SMS. Используй когда пользователь просит написать SMS.",
+        description = "Передать запрос на отправку SMS. Используй, когда пользователь просит написать SMS. Успех означает передачу запроса, отправка и доставка не подтверждены. Не повторяй запрос только из-за отсутствия подтверждения.",
         parameters = buildJsonObject {
             put("type", "object")
             put("properties", buildJsonObject {
@@ -517,7 +517,7 @@ class CalendarAddTool(private val actions: DeviceActions) : Tool {
 /** Схема вынесена наверх: контракт проверяется в JVM-тестах без DeviceActions/Context. */
 internal fun timerSetSchema() = ToolSchema(
     name = "timer_set",
-    description = "Запустить таймер. Используй когда пользователь просит засечь время.",
+    description = "Передать запрос на запуск таймера. Используй, когда пользователь просит засечь время. Успех означает передачу запроса, запуск таймера не подтверждён. Не повторяй запрос только из-за отсутствия подтверждения.",
     parameters = buildJsonObject {
         put("type", "object")
         put("properties", buildJsonObject {

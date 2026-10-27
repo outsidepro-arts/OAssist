@@ -275,8 +275,8 @@ class DeviceActions(
         return runCatching {
             context.startActivity(intent)
             val labelText = label?.let { " с меткой '$it'" } ?: ""
-            ToolResult(true, "Будильник установлен на %02d:%02d%s".format(hour, minute, labelText))
-        }.getOrElse { ToolResult(false, "Не удалось установить будильник: ${it.message}") }
+            ToolResult(true, "Запрос на создание будильника на %02d:%02d%s передан Android. Создание будильника приложением часов не подтверждено.".format(hour, minute, labelText))
+        }.getOrElse { ToolResult(false, "Не удалось передать запрос на создание будильника: ${it.message}") }
     }
 
     fun openSettings(action: String?): ToolResult {
@@ -337,8 +337,8 @@ class DeviceActions(
             } else {
                 smsManager.sendMultipartTextMessage(to, null, parts, null, null)
             }
-            ToolResult(true, "SMS на номер $to отправлено")
-        }.getOrElse { ToolResult(false, "Не удалось отправить SMS: ${it.message}") }
+            ToolResult(true, "Запрос на отправку SMS на номер $to передан Android. Отправка и доставка SMS не подтверждены.")
+        }.getOrElse { ToolResult(false, "Не удалось передать запрос на отправку SMS: ${it.message}") }
     }
 
     fun findContacts(query: String): ToolResult {
@@ -476,8 +476,8 @@ class DeviceActions(
         bgStartBlocked()?.let { return it }
         return runCatching {
             context.startActivity(intent)
-            ToolResult(true, "Таймер на $seconds с. запущен")
-        }.getOrElse { ToolResult(false, "Не удалось запустить таймер: ${it.message}") }
+            ToolResult(true, "Запрос на таймер на $seconds с. передан Android. Запуск таймера приложением часов не подтверждён.")
+        }.getOrElse { ToolResult(false, "Не удалось передать запрос на запуск таймера: ${it.message}") }
     }
 
     fun deviceInfo(): ToolResult {
