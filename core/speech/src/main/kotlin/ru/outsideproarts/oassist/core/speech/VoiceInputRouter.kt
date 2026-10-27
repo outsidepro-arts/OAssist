@@ -65,7 +65,7 @@ class VoiceInputRouter(
     private val _route = MutableStateFlow(VoiceInputRoute.MICROPHONE)
     val route: StateFlow<VoiceInputRoute> = _route.asStateFlow()
 
-    private var active = false
+    private var activeOwner: Any? = null
 
     fun decide(enabled: Boolean): BtInputDecision = when {
         !enabled || !backend.hasBluetoothInput() -> BtInputDecision.USE_MIC
@@ -78,6 +78,7 @@ class VoiceInputRouter(
      * Захват маршрута на текущую сессию захвата; true — пишем с гарнитуры.
      * [release] обязателен в конце сессии (стоп/отмена/ошибка/dispose).
      */
+    @Synchronized
     fun acquire(enabled: Boolean): Boolean {
         release()
         val decision = decide(enabled)
@@ -89,17 +90,25 @@ class VoiceInputRouter(
             logInfo("route=microphone setCommunicationDevice rejected")
             return false
         }
-        active = true
-        backend.watchDeviceLoss(::onDeviceLost)
+        val owner = Any()
+        activeOwner = owner
         _route.value = VoiceInputRoute.BLUETOOTH
+        try {
+            backend.watchDeviceLoss { onDeviceLost(owner) }
+        } catch (error: Exception) {
+            release()
+            throw error
+        }
+        if (activeOwner !== owner) return false
         logInfo("route=bluetooth")
         return true
     }
 
     /** Идемпотентно снимает маршрут; путь вызова не важен. */
+    @Synchronized
     fun release() {
-        if (!active) return
-        active = false
+        if (activeOwner == null) return
+        activeOwner = null
         backend.unwatchDeviceLoss()
         backend.clearRoute()
         _route.value = VoiceInputRoute.MICROPHONE
@@ -107,8 +116,9 @@ class VoiceInputRouter(
 
     fun markPermissionRequested() = permissionFlag.markRequested()
 
-    private fun onDeviceLost() {
-        if (!active) return
+    @Synchronized
+    private fun onDeviceLost(owner: Any) {
+        if (activeOwner !== owner) return
         logInfo("Bluetooth input lost mid-capture; falling back to microphone")
         release()
     }
