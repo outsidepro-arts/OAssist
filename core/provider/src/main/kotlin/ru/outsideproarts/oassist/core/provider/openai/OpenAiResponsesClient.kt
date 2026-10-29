@@ -5,7 +5,7 @@ import io.ktor.client.plugins.ResponseException
 import io.ktor.client.plugins.sse.sse
 import io.ktor.client.request.HttpRequestBuilder
 import io.ktor.client.request.request
-import io.ktor.client.request.setBody
+import ru.outsideproarts.oassist.core.provider.setBodyDecorated
 import io.ktor.client.statement.bodyAsText
 import io.ktor.http.ContentType
 import io.ktor.http.HttpHeaders
@@ -39,6 +39,7 @@ import ru.outsideproarts.oassist.core.provider.ProviderError
 import ru.outsideproarts.oassist.core.provider.ProviderJson
 import ru.outsideproarts.oassist.core.provider.detectStreamErrorMessage
 import ru.outsideproarts.oassist.core.provider.dialogKey
+import ru.outsideproarts.oassist.core.provider.fetchModelCatalog
 import ru.outsideproarts.oassist.core.provider.isProtocolUnsupportedMessage
 
 /**
@@ -52,18 +53,7 @@ class OpenAiResponsesClient internal constructor(
     private val http: HttpClient,
 ) : ModelClient {
 
-    override suspend fun fetchModels(): List<ModelInfo> {
-        val modelsUrl = URLBuilder(endpoint.baseUrl).apply {
-            appendPathSegments("models")
-        }.buildString()
-        val response = http.request {
-            method = HttpMethod.Get
-            url.takeFrom(modelsUrl)
-            applyAuth(dialogKey = endpoint.baseUrl)
-        }
-        val dto = ProviderJson.decodeFromString(OpenAiModelsResponseDto.serializer(), response.bodyAsText())
-        return dto.data.map { ModelInfo(id = it.id) }
-    }
+    override suspend fun fetchModels(): List<ModelInfo> = fetchModelCatalog(endpoint, http)
 
     override suspend fun probeCapabilities(modelId: String): Set<ModelCapability> {
         val requestDto = ResponsesRequestDto(
@@ -80,7 +70,7 @@ class OpenAiResponsesClient internal constructor(
                 url.takeFrom(responsesUrl())
                 applyAuth(dialogKey = dialogKey(emptyList()))
                 contentType(ContentType.Application.Json)
-                setBody(requestDto)
+                setBodyDecorated(endpoint, requestDto)
             }
             ProviderJson.decodeFromString(ResponsesStreamEventDto.serializer(), response.bodyAsText())
             return setOf(ModelCapability.TOOLS)
@@ -119,7 +109,7 @@ class OpenAiResponsesClient internal constructor(
                 url.takeFrom(responsesUrl())
                 applyAuth(dialogKey = dialogKey(messages))
                 contentType(ContentType.Application.Json)
-                setBody(requestDto)
+                setBodyDecorated(endpoint, requestDto)
             },
         ) {
             val pending = mutableMapOf<String, PendingCall>()
@@ -235,9 +225,8 @@ class OpenAiResponsesClient internal constructor(
     }.buildString()
 
     private fun HttpRequestBuilder.applyAuth(dialogKey: String) {
-        endpoint.auth.bearerToken?.let {
-            headers.append(HttpHeaders.Authorization, "Bearer " + String(it))
-        }
+        // Размещение ключа — по схеме авторизации профиля (нативная — Bearer).
+        endpoint.applyAuthHeaders(this)
         endpoint.decorateHeaders(this, dialogKey)
     }
 

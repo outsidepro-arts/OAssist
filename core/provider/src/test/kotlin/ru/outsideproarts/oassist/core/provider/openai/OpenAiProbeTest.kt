@@ -13,7 +13,7 @@ import org.junit.Assert.assertEquals
 import org.junit.Test
 import ru.outsideproarts.oassist.core.data.secret.SecretStore
 import ru.outsideproarts.oassist.core.model.ModelCapability
-import ru.outsideproarts.oassist.core.model.ProviderKind
+import ru.outsideproarts.oassist.core.model.ProviderPreset
 import ru.outsideproarts.oassist.core.model.ProviderProfile
 import ru.outsideproarts.oassist.core.provider.ProviderAuth
 
@@ -38,7 +38,7 @@ class OpenAiProbeTest {
         val profile = ProviderProfile(
             id = "p1",
             name = "Test",
-            kind = ProviderKind.OPENAI_COMPAT,
+            preset = ProviderPreset.CUSTOM,
             baseUrl = "https://api.example.com/v1",
         )
         return kotlinx.coroutines.runBlocking {
@@ -46,7 +46,7 @@ class OpenAiProbeTest {
                 profile,
                 emptySecrets,
                 http,
-                overrides = ProviderAuth(bearerToken = "test-key".toCharArray()),
+                overrides = ProviderAuth(apiKey = "test-key".toCharArray()),
             )
         }
     }
@@ -95,7 +95,7 @@ class OpenAiProbeTest {
         val profile = ProviderProfile(
             id = "p1",
             name = "Zen",
-            kind = ProviderKind.OPENCODE,
+            preset = ProviderPreset.OPENCODE,
             baseUrl = "https://opencode.ai/zen/v1",
         )
         val zen = kotlinx.coroutines.runBlocking {
@@ -103,7 +103,7 @@ class OpenAiProbeTest {
                 profile,
                 emptySecrets,
                 http,
-                overrides = ProviderAuth(bearerToken = "zen-key".toCharArray()),
+                overrides = ProviderAuth(apiKey = "zen-key".toCharArray()),
             )
         }
         zen.fetchModels()

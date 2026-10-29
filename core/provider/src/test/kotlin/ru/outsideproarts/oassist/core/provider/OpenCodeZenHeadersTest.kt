@@ -17,7 +17,8 @@ import org.junit.Test
 import ru.outsideproarts.oassist.core.data.secret.SecretStore
 import ru.outsideproarts.oassist.core.model.ChatMessage
 import ru.outsideproarts.oassist.core.model.ChatRole
-import ru.outsideproarts.oassist.core.model.ProviderKind
+import ru.outsideproarts.oassist.core.model.ModelProtocol
+import ru.outsideproarts.oassist.core.model.ProviderPreset
 import ru.outsideproarts.oassist.core.model.ProviderProfile
 import ru.outsideproarts.oassist.core.provider.openai.OpenAiCompatibleClient
 import ru.outsideproarts.oassist.core.provider.opencode.OpenCodeZen
@@ -51,7 +52,7 @@ class OpenCodeZenHeadersTest {
     private val zenProfile = ProviderProfile(
         id = "p1",
         name = "Zen",
-        kind = ProviderKind.OPENCODE,
+        preset = ProviderPreset.OPENCODE,
         baseUrl = "https://opencode.ai/zen/go/v1",
         apiKeyRef = "provider.p1.apiKey",
     )
@@ -131,13 +132,13 @@ class OpenCodeZenHeadersTest {
     }
 
     @Test
-    fun openAiCompatKind_sendsNoZenHeaders() = runTest {
+    fun classicFlavor_sendsNoZenHeaders() = runTest {
         val captured = mutableListOf<String>()
         val engine = MockEngine { request ->
             captured += request.headers.names().map { it.lowercase() }
             respond("""{"data":[]}""", status = HttpStatusCode.OK, headers = headersOf("Content-Type", "application/json"))
         }
-        val profile = zenProfile.copy(kind = ProviderKind.OPENAI_COMPAT)
+        val profile = zenProfile.copy(preset = ProviderPreset.CUSTOM, protocol = ModelProtocol.OPENAI_COMPLETIONS)
         val client = OpenAiCompatibleClient.fromProfile(profile, emptySecrets, mockClient(engine))
 
         client.fetchModels()

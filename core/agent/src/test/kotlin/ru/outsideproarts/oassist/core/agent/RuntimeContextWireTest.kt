@@ -31,7 +31,8 @@ import ru.outsideproarts.oassist.core.model.ContextData
 import ru.outsideproarts.oassist.core.model.ContextSource
 import ru.outsideproarts.oassist.core.model.ImagePart
 import ru.outsideproarts.oassist.core.model.ModelUserInput
-import ru.outsideproarts.oassist.core.model.ProviderKind
+import ru.outsideproarts.oassist.core.model.ModelProtocol
+import ru.outsideproarts.oassist.core.model.ProviderPreset
 import ru.outsideproarts.oassist.core.model.ProviderProfile
 import ru.outsideproarts.oassist.core.provider.ModelClient
 
@@ -51,7 +52,7 @@ class RuntimeContextWireTest {
     }
 
     private data class ProtocolCase(
-        val kind: ProviderKind,
+        val protocol: ModelProtocol,
         val basePath: String,
         val response: String,
         val systemField: String,
@@ -59,26 +60,26 @@ class RuntimeContextWireTest {
 
     private val protocols = listOf(
         ProtocolCase(
-            ProviderKind.OPENAI_COMPAT,
+            ModelProtocol.OPENAI_COMPLETIONS,
             "/v1",
             "data: {\"choices\":[{\"delta\":{\"content\":\"ok\"},\"finish_reason\":\"stop\"}]}\n\ndata: [DONE]\n\n",
             "messages",
         ),
         ProtocolCase(
-            ProviderKind.OPENAI_RESPONSES,
+            ModelProtocol.OPENAI_RESPONSES,
             "/v1",
             "event: response.completed\ndata: {\"type\":\"response.completed\",\"response\":{\"status\":\"completed\"}}\n\n",
             "instructions",
         ),
         ProtocolCase(
-            ProviderKind.ANTHROPIC,
+            ModelProtocol.ANTHROPIC_MESSAGES,
             "",
             "event: content_block_delta\ndata: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\"ok\"}}\n\n" +
                 "event: message_stop\ndata: {\"type\":\"message_stop\"}\n\n",
             "system",
         ),
         ProtocolCase(
-            ProviderKind.GEMINI,
+            ModelProtocol.GEMINI_GENERATE,
             "",
             "data: {\"candidates\":[{\"content\":{\"parts\":[{\"text\":\"ok\"}]},\"finishReason\":\"STOP\"}]}\n\n",
             "system_instruction",
@@ -105,7 +106,8 @@ class RuntimeContextWireTest {
                 val profile = ProviderProfile(
                     id = "wire-test",
                     name = "wire-test",
-                    kind = case.kind,
+                    preset = ProviderPreset.CUSTOM,
+                    protocol = case.protocol,
                     baseUrl = server.baseUrl + case.basePath,
                 )
                 val client = ModelClient.create(profile, secrets, http)
@@ -122,7 +124,7 @@ class RuntimeContextWireTest {
                     ),
                 ).toList()
 
-                assertEquals("${case.kind} should send one request", 1, server.requestBodies.size)
+                assertEquals("${case.protocol} should send one request", 1, server.requestBodies.size)
                 val wire = Json.parseToJsonElement(server.requestBodies.single())
                 val strings = wire.stringLeaves()
                 val systemValues = systemValues(case, wire)
@@ -134,21 +136,21 @@ class RuntimeContextWireTest {
                     ContextSource.SCREEN to screen,
                     ContextSource.SHARED_CONTENT to shared,
                 )) {
-                    assertFalse("${case.kind}: context leaked into system instructions", systemValues.any { it.contains(untrusted) })
+                    assertFalse("${case.protocol}: context leaked into system instructions", systemValues.any { it.contains(untrusted) })
                     val entries = contextEntries.filter { it["source"]?.jsonPrimitive?.content == source.name }
-                    assertEquals("${case.kind}: one typed $source entry", 1, entries.size)
+                    assertEquals("${case.protocol}: one typed $source entry", 1, entries.size)
                     assertEquals(untrusted, entries.single()["text"]!!.jsonPrimitive.content)
                 }
                 assertEquals(3, contextEntries.size)
-                assertTrue("${case.kind}: owner policy missing", systemValues.any { it.contains(ownerPolicy) })
-                assertEquals("${case.kind}: runtime trust policy should occur once", 1, systemValues.sumOf { it.occurrences(RUNTIME_TRUST_POLICY) })
-                assertEquals("${case.kind}: current request is preserved", "Summarize this material, please.", userEnvelope["request"]!!.jsonPrimitive.content)
-                assertEquals("${case.kind}: image data is attached once", 1, strings.sumOf { it.occurrences(mediaBase64) })
-                assertFalse("${case.kind}: image data was copied into a text part", wire.valuesForKey("text").any { it.contains(mediaBase64) })
+                assertTrue("${case.protocol}: owner policy missing", systemValues.any { it.contains(ownerPolicy) })
+                assertEquals("${case.protocol}: runtime trust policy should occur once", 1, systemValues.sumOf { it.occurrences(RUNTIME_TRUST_POLICY) })
+                assertEquals("${case.protocol}: current request is preserved", "Summarize this material, please.", userEnvelope["request"]!!.jsonPrimitive.content)
+                assertEquals("${case.protocol}: image data is attached once", 1, strings.sumOf { it.occurrences(mediaBase64) })
+                assertFalse("${case.protocol}: image data was copied into a text part", wire.valuesForKey("text").any { it.contains(mediaBase64) })
 
                 val serialized = strings.joinToString("\n")
                 for (source in listOf(ContextSource.MEMORY.name, ContextSource.SCREEN.name, ContextSource.SHARED_CONTENT.name)) {
-                    assertTrue("${case.kind}: missing context provenance $source", serialized.contains(source, ignoreCase = true))
+                    assertTrue("${case.protocol}: missing context provenance $source", serialized.contains(source, ignoreCase = true))
                 }
             } finally {
                 http.close()
@@ -174,7 +176,7 @@ class RuntimeContextWireTest {
             val profile = ProviderProfile(
                 id = "wire-test",
                 name = "wire-test",
-                kind = ProviderKind.OPENAI_COMPAT,
+                preset = ProviderPreset.CUSTOM, protocol = ModelProtocol.OPENAI_COMPLETIONS,
                 baseUrl = server.baseUrl + "/v1",
             )
             val agent = AgentLoop(ModelClient.create(profile, secrets, http), ToolRegistry(listOf(PingTool())))
@@ -230,7 +232,7 @@ class RuntimeContextWireTest {
             val profile = ProviderProfile(
                 id = "wire-test",
                 name = "wire-test",
-                kind = ProviderKind.OPENAI_COMPAT,
+                preset = ProviderPreset.CUSTOM, protocol = ModelProtocol.OPENAI_COMPLETIONS,
                 baseUrl = server.baseUrl + "/v1",
             )
             AgentLoop(ModelClient.create(profile, secrets, http)).stream(

@@ -12,9 +12,10 @@ import kotlinx.serialization.json.Json
 import org.junit.Assert.assertEquals
 import org.junit.Test
 import ru.outsideproarts.oassist.core.data.secret.SecretStore
-import ru.outsideproarts.oassist.core.model.ProviderKind
+import ru.outsideproarts.oassist.core.model.ProviderPreset
 import ru.outsideproarts.oassist.core.model.ProviderProfile
 import ru.outsideproarts.oassist.core.provider.ProviderAuth
+import ru.outsideproarts.oassist.core.provider.modelsCatalogUrl
 
 class AnthropicClientTest {
 
@@ -37,7 +38,7 @@ class AnthropicClientTest {
         val profile = ProviderProfile(
             id = "p1",
             name = "Anthropic",
-            kind = ProviderKind.ANTHROPIC,
+            preset = ProviderPreset.CUSTOM,
             baseUrl = baseUrl,
         )
         return kotlinx.coroutines.runBlocking {
@@ -45,13 +46,13 @@ class AnthropicClientTest {
                 profile,
                 emptySecrets,
                 http,
-                overrides = ProviderAuth(bearerToken = "test-key".toCharArray()),
+                overrides = ProviderAuth(apiKey = "test-key".toCharArray()),
             )
         }
     }
 
     @Test
-    fun fetchModels_hostBase_appendsV1AndSendsHeaders() = runTest {
+    fun fetchModels_v1Base_sendsHeaders_andLists() = runTest {
         var path = ""
         var apiKey: String? = null
         var version: String? = null
@@ -65,7 +66,7 @@ class AnthropicClientTest {
                 headers = headersOf("Content-Type", "application/json"),
             )
         }
-        val models = client(engine, "https://api.anthropic.com").fetchModels()
+        val models = client(engine, "https://api.anthropic.com/v1").fetchModels()
         assertEquals("/v1/models", path)
         assertEquals("test-key", apiKey)
         assertEquals(AnthropicClient.ANTHROPIC_VERSION, version)
@@ -90,7 +91,7 @@ class AnthropicClientTest {
 
     @Test
     fun urlHelpers_normalizeTrailingSlash() {
-        assertEquals("https://h.test/v1/models", AnthropicClient.modelsUrl("https://h.test/"))
+        assertEquals("https://h.test/v1/models", modelsCatalogUrl("https://h.test/v1/"))
         assertEquals("https://h.test/v1/messages", AnthropicClient.messagesUrl("https://h.test/v1/"))
     }
 

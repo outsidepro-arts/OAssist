@@ -55,6 +55,7 @@
     <string name="provider_name">Name</string>
     <string name="provider_kind">Provider type</string>
     <string name="provider_base_url">Base URL</string>
+    <string name="provider_base_url_hint">API root including the version, as in the provider docs (e.g. https://api.openai.com/v1, https://api.anthropic.com/v1, https://generativelanguage.googleapis.com/v1beta)</string>
     <string name="provider_api_key">API key</string>
     <string name="provider_api_key_masked">•••• (saved)</string>
     <string name="password_show">Show password</string>
@@ -63,6 +64,13 @@
     <string name="field_provider_name">Provider name</string>
     <string name="field_provider_url">Base URL</string>
     <string name="field_provider_key">API key</string>
+    <string name="field_provider_key_header">API key header name</string>
+    <string name="field_provider_basic_user">Basic login</string>
+    <string name="field_provider_basic_password">Basic password</string>
+    <string name="field_provider_catalog_path">Model catalog path</string>
+    <string name="field_provider_extra_body">Extra request body</string>
+    <string name="field_provider_header_name">Header name</string>
+    <string name="field_provider_header_value">Header value</string>
     <string name="field_mcp_name">MCP server name</string>
     <string name="field_mcp_url">MCP server URL</string>
     <string name="field_mcp_bearer">MCP server token</string>
@@ -81,11 +89,59 @@
     <string name="action_ok">OK</string>
 
     <!-- Provider types -->
-    <string name="provider_kind_openai_compat_desc">OpenAI-compatible API (OpenAI, OpenRouter, local servers)</string>
-    <string name="provider_kind_anthropic_desc">Anthropic Messages API (Claude)</string>
-    <string name="provider_kind_gemini_desc">Google Gemini API</string>
-    <string name="provider_kind_openai_responses_desc">OpenAI Responses API (GPT/Grok)</string>
-    <string name="provider_kind_opencode_desc">OpenCode Zen / Go — aggregator: protocol is picked per model</string>
+    <!-- Provider presets -->
+    <string name="provider_preset_openai">OpenAI</string>
+    <string name="provider_preset_openai_desc">Base URL, protocol and catalog are set up automatically; only an API key is needed</string>
+    <string name="provider_preset_google">Google Gemini</string>
+    <string name="provider_preset_google_desc">Base URL and catalog are set up automatically; only an API key is needed</string>
+    <string name="provider_preset_anthropic">Anthropic</string>
+    <string name="provider_preset_anthropic_desc">Base URL, protocol and catalog are set up automatically; only an API key is needed</string>
+    <string name="provider_preset_opencode">OpenCode Zen / Go</string>
+    <string name="provider_preset_opencode_desc">Aggregator: protocol is picked per model, endpoint is Zen or Zen Go</string>
+    <string name="provider_preset_custom">Custom setup</string>
+    <string name="provider_preset_custom_desc">All fields are open: base URL, protocol, catalog, authorization and request parameters</string>
+
+    <!-- Preset selectors -->
+    <string name="provider_google_version_title">API version</string>
+    <string name="provider_google_version_v1beta">v1beta</string>
+    <string name="provider_google_version_v1">v1</string>
+    <string name="provider_opencode_endpoint_title">Endpoint</string>
+    <string name="provider_opencode_zen">Zen</string>
+    <string name="provider_opencode_zen_go">Zen Go</string>
+
+    <!-- Profile protocol -->
+    <string name="provider_protocol_title">Protocol</string>
+    <string name="provider_protocol_auto">Detect per model</string>
+    <string name="provider_protocol_hint">One fixed protocol for all models or per-model detection; per-model choice is in the mode settings</string>
+
+    <!-- Model catalog -->
+    <string name="provider_fetch_scheme_title">Model catalog</string>
+    <string name="provider_fetch_scheme_hint">The model list is requested from {base}/models; the response format is detected automatically</string>
+    <string name="provider_fetch_models">{base}/models</string>
+    <string name="provider_fetch_none">No catalog (manual entry)</string>
+
+    <!-- Authorization -->
+    <string name="provider_auth_scheme_title">Authorization</string>
+    <string name="provider_auth_scheme_hint">Native sends the API key in the model protocol format (Bearer / x-api-key / x-goog-api-key)</string>
+    <string name="provider_auth_native">Native per protocol</string>
+    <string name="provider_auth_bearer">Bearer (API key)</string>
+    <string name="provider_auth_api_key_header">API key header</string>
+    <string name="provider_auth_basic">Basic (login and password)</string>
+    <string name="provider_auth_none">No authorization</string>
+    <string name="provider_api_key_header_name">Header name</string>
+    <string name="provider_basic_user">Login</string>
+    <string name="provider_basic_password">Password</string>
+
+    <!-- Custom setup -->
+    <string name="provider_catalog_path">Model catalog path</string>
+    <string name="provider_catalog_path_hint">Relative to the Base URL; the standard one is models (result: {base}/models)</string>
+    <string name="provider_extra_body">Extra request body (JSON)</string>
+    <string name="provider_extra_body_hint">JSON object: keys are added to model request bodies</string>
+    <string name="provider_extra_body_error">Invalid JSON object</string>
+    <string name="provider_extra_headers">Extra headers</string>
+    <string name="provider_header_name">Header name</string>
+    <string name="provider_header_value">Header value</string>
+    <string name="provider_header_add">Add header</string>
 
     <string name="provider_save_error_title">Failed to save provider</string>
     <string name="provider_validating">Checking connection…</string>

@@ -12,9 +12,10 @@ import kotlinx.serialization.json.Json
 import org.junit.Assert.assertEquals
 import org.junit.Test
 import ru.outsideproarts.oassist.core.data.secret.SecretStore
-import ru.outsideproarts.oassist.core.model.ProviderKind
+import ru.outsideproarts.oassist.core.model.ProviderPreset
 import ru.outsideproarts.oassist.core.model.ProviderProfile
 import ru.outsideproarts.oassist.core.provider.ProviderAuth
+import ru.outsideproarts.oassist.core.provider.modelsCatalogUrl
 
 class GeminiClientTest {
 
@@ -37,7 +38,7 @@ class GeminiClientTest {
         val profile = ProviderProfile(
             id = "p1",
             name = "Gemini",
-            kind = ProviderKind.GEMINI,
+            preset = ProviderPreset.CUSTOM,
             baseUrl = baseUrl,
         )
         return kotlinx.coroutines.runBlocking {
@@ -45,13 +46,13 @@ class GeminiClientTest {
                 profile,
                 emptySecrets,
                 http,
-                overrides = ProviderAuth(bearerToken = "test-key".toCharArray()),
+                overrides = ProviderAuth(apiKey = "test-key".toCharArray()),
             )
         }
     }
 
     @Test
-    fun fetchModels_hostBase_appendsV1betaAndSendsHeader() = runTest {
+    fun fetchModels_v1betaBase_sendsHeader_andLists() = runTest {
         var path = ""
         var apiKey: String? = null
         val engine = MockEngine { request ->
@@ -63,7 +64,7 @@ class GeminiClientTest {
                 headers = headersOf("Content-Type", "application/json"),
             )
         }
-        val models = client(engine, "https://generativelanguage.googleapis.com").fetchModels()
+        val models = client(engine, "https://generativelanguage.googleapis.com/v1beta").fetchModels()
         assertEquals("/v1beta/models", path)
         assertEquals("test-key", apiKey)
         assertEquals(listOf("gemini-2.0-flash"), models.map { it.id })
@@ -109,9 +110,9 @@ class GeminiClientTest {
 
     @Test
     fun urlHelpers_normalize() {
-        assertEquals("https://h.test/v1beta/models", GeminiClient.modelsUrl("https://h.test/"))
+        assertEquals("https://h.test/v1beta/models", modelsCatalogUrl("https://h.test/v1beta/"))
         assertEquals(
-            "https://h.test/v1beta/models/gemini-2.0-flash:streamGenerateContent",
+            "https://h.test/models/gemini-2.0-flash:streamGenerateContent",
             GeminiClient.generateUrl("https://h.test", "gemini-2.0-flash"),
         )
         assertEquals(

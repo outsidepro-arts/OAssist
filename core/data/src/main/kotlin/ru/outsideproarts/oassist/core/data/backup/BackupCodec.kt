@@ -61,6 +61,8 @@ fun SkillInfo.toBackup(): SkillBackup = SkillBackup(name, title, body, enabled)
  */
 internal fun ProviderProfile.scrubbed(): ProviderProfile = copy(
     apiKeyRef = null,
+    basicUserRef = null,
+    basicPasswordRef = null,
     extraHeaders = emptyMap(),
 )
 

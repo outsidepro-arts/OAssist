@@ -55,6 +55,7 @@
     <string name="provider_name">Название</string>
     <string name="provider_kind">Тип провайдера</string>
     <string name="provider_base_url">Base URL</string>
+    <string name="provider_base_url_hint">Корень API вместе с версией, как в документации провайдера (например, https://api.openai.com/v1, https://api.anthropic.com/v1, https://generativelanguage.googleapis.com/v1beta)</string>
     <string name="provider_api_key">API-ключ</string>
     <string name="provider_api_key_masked">•••• (сохранён)</string>
     <string name="password_show">Показать пароль</string>
@@ -63,6 +64,13 @@
     <string name="field_provider_name">Имя провайдера</string>
     <string name="field_provider_url">Базовый URL</string>
     <string name="field_provider_key">API-ключ</string>
+    <string name="field_provider_key_header">Имя заголовка API-ключа</string>
+    <string name="field_provider_basic_user">Логин Basic</string>
+    <string name="field_provider_basic_password">Пароль Basic</string>
+    <string name="field_provider_catalog_path">Путь каталога моделей</string>
+    <string name="field_provider_extra_body">Дополнительные параметры запроса</string>
+    <string name="field_provider_header_name">Имя заголовка</string>
+    <string name="field_provider_header_value">Значение заголовка</string>
     <string name="field_mcp_name">Имя MCP-сервера</string>
     <string name="field_mcp_url">URL MCP-сервера</string>
     <string name="field_mcp_bearer">Токен MCP-сервера</string>
@@ -80,12 +88,59 @@
     <string name="action_replace">Заменить</string>
     <string name="action_ok">ОК</string>
 
-    <!-- Типы провайдеров -->
-    <string name="provider_kind_openai_compat_desc">OpenAI-совместимый API (OpenAI, OpenRouter, локальные серверы)</string>
-    <string name="provider_kind_anthropic_desc">Anthropic Messages API (Claude)</string>
-    <string name="provider_kind_gemini_desc">Google Gemini API</string>
-    <string name="provider_kind_openai_responses_desc">OpenAI Responses API (GPT/Grok)</string>
-    <string name="provider_kind_opencode_desc">OpenCode Zen / Go — агрегатор: протокол выбирается по модели</string>
+    <!-- Пресеты провайдеров -->
+    <string name="provider_preset_openai">OpenAI</string>
+    <string name="provider_preset_openai_desc">Base URL, протокол и каталог настроены автоматически; нужен только API-ключ</string>
+    <string name="provider_preset_google">Google Gemini</string>
+    <string name="provider_preset_google_desc">Base URL и каталог настроены автоматически; нужен только API-ключ</string>
+    <string name="provider_preset_anthropic">Anthropic</string>
+    <string name="provider_preset_anthropic_desc">Base URL, протокол и каталог настроены автоматически; нужен только API-ключ</string>
+    <string name="provider_preset_opencode">OpenCode Zen / Go</string>
+    <string name="provider_preset_opencode_desc">Агрегатор: протокол выбирается по модели, эндпоинт — Zen или Zen Go</string>
+    <string name="provider_preset_custom">Своя настройка</string>
+    <string name="provider_preset_custom_desc">Все поля открыты: Base URL, протокол, каталог, авторизация и параметры запросов</string>
+
+    <!-- Выборы пресетов -->
+    <string name="provider_google_version_title">Версия API</string>
+    <string name="provider_google_version_v1beta">v1beta</string>
+    <string name="provider_google_version_v1">v1</string>
+    <string name="provider_opencode_endpoint_title">Эндпоинт</string>
+    <string name="provider_opencode_zen">Zen</string>
+    <string name="provider_opencode_zen_go">Zen Go</string>
+
+    <!-- Протокол профиля -->
+    <string name="provider_protocol_title">Протокол</string>
+    <string name="provider_protocol_auto">Определять по модели</string>
+    <string name="provider_protocol_hint">Фиксированный протокол для всех моделей либо подбор по модели; выбор для отдельной модели — в настройках режима</string>
+
+    <!-- Каталог моделей -->
+    <string name="provider_fetch_scheme_title">Каталог моделей</string>
+    <string name="provider_fetch_scheme_hint">Список моделей запрашивается по {base}/models; формат ответа распознаётся автоматически</string>
+    <string name="provider_fetch_models">{base}/models</string>
+    <string name="provider_fetch_none">Нет каталога (ручной ввод)</string>
+
+    <!-- Авторизация -->
+    <string name="provider_auth_scheme_title">Авторизация</string>
+    <string name="provider_auth_scheme_hint">Нативная отправляет API-ключ в формате протокола модели (Bearer / x-api-key / x-goog-api-key)</string>
+    <string name="provider_auth_native">Нативная по протоколу</string>
+    <string name="provider_auth_bearer">Bearer (API-ключ)</string>
+    <string name="provider_auth_api_key_header">API-ключ в заголовок</string>
+    <string name="provider_auth_basic">Basic (логин и пароль)</string>
+    <string name="provider_auth_none">Без авторизации</string>
+    <string name="provider_api_key_header_name">Имя заголовка</string>
+    <string name="provider_basic_user">Логин</string>
+    <string name="provider_basic_password">Пароль</string>
+
+    <!-- Своя настройка -->
+    <string name="provider_catalog_path">Путь каталога моделей</string>
+    <string name="provider_catalog_path_hint">Относительно Base URL; стандартный — models (итог: {base}/models)</string>
+    <string name="provider_extra_body">Дополнительные параметры запроса (JSON)</string>
+    <string name="provider_extra_body_hint">JSON-объект: ключи добавляются в тело запросов к модели</string>
+    <string name="provider_extra_body_error">Некорректный JSON-объект</string>
+    <string name="provider_extra_headers">Дополнительные заголовки</string>
+    <string name="provider_header_name">Имя заголовка</string>
+    <string name="provider_header_value">Значение заголовка</string>
+    <string name="provider_header_add">Добавить заголовок</string>
 
     <string name="provider_save_error_title">Не удалось сохранить провайдера</string>
     <string name="provider_validating">Проверка подключения…</string>

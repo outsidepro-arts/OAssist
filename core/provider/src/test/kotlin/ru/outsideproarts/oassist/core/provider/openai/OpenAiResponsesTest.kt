@@ -302,7 +302,8 @@ class OpenAiResponsesTest {
             ru.outsideproarts.oassist.core.model.ProviderProfile(
                 id = "p1",
                 name = "OpenAI",
-                kind = ru.outsideproarts.oassist.core.model.ProviderKind.OPENAI_RESPONSES,
+                preset = ru.outsideproarts.oassist.core.model.ProviderPreset.CUSTOM,
+                protocol = ru.outsideproarts.oassist.core.model.ModelProtocol.OPENAI_RESPONSES,
                 baseUrl = "https://api.openai.com/v1",
                 apiKeyRef = "provider.p1.apiKey",
             ),
@@ -323,7 +324,8 @@ class OpenAiResponsesTest {
             ru.outsideproarts.oassist.core.model.ProviderProfile(
                 id = "p2",
                 name = "OpenAI",
-                kind = ru.outsideproarts.oassist.core.model.ProviderKind.OPENAI_RESPONSES,
+                preset = ru.outsideproarts.oassist.core.model.ProviderPreset.CUSTOM,
+                protocol = ru.outsideproarts.oassist.core.model.ModelProtocol.OPENAI_RESPONSES,
                 baseUrl = "https://api.openai.com/v1",
             ),
             fakeSecrets,
@@ -341,7 +343,8 @@ class OpenAiResponsesTest {
             ru.outsideproarts.oassist.core.model.ProviderProfile(
                 id = "p1",
                 name = "OpenAI",
-                kind = ru.outsideproarts.oassist.core.model.ProviderKind.OPENAI_RESPONSES,
+                preset = ru.outsideproarts.oassist.core.model.ProviderPreset.CUSTOM,
+                protocol = ru.outsideproarts.oassist.core.model.ModelProtocol.OPENAI_RESPONSES,
                 baseUrl = "https://api.openai.com/v1",
                 apiKeyRef = "provider.p1.apiKey",
             ),

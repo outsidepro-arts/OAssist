@@ -74,11 +74,19 @@ internal fun extractReplacement(text: String?): String? {
 internal fun isProtocolUnsupportedMessage(text: String?): Boolean =
     classifyErrorText(text) == ProviderErrorKind.MODEL_PROTOCOL_UNSUPPORTED
 
-/** [isProtocolUnsupportedMessage] для исключения (с разбором cause-цепочки). */
+/**
+ * «Не тот проводной протокол» для исключения (с разбором cause-цепочки):
+ * явные маркеры тела (Zen/Go) или отсутствие эндпоинта протокола у агрегатора
+ * (HTTP 404/405) — типовой ответ чужого шлюза на неверный путь протокола.
+ */
 internal fun isProtocolUnsupported(t: Throwable): Boolean {
     val err = runCatching { ProviderError.from(t) }.getOrNull() ?: return false
-    return err.kind() == ProviderErrorKind.MODEL_PROTOCOL_UNSUPPORTED
+    if (err.kind() == ProviderErrorKind.MODEL_PROTOCOL_UNSUPPORTED) return true
+    return err is ProviderError.Http && err.status in PROTOCOL_MISS_STATUSES
 }
+
+/** HTTP-статусы «нет такого эндпоинта протокола» — сигнал фолбэка протоколов. */
+private val PROTOCOL_MISS_STATUSES = setOf(404, 405)
 
 /**
  * Ошибка провайдера — обёртка, чтобы слои выше не ловили голое исключение.

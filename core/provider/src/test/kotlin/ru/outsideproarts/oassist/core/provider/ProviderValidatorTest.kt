@@ -10,7 +10,9 @@ import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import ru.outsideproarts.oassist.core.data.secret.SecretStore
-import ru.outsideproarts.oassist.core.model.ProviderKind
+import ru.outsideproarts.oassist.core.model.ModelFetchScheme
+import ru.outsideproarts.oassist.core.model.ModelProtocol
+import ru.outsideproarts.oassist.core.model.ProviderPreset
 import ru.outsideproarts.oassist.core.model.ProviderProfile
 
 class ProviderValidatorTest {
@@ -26,9 +28,18 @@ class ProviderValidatorTest {
 
     private fun profile(
         name: String = "Test",
-        kind: ProviderKind = ProviderKind.OPENAI_COMPAT,
+        preset: ProviderPreset = ProviderPreset.CUSTOM,
+        protocol: ModelProtocol? = null,
+        fetchScheme: ModelFetchScheme = ModelFetchScheme.MODELS,
         baseUrl: String = "https://api.example.com/v1",
-    ) = ProviderProfile(id = "p1", name = name, kind = kind, baseUrl = baseUrl)
+    ) = ProviderProfile(
+        id = "p1",
+        name = name,
+        preset = preset,
+        baseUrl = baseUrl,
+        protocol = protocol,
+        fetchScheme = fetchScheme,
+    )
 
     /** Движок-заглушка: запрос не должен выполняться (локальные проверки/заглушки). */
     private fun unexpectedEngine(): MockEngine = MockEngine { _ ->
@@ -74,7 +85,7 @@ class ProviderValidatorTest {
     @Test
     fun anthropic_ok_fetchesModels() = runTest {
         val engine = MockEngine { request ->
-            assertEquals("https://api.example.com/v1/models", request.url.toString())
+            assertEquals("https://api.example.com/v1/models", request.url.toString().substringBefore("?"))
             respond(
                 content = """{"data":[{"type":"model","id":"claude-opus-4-6","display_name":"Claude Opus 4.6"}]}""",
                 status = HttpStatusCode.OK,
@@ -82,7 +93,10 @@ class ProviderValidatorTest {
             )
         }
         val result = validator(engine).validate(
-            profile(kind = ProviderKind.ANTHROPIC, baseUrl = "https://api.example.com"),
+            profile(
+                protocol = ModelProtocol.ANTHROPIC_MESSAGES,
+                baseUrl = "https://api.example.com/v1",
+            ),
         )
         assertTrue("got: $result", result is ProviderValidationResult.Success)
         val models = (result as ProviderValidationResult.Success).models
@@ -101,7 +115,10 @@ class ProviderValidatorTest {
             )
         }
         val result = validator(engine).validate(
-            profile(kind = ProviderKind.GEMINI, baseUrl = "https://generativelanguage.googleapis.com"),
+            profile(
+                protocol = ModelProtocol.GEMINI_GENERATE,
+                baseUrl = "https://generativelanguage.googleapis.com/v1beta",
+            ),
         )
         assertTrue("got: $result", result is ProviderValidationResult.Success)
         val models = (result as ProviderValidationResult.Success).models
@@ -111,7 +128,7 @@ class ProviderValidatorTest {
     @Test
     fun openAiCompat_ok_fetchesModels() = runTest {
         val engine = MockEngine { request ->
-            assertEquals("https://api.example.com/v1/models", request.url.toString())
+            assertEquals("https://api.example.com/v1/models", request.url.toString().substringBefore("?"))
             respond(
                 content = """{"object":"list","data":[{"id":"m1","created":1}]}""",
                 status = HttpStatusCode.OK,
@@ -137,7 +154,7 @@ class ProviderValidatorTest {
     @Test
     fun openCodeZen_ok_fetchesModels() = runTest {
         val engine = MockEngine { request ->
-            assertEquals("https://zen.example.com/v1/models", request.url.toString())
+            assertEquals("https://zen.example.com/v1/models", request.url.toString().substringBefore("?"))
             respond(
                 content = """{"object":"list","data":[{"id":"glm-5.3","created":1}]}""",
                 status = HttpStatusCode.OK,
@@ -145,7 +162,7 @@ class ProviderValidatorTest {
             )
         }
         val result = validator(engine).validate(
-            profile(kind = ProviderKind.OPENCODE, baseUrl = "https://zen.example.com/v1"),
+            profile(preset = ProviderPreset.OPENCODE, baseUrl = "https://zen.example.com/v1"),
         )
         val models = (result as ProviderValidationResult.Success).models
         assertEquals(listOf("glm-5.3"), models.map { it.id })

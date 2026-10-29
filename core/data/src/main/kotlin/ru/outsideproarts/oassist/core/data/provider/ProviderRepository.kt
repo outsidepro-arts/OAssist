@@ -41,7 +41,8 @@ class ProviderRepository(
             p.extraHeaders.values.forEach { secrets.delete(it) }
         }
         secrets.delete(aliasForApiKey(id))
-        // Legacy purge: Basic-алиасы версий до удаления Basic Auth (M3.4b).
+        // Страховка удаления: Basic-алиасы могли остаться от прошлых версий
+        // и легаси-конфигов без текущих ссылок в профиле.
         secrets.delete(aliasForBasicUser(id))
         secrets.delete(aliasForBasicPassword(id))
         store.deleteProviderProfile(id)
@@ -58,6 +59,28 @@ class ProviderRepository(
     suspend fun clearApiKey(providerId: String) {
         secrets.delete(aliasForApiKey(providerId))
         updateProvider(providerId) { it.copy(apiKeyRef = null) }
+    }
+
+    /**
+     * Сохраняет пару Basic-учётных данных ([ru.outsideproarts.oassist.core.model.AuthScheme.BASIC])
+     * как секреты: логин и пароль пишутся только в [SecretStore].
+     */
+    suspend fun setBasicCredentials(providerId: String, user: CharArray, password: CharArray) {
+        secrets.put(aliasForBasicUser(providerId), user)
+        secrets.put(aliasForBasicPassword(providerId), password)
+        updateProvider(providerId) {
+            it.copy(
+                basicUserRef = aliasForBasicUser(providerId),
+                basicPasswordRef = aliasForBasicPassword(providerId),
+            )
+        }
+    }
+
+    /** Удаляет сохранённую пару Basic-учётных данных. */
+    suspend fun clearBasicCredentials(providerId: String) {
+        secrets.delete(aliasForBasicUser(providerId))
+        secrets.delete(aliasForBasicPassword(providerId))
+        updateProvider(providerId) { it.copy(basicUserRef = null, basicPasswordRef = null) }
     }
 
     /**

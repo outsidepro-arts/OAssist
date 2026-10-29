@@ -10,7 +10,7 @@ import ru.outsideproarts.oassist.core.model.McpServerConfig
 import ru.outsideproarts.oassist.core.model.ModeConfig
 import ru.outsideproarts.oassist.core.model.ModelCatalog
 import ru.outsideproarts.oassist.core.model.ModelInfo
-import ru.outsideproarts.oassist.core.model.ProviderKind
+import ru.outsideproarts.oassist.core.model.ProviderPreset
 import ru.outsideproarts.oassist.core.model.ProviderProfile
 
 class BackupCodecTest {
@@ -19,7 +19,7 @@ class BackupCodecTest {
         exportedAtEpochMs = 1L,
         language = "RUSSIAN",
         providers = listOf(
-            ProviderProfile(id = "p1", name = "P", kind = ProviderKind.OPENAI_COMPAT, baseUrl = "https://x"),
+            ProviderProfile(id = "p1", name = "P", preset = ProviderPreset.CUSTOM, baseUrl = "https://x"),
         ),
         modes = listOf(ModeConfig(mode = AssistMode.CHAT, providerId = "p1", modelId = "m")),
         catalogs = listOf(ModelCatalog(providerId = "p1", updatedAtEpochMs = 1L, models = listOf(ModelInfo("m")))),
@@ -86,10 +86,13 @@ class BackupCodecTest {
     @Test
     fun `scrubbed режет секретные ссылки`() {
         val profile = ProviderProfile(
-            id = "p", name = "P", kind = ProviderKind.ANTHROPIC, baseUrl = "https://x",
+            id = "p", name = "P", preset = ProviderPreset.CUSTOM, baseUrl = "https://x",
             apiKeyRef = "provider.p.apiKey", extraHeaders = mapOf("X-K" to "alias"),
+            basicUserRef = "provider.p.basicUser", basicPasswordRef = "provider.p.basicPassword",
         ).scrubbed()
         assertEquals(null, profile.apiKeyRef)
+        assertEquals(null, profile.basicUserRef)
+        assertEquals(null, profile.basicPasswordRef)
         assertTrue(profile.extraHeaders.isEmpty())
         val mcp = McpServerConfig(id = "s", name = "S", url = "u", bearerRef = "mcp.s.bearer").scrubbed()
         assertEquals(null, mcp.bearerRef)
@@ -98,10 +101,43 @@ class BackupCodecTest {
     @Test
     fun `scrubbed не светит секреты в JSON`() {
         val secret = ProviderProfile(
-            id = "p", name = "P", kind = ProviderKind.ANTHROPIC, baseUrl = "https://x",
+            id = "p", name = "P", preset = ProviderPreset.CUSTOM, baseUrl = "https://x",
             apiKeyRef = "provider.p.apiKey",
+            basicUserRef = "provider.p.basicUser",
+            basicPasswordRef = "provider.p.basicPassword",
         )
         val raw = encodeBackup(sample().copy(providers = listOf(secret.scrubbed())))
         assertFalse(raw.contains("provider.p.apiKey"))
+        assertFalse(raw.contains("provider.p.basicUser"))
+        assertFalse(raw.contains("provider.p.basicPassword"))
+    }
+
+    @Test
+    fun `легаси-бэкап с kind провайдеров импортируется`() {
+        val legacy = """
+            {
+              "version": 1,
+              "exportedAtEpochMs": 1,
+              "providers": [
+                {"id": "p1", "name": "A", "kind": "ANTHROPIC", "baseUrl": "https://api.anthropic.com"},
+                {"id": "p2", "name": "Z", "kind": "OPENCODE_ZEN", "baseUrl": "https://opencode.ai/zen/v1"}
+              ]
+            }
+        """.trimIndent()
+
+        val decoded = decodeBackup(legacy).getOrThrow()
+
+        assertEquals(2, decoded.providers.size)
+        val anthropic = decoded.providers.first { it.id == "p1" }
+        assertEquals(ProviderPreset.ANTHROPIC, anthropic.preset)
+        assertEquals(
+            ru.outsideproarts.oassist.core.model.ModelProtocol.ANTHROPIC_MESSAGES,
+            anthropic.protocol,
+        )
+        assertEquals("https://api.anthropic.com/v1", anthropic.baseUrl)
+        val zen = decoded.providers.first { it.id == "p2" }
+        assertEquals(ProviderPreset.OPENCODE, zen.preset)
+        assertEquals(null, zen.protocol)
+        assertEquals("https://opencode.ai/zen/v1", zen.baseUrl)
     }
 }

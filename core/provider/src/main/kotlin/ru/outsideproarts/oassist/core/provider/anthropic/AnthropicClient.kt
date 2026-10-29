@@ -6,7 +6,7 @@ import io.ktor.client.plugins.sse.sse
 import io.ktor.client.request.HttpRequestBuilder
 import io.ktor.client.request.headers
 import io.ktor.client.request.request
-import io.ktor.client.request.setBody
+import ru.outsideproarts.oassist.core.provider.setBodyDecorated
 import io.ktor.client.statement.bodyAsText
 import io.ktor.http.ContentType
 import io.ktor.http.HttpMethod
@@ -31,8 +31,8 @@ import ru.outsideproarts.oassist.core.provider.ModelClient
 import ru.outsideproarts.oassist.core.provider.ProviderAuth
 import ru.outsideproarts.oassist.core.provider.ProviderError
 import ru.outsideproarts.oassist.core.provider.ProviderJson
-import ru.outsideproarts.oassist.core.provider.UrlStyle
 import ru.outsideproarts.oassist.core.provider.dialogKey
+import ru.outsideproarts.oassist.core.provider.fetchModelCatalog
 import ru.outsideproarts.oassist.core.provider.isProtocolUnsupportedMessage
 import ru.outsideproarts.oassist.core.provider.resolveProviderAuth
 import ru.outsideproarts.oassist.core.provider.openai.ToolSchemaDto
@@ -47,18 +47,7 @@ class AnthropicClient internal constructor(
     private val http: HttpClient,
 ) : ModelClient {
 
-    override suspend fun fetchModels(): List<ModelInfo> {
-        val response = http.request {
-            method = HttpMethod.Get
-            url.takeFrom(modelsUrl(endpoint.baseUrl, endpoint.urlStyle))
-            applyAuth(dialogKey = endpoint.baseUrl)
-        }
-        val dto = ProviderJson.decodeFromString(
-            AnthropicModelsResponseDto.serializer(),
-            response.bodyAsText(),
-        )
-        return dto.data.map { ModelInfo(id = it.id, label = it.displayName) }
-    }
+    override suspend fun fetchModels(): List<ModelInfo> = fetchModelCatalog(endpoint, http)
 
     override suspend fun probeCapabilities(modelId: String): Set<ModelCapability> {
         val requestDto = AnthropicMessagesRequest(
@@ -71,10 +60,10 @@ class AnthropicClient internal constructor(
         try {
             val response = http.request {
                 method = HttpMethod.Post
-                url.takeFrom(messagesUrl(endpoint.baseUrl, endpoint.urlStyle))
+                url.takeFrom(messagesUrl(endpoint.baseUrl))
                 applyAuth(dialogKey = dialogKey(emptyList()))
                 contentType(ContentType.Application.Json)
-                setBody(requestDto)
+                setBodyDecorated(endpoint, requestDto)
             }
             ProviderJson.decodeFromString(
                 AnthropicMessageResponseDto.serializer(),
@@ -117,10 +106,10 @@ class AnthropicClient internal constructor(
         http.sse(
             request = {
                 method = HttpMethod.Post
-                url.takeFrom(messagesUrl(endpoint.baseUrl, endpoint.urlStyle))
+                url.takeFrom(messagesUrl(endpoint.baseUrl))
                 applyAuth(dialogKey = dialogKey(messages))
                 contentType(ContentType.Application.Json)
-                setBody(requestDto)
+                setBodyDecorated(endpoint, requestDto)
             },
         ) {
             val acc = AnthropicStreamAccumulator()
@@ -238,9 +227,8 @@ class AnthropicClient internal constructor(
     }
 
     private fun HttpRequestBuilder.applyAuth(dialogKey: String) {
-        endpoint.auth.bearerToken?.let {
-            headers.append(API_KEY_HEADER, String(it))
-        }
+        // Размещение ключа — по схеме авторизации профиля (нативная — x-api-key).
+        endpoint.applyAuthHeaders(this)
         if (!endpoint.auth.extraHeaders.containsKey(VERSION_HEADER)) {
             headers.append(VERSION_HEADER, ANTHROPIC_VERSION)
         }
@@ -266,26 +254,8 @@ class AnthropicClient internal constructor(
             inputSchema = JsonObject(emptyMap()),
         )
 
-        /**
-         * URL списка моделей: `{base}/v1/models`. Хвост `/v1` в base терпится,
-         * чтобы не удваивать (`.../v1/v1/models`). [UrlStyle.FLAT] дописывает
-         * путь как есть (`{base}/models`) — layout агрегаторов.
-         */
-        internal fun modelsUrl(baseUrl: String, style: UrlStyle = UrlStyle.NATIVE): String {
-            val base = baseUrl.trimEnd('/')
-            return when (style) {
-                UrlStyle.FLAT -> "$base/models"
-                UrlStyle.NATIVE -> if (base.endsWith("/v1")) "$base/models" else "$base/v1/models"
-            }
-        }
-
-        internal fun messagesUrl(baseUrl: String, style: UrlStyle = UrlStyle.NATIVE): String {
-            val base = baseUrl.trimEnd('/')
-            return when (style) {
-                UrlStyle.FLAT -> "$base/messages"
-                UrlStyle.NATIVE -> if (base.endsWith("/v1")) "$base/messages" else "$base/v1/messages"
-            }
-        }
+        /** URL запросов: `{base}/messages` как есть (версия входит в baseUrl). */
+        internal fun messagesUrl(baseUrl: String): String = "${baseUrl.trimEnd('/')}/messages"
 
         suspend fun fromProfile(
             profile: ProviderProfile,

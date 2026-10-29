@@ -14,11 +14,10 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 import ru.outsideproarts.oassist.core.data.secret.SecretStore
 import ru.outsideproarts.oassist.core.model.ModelProtocol
-import ru.outsideproarts.oassist.core.model.ProviderKind
+import ru.outsideproarts.oassist.core.model.ProviderPreset
 import ru.outsideproarts.oassist.core.model.ProviderProfile
 import ru.outsideproarts.oassist.core.provider.ModelClient
 import ru.outsideproarts.oassist.core.provider.ProviderJson
-import ru.outsideproarts.oassist.core.provider.UrlStyle
 import ru.outsideproarts.oassist.core.provider.anthropic.AnthropicClient
 import ru.outsideproarts.oassist.core.provider.gemini.GeminiClient
 
@@ -41,7 +40,7 @@ class OpenCodeRoutingTest {
     private val zenProfile = ProviderProfile(
         id = "p1",
         name = "Zen",
-        kind = ProviderKind.OPENCODE,
+        preset = ProviderPreset.OPENCODE,
         baseUrl = "https://opencode.ai/zen/v1",
         apiKeyRef = "provider.p1.apiKey",
     )
@@ -57,18 +56,18 @@ class OpenCodeRoutingTest {
     }
 
     @Test
-    fun flatUrls_appendToAggregatorBase() {
+    fun urls_appendToAggregatorBaseAsIs() {
         assertEquals(
             "https://opencode.ai/zen/v1/models/gemini-3.5-flash:streamGenerateContent",
-            GeminiClient.generateUrl("https://opencode.ai/zen/v1", "gemini-3.5-flash", UrlStyle.FLAT),
+            GeminiClient.generateUrl("https://opencode.ai/zen/v1", "gemini-3.5-flash"),
         )
         assertEquals(
             "https://opencode.ai/zen/v1/models/gemini-3.5-flash:generateContent",
-            GeminiClient.contentUrl("https://opencode.ai/zen/v1", "gemini-3.5-flash", UrlStyle.FLAT),
+            GeminiClient.contentUrl("https://opencode.ai/zen/v1", "gemini-3.5-flash"),
         )
         assertEquals(
             "https://opencode.ai/zen/v1/messages",
-            AnthropicClient.messagesUrl("https://opencode.ai/zen/v1", UrlStyle.FLAT),
+            AnthropicClient.messagesUrl("https://opencode.ai/zen/v1"),
         )
     }
 

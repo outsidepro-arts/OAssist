@@ -844,7 +844,9 @@ private suspend fun saveProvider(
     secrets: ProviderSecretsInput,
 ): Result<ProviderValidationResult> = try {
     val overrides = ProviderAuth(
-        bearerToken = secrets.apiKey?.toCharArray(),
+        apiKey = secrets.apiKey?.toCharArray(),
+        basicUser = secrets.basicUser,
+        basicPassword = secrets.basicPassword?.toCharArray(),
     )
     val validator = ProviderValidator(graph.data.secretStore, graph.httpClient)
     when (val result = validator.validate(updated, overrides)) {
@@ -855,6 +857,22 @@ private suspend fun saveProvider(
             when {
                 secrets.clearApiKey -> graph.providers.clearApiKey(updated.id)
                 apiKey != null -> graph.providers.setApiKey(updated.id, apiKey.toCharArray())
+            }
+            val basicUser = secrets.basicUser
+            val basicPassword = secrets.basicPassword
+            when {
+                secrets.clearBasic -> graph.providers.clearBasicCredentials(updated.id)
+                // Парная запись: полная пара или ничего (частичный ввод не сохраняется).
+                basicUser != null && basicPassword != null ->
+                    graph.providers.setBasicCredentials(
+                        updated.id,
+                        basicUser.toCharArray(),
+                        basicPassword.toCharArray(),
+                    )
+            }
+            secrets.clearedExtraHeaders.forEach { graph.providers.clearExtraHeader(updated.id, it) }
+            secrets.extraHeaders.forEach { (headerName, value) ->
+                graph.providers.setExtraHeader(updated.id, headerName, value.toCharArray())
             }
             if (result is ProviderValidationResult.Success) {
                 graph.providers.refreshModelCatalog(updated.id, result.models)

@@ -9,26 +9,28 @@ import ru.outsideproarts.oassist.core.model.ImagePart
 import ru.outsideproarts.oassist.core.model.ModelCapability
 import ru.outsideproarts.oassist.core.model.ModelInfo
 import ru.outsideproarts.oassist.core.model.ModelProtocol
-import ru.outsideproarts.oassist.core.model.ProviderKind
 import ru.outsideproarts.oassist.core.model.ProviderProfile
 import ru.outsideproarts.oassist.core.model.ProviderUsage
-import ru.outsideproarts.oassist.core.provider.anthropic.AnthropicClient
-import ru.outsideproarts.oassist.core.provider.gemini.GeminiClient
-import ru.outsideproarts.oassist.core.provider.openai.OpenAiCompatibleClient
-import ru.outsideproarts.oassist.core.provider.openai.OpenAiResponsesClient
 import ru.outsideproarts.oassist.core.provider.openai.ToolSchemaDto
-import ru.outsideproarts.oassist.core.provider.opencode.OpenCodeRoutingClient
 
 /**
  * Резолвленный набор секретов и заголовков для конкретного запроса.
  * Plaintext живёт в CharArray, после использования вызывается [zeroOut].
+ * Размещение ключа/пароля по запросу задаёт схема авторизации
+ * (см. [ru.outsideproarts.oassist.core.model.AuthScheme]).
  */
 class ProviderAuth(
-    val bearerToken: CharArray? = null,
+    /** Секрет API-ключа (Bearer/нативный key-заголовок/именованный заголовок). */
+    val apiKey: CharArray? = null,
+    /** Логин Basic ([ru.outsideproarts.oassist.core.model.AuthScheme.BASIC]). */
+    val basicUser: String? = null,
+    /** Пароль Basic ([ru.outsideproarts.oassist.core.model.AuthScheme.BASIC]). */
+    val basicPassword: CharArray? = null,
     val extraHeaders: Map<String, String> = emptyMap(),
 ) {
     fun zeroOut() {
-        bearerToken?.fill('\u0000')
+        basicPassword?.fill(Char.MIN_VALUE)
+        apiKey?.fill('\u0000')
     }
 }
 
@@ -121,8 +123,10 @@ interface ModelClient {
 
     companion object {
         /**
-         * Создаёт клиент по типу профиля: простой протокол — свой протокольный
-         * клиент; [ProviderKind.OPENCODE] — агрегатор с роутингом по модели.
+         * Создаёт клиент профиля: роутинг проводного протокола для любого
+         * провайдера — фиксированный протокол профиля либо per-model авто-резолв
+         * с фолбэком (см. [RoutingModelClient]); схема фетча каталога и авторизация
+         * — явные настройки профиля ([ProviderProfile]).
          * [overrides] — несохранённые значения из полей ввода (для проверки перед сохранением);
          * null-поля берутся из профиля/SecretStore как обычно.
          * [protocolOverride] — ручной выбор протокола модели (из каталога);
@@ -137,31 +141,28 @@ interface ModelClient {
             modelsDev: ru.outsideproarts.oassist.core.provider.modelsdev.ModelsDevCatalog? = null,
         ): ModelClient {
             val auth = resolveProviderAuth(profile, secretStore, overrides)
-            return when (profile.kind) {
-                ProviderKind.OPENAI_COMPAT -> OpenAiCompatibleClient(
-                    EndpointConfig(ModelProtocol.OPENAI_COMPLETIONS, profile.baseUrl, auth),
-                    httpClient,
-                )
-                ProviderKind.ANTHROPIC -> AnthropicClient(
-                    EndpointConfig(ModelProtocol.ANTHROPIC_MESSAGES, profile.baseUrl, auth),
-                    httpClient,
-                )
-                ProviderKind.GEMINI -> GeminiClient(
-                    EndpointConfig(ModelProtocol.GEMINI_GENERATE, profile.baseUrl, auth),
-                    httpClient,
-                )
-                ProviderKind.OPENAI_RESPONSES -> OpenAiResponsesClient(
-                    EndpointConfig(ModelProtocol.OPENAI_RESPONSES, profile.baseUrl, auth),
-                    httpClient,
-                )
-                ProviderKind.OPENCODE -> OpenCodeRoutingClient(
-                    profile.baseUrl,
-                    auth,
-                    httpClient,
-                    protocolOverride,
-                    modelsDev,
-                )
-            }
+            return RoutingModelClient(
+                template = endpointTemplate(profile, auth),
+                http = httpClient,
+                fixedProtocol = profile.protocol,
+                fetchScheme = profile.fetchScheme,
+                protocolOverride = protocolOverride,
+                modelsDev = modelsDev,
+                catalogKey = profile.preset.catalogKeyResolver(),
+            )
         }
+
+        /** Шаблон точек подключения профиля: схема auth и оформление — из настроек. */
+        private fun endpointTemplate(profile: ProviderProfile, auth: ProviderAuth): EndpointConfig =
+            EndpointConfig(
+                protocol = profile.protocol ?: ModelProtocol.OPENAI_COMPLETIONS,
+                baseUrl = profile.baseUrl,
+                auth = auth,
+                authScheme = profile.authScheme,
+                apiKeyHeaderName = profile.apiKeyHeaderName,
+                requestHeaders = profile.preset.requestHeaders(),
+                extraBody = extraBodyJson(profile.extraBody),
+                catalogPath = profile.catalogPath,
+            )
     }
 }

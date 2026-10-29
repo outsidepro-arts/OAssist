@@ -77,7 +77,7 @@ fun ProviderListScreen(
                 providers.forEach { profile ->
                     OAssistSettingRow(
                         title = profile.name,
-                        subtitle = "${profile.kind.name} · ${profile.baseUrl}",
+                        subtitle = "${presetLabel(profile.preset)} · ${profile.baseUrl}",
                         value = if (profile.enabled) enabledState else disabledState,
                         icon = Icons.Default.ChevronRight,
                         onClick = { onEditProvider(profile.id) },

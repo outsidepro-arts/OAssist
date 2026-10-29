@@ -19,7 +19,8 @@ import ru.outsideproarts.oassist.core.model.ChatMessage
 import ru.outsideproarts.oassist.core.model.ChatRole
 import ru.outsideproarts.oassist.core.model.ModelInfo
 import ru.outsideproarts.oassist.core.model.ModeConfig
-import ru.outsideproarts.oassist.core.model.ProviderKind
+import ru.outsideproarts.oassist.core.model.ModelProtocol
+import ru.outsideproarts.oassist.core.model.ProviderPreset
 import ru.outsideproarts.oassist.core.model.ProviderProfile
 import ru.outsideproarts.oassist.core.model.ProviderUsage
 import ru.outsideproarts.oassist.core.model.UsageTotalsState
@@ -252,7 +253,7 @@ class ChatTitlerTest {
         var lastMessages: List<ChatMessage> = emptyList()
         val recordedUsage = mutableListOf<ProviderUsage>()
         private val profile = ProviderProfile(
-            id = "p", name = "p", kind = ProviderKind.OPENAI_COMPAT, baseUrl = "https://x",
+            id = "p", name = "p", preset = ProviderPreset.CUSTOM, protocol = ModelProtocol.OPENAI_COMPLETIONS, baseUrl = "https://x",
         )
         private val client = object : ModelClient {
             override suspend fun fetchModels(): List<ModelInfo> = emptyList()

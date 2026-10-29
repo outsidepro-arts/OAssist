@@ -25,6 +25,15 @@ internal object OpenCodeZen {
     fun requestId(): String = "msg_" + UUID.randomUUID()
 }
 
+/**
+ * Ключ среза models.dev по baseUrl агрегатора: путь с сегментом `go`
+ * (`.../zen/go/v1`, `.../inference/go/v1`) — `opencode-go`, иначе `opencode`.
+ */
+internal fun catalogKey(baseUrl: String): String {
+    val path = baseUrl.substringAfter("://", baseUrl).substringAfter('/', "")
+    return if (path.split('/').any { it.equals("go", ignoreCase = true) }) "opencode-go" else "opencode"
+}
+
 /** Декоратор заголовков OpenCode для [ru.outsideproarts.oassist.core.provider.EndpointConfig]. */
 internal class OpenCodeRequestHeaders : RequestHeaders {
     override fun headersFor(dialogKey: String): Map<String, String> = mapOf(

@@ -37,17 +37,22 @@ private const val RETRY_MAX = 2
  * Фабрика Ktor [HttpClient] с предустановленными плагинами: content negotiation (kokle-json), SSE,
  * HTTP-таймауты, логирование с редактированием секретов (см. [RedactingHttpLogger]).
  */
+/**
+ * JSON wire-сериализации тел запросов: используется ContentNegotiation фабрики
+ * и мержом дополнительных полей тела (`extraBody` в core:provider). Конфиг
+ * обязан быть единым — иначе тела запросов с дополнениями разойдутся с обычными.
+ */
+val WireJson: Json = Json {
+    ignoreUnknownKeys = true
+    encodeDefaults = true
+    explicitNulls = false
+    isLenient = true
+}
+
 object HttpClientFactory {
 
-    private val json = Json {
-        ignoreUnknownKeys = true
-        encodeDefaults = true
-        explicitNulls = false
-        isLenient = true
-    }
-
     fun create(): HttpClient = HttpClient(OkHttp) {
-        install(ContentNegotiation) { json(json) }
+        install(ContentNegotiation) { json(WireJson) }
         install(SSE)
         install(HttpTimeout) {
             requestTimeoutMillis = 120_000

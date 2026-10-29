@@ -7,7 +7,7 @@ import io.ktor.client.request.HttpRequestBuilder
 import io.ktor.client.request.headers
 import io.ktor.client.request.parameter
 import io.ktor.client.request.request
-import io.ktor.client.request.setBody
+import ru.outsideproarts.oassist.core.provider.setBodyDecorated
 import io.ktor.client.statement.bodyAsText
 import io.ktor.http.ContentType
 import io.ktor.http.HttpMethod
@@ -30,9 +30,9 @@ import ru.outsideproarts.oassist.core.provider.ModelClient
 import ru.outsideproarts.oassist.core.provider.ProviderAuth
 import ru.outsideproarts.oassist.core.provider.ProviderError
 import ru.outsideproarts.oassist.core.provider.ProviderJson
-import ru.outsideproarts.oassist.core.provider.UrlStyle
 import ru.outsideproarts.oassist.core.provider.detectStreamErrorMessage
 import ru.outsideproarts.oassist.core.provider.dialogKey
+import ru.outsideproarts.oassist.core.provider.fetchModelCatalog
 import ru.outsideproarts.oassist.core.provider.isProtocolUnsupportedMessage
 import ru.outsideproarts.oassist.core.provider.resolveProviderAuth
 import ru.outsideproarts.oassist.core.provider.openai.ToolSchemaDto
@@ -47,26 +47,7 @@ class GeminiClient internal constructor(
     private val http: HttpClient,
 ) : ModelClient {
 
-    override suspend fun fetchModels(): List<ModelInfo> {
-        val response = http.request {
-            method = HttpMethod.Get
-            url.takeFrom(modelsUrl(endpoint.baseUrl, endpoint.urlStyle))
-            applyAuth(dialogKey = endpoint.baseUrl)
-            // Листинг без пагинации: дефолтной страницы хватает для пикеров.
-            parameter("pageSize", MODELS_PAGE_SIZE)
-        }
-        val dto = ProviderJson.decodeFromString(
-            GeminiModelsResponseDto.serializer(),
-            response.bodyAsText(),
-        )
-        return dto.models.mapNotNull { model ->
-            val id = model.name.removePrefix(MODELS_PREFIX).takeIf { it.isNotBlank() }
-                ?: return@mapNotNull null
-            // Capability из листинга не вывести (`supportedGenerationMethods`
-            // про инструменты не говорит) — честный emptySet, проба в M3.3.
-            ModelInfo(id = id, label = model.displayName)
-        }
-    }
+    override suspend fun fetchModels(): List<ModelInfo> = fetchModelCatalog(endpoint, http)
 
     override suspend fun probeCapabilities(modelId: String): Set<ModelCapability> {
         val requestDto = GeminiGenerateRequest(
@@ -78,10 +59,10 @@ class GeminiClient internal constructor(
         try {
             val response = http.request {
                 method = HttpMethod.Post
-                url.takeFrom(contentUrl(endpoint.baseUrl, modelId, endpoint.urlStyle))
+                url.takeFrom(contentUrl(endpoint.baseUrl, modelId))
                 applyAuth(dialogKey = dialogKey(emptyList()))
                 contentType(ContentType.Application.Json)
-                setBody(requestDto)
+                setBodyDecorated(endpoint, requestDto)
             }
             ProviderJson.decodeFromString(
                 GeminiStreamChunkDto.serializer(),
@@ -113,11 +94,11 @@ class GeminiClient internal constructor(
         http.sse(
             request = {
                 method = HttpMethod.Post
-                url.takeFrom(generateUrl(endpoint.baseUrl, modelId, endpoint.urlStyle))
+                url.takeFrom(generateUrl(endpoint.baseUrl, modelId))
                 applyAuth(dialogKey = dialogKey(messages))
                 contentType(ContentType.Application.Json)
                 parameter("alt", "sse")
-                setBody(requestDto)
+                setBodyDecorated(endpoint, requestDto)
             },
         ) {
             var nextId = 0
@@ -156,9 +137,8 @@ class GeminiClient internal constructor(
     }
 
     private fun HttpRequestBuilder.applyAuth(dialogKey: String) {
-        endpoint.auth.bearerToken?.let {
-            headers.append(API_KEY_HEADER, String(it))
-        }
+        // Размещение ключа — по схеме авторизации профиля (нативная — x-goog-api-key).
+        endpoint.applyAuthHeaders(this)
         endpoint.decorateHeaders(this, dialogKey)
     }
 
@@ -166,41 +146,15 @@ class GeminiClient internal constructor(
         const val API_KEY_HEADER = "x-goog-api-key"
 
         private const val MODELS_PREFIX = "models/"
-        private const val MODELS_PAGE_SIZE = 100
         private const val PROBE_TEXT = "hi"
 
-        /**
-         * Нестримовый URL генерации (для пробы): `models/{id}:generateContent`.
-         * [UrlStyle.FLAT] — layout агрегаторов: путь дописывается к base без `/v1beta`
-         * (`https://opencode.ai/zen/v1/models/{id}:generateContent`).
-         */
-        internal fun contentUrl(baseUrl: String, modelId: String, style: UrlStyle = UrlStyle.NATIVE): String {
-            val base = baseUrl.trimEnd('/')
-            val id = modelId.removePrefix(MODELS_PREFIX)
-            val path = "models/$id:generateContent"
-            return when (style) {
-                UrlStyle.FLAT -> "$base/$path"
-                UrlStyle.NATIVE -> if (base.endsWith("/v1beta")) "$base/$path" else "$base/v1beta/$path"
-            }
-        }
+        /** Нестримовый URL генерации (для пробы): `{base}/models/{id}:generateContent`. */
+        internal fun contentUrl(baseUrl: String, modelId: String): String =
+            "${baseUrl.trimEnd('/')}/models/${modelId.removePrefix(MODELS_PREFIX)}:generateContent"
 
-        internal fun modelsUrl(baseUrl: String, style: UrlStyle = UrlStyle.NATIVE): String {
-            val base = baseUrl.trimEnd('/')
-            return when (style) {
-                UrlStyle.FLAT -> "$base/models"
-                UrlStyle.NATIVE -> if (base.endsWith("/v1beta")) "$base/models" else "$base/v1beta/models"
-            }
-        }
-
-        internal fun generateUrl(baseUrl: String, modelId: String, style: UrlStyle = UrlStyle.NATIVE): String {
-            val base = baseUrl.trimEnd('/')
-            val id = modelId.removePrefix(MODELS_PREFIX)
-            val path = "models/$id:streamGenerateContent"
-            return when (style) {
-                UrlStyle.FLAT -> "$base/$path"
-                UrlStyle.NATIVE -> if (base.endsWith("/v1beta")) "$base/$path" else "$base/v1beta/$path"
-            }
-        }
+        /** URL стрима: `{base}/models/{id}:streamGenerateContent`. */
+        internal fun generateUrl(baseUrl: String, modelId: String): String =
+            "${baseUrl.trimEnd('/')}/models/${modelId.removePrefix(MODELS_PREFIX)}:streamGenerateContent"
 
         suspend fun fromProfile(
             profile: ProviderProfile,
