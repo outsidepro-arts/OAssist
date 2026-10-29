@@ -1,5 +1,6 @@
 package ru.outsideproarts.oassist.feature.assistant
 
+import ru.outsideproarts.oassist.core.model.diagnostics.launchDiagnostic
 import android.Manifest
 import android.annotation.SuppressLint
 import android.app.Notification
@@ -599,8 +600,16 @@ private var turnTranscript: List<ChatMessage> = emptyList()
         hintText = null
         speech?.stop()
         turnJob?.cancel()
-        turnJob = serviceScope.launch {
+        val diagnosticId = ru.outsideproarts.oassist.core.model.diagnostics.Diagnostics.newOperationId()
+        val diagnosticRepo = ru.outsideproarts.oassist.core.data.chat.ChatHandle.get()
+        val diagnosticGeneration = diagnosticRepo?.diagnosticGeneration(
+            ru.outsideproarts.oassist.core.data.chat.ChatRepository.ASSISTANT_CHAT_ID,
+        )
+        turnJob = serviceScope.launchDiagnostic("ASSISTANT", diagnosticId) launch@ {
             try {
+                if (diagnosticRepo != null && diagnosticGeneration != null) diagnosticRepo.bindDiagnosticOperation(
+                    ru.outsideproarts.oassist.core.data.chat.ChatRepository.ASSISTANT_CHAT_ID, diagnosticId, diagnosticGeneration,
+                )
                 val factory = AgentFactory.get()
                 val config = runCatching { factory.modeConfig(AssistMode.ASSISTANT) }.getOrNull()
                 val profile = factory.providerForMode(AssistMode.ASSISTANT)
@@ -779,7 +788,7 @@ private var turnTranscript: List<ChatMessage> = emptyList()
                 refreshSessionNotification(force = true)
                 execute(voiceFlow.onTurnFinished(continueDialog))
             } finally {
-                persistAssistantTurn(text)
+                persistAssistantTurn(text, diagnosticId)
                 isStreaming = false
                 srKeepFocusable = false
                 refreshOverlayFocusable()
@@ -792,9 +801,10 @@ private var turnTranscript: List<ChatMessage> = emptyList()
      * перезаписью (новая сессия — новый набор ходов). Пустой ход не пишется:
      * случайно открытый оверлей не затирает сохранённую историю.
      */
-    private fun persistAssistantTurn(userText: String) {
+    private fun persistAssistantTurn(userText: String, diagnosticId: String) {
         if (answer.isBlank() && workEvents.isEmpty()) return
         val stored = ru.outsideproarts.oassist.core.model.StoredTurn(
+            diagnosticOperationId = diagnosticId,
             userText = userText,
             work = workEvents,
             answer = answer,

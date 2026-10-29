@@ -34,6 +34,12 @@ class DataContainer(
     private val deviceContext: Context,
 ) {
 
+    val diagnostics = ru.outsideproarts.oassist.core.data.diagnostics.DiagnosticStore(credentialContext)
+
+    init {
+        ru.outsideproarts.oassist.core.model.diagnostics.Diagnostics.install(diagnostics)
+    }
+
     val secretStore: SecretStore by lazy {
         DataStoreSecretStore(deviceContext, KeystoreAead())
     }
@@ -75,7 +81,11 @@ class DataContainer(
     }
 
     val chats: ChatRepository by lazy {
-        ChatRepository(database, chatMedia)
+        ChatRepository(database, chatMedia).also {
+            it.onDiagnosticDelete = diagnostics::removeConversation
+            it.onDiagnosticBind = diagnostics::bindConversation
+            it.onDiagnosticDiscard = diagnostics::discardOperation
+        }
     }
 
     val database: OAssistDatabase by lazy {
@@ -85,6 +95,7 @@ class DataContainer(
     }
 
     fun close() {
+        diagnostics.close()
         runCatching { database.close() }
     }
 }

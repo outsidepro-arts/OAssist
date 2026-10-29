@@ -44,7 +44,7 @@ class McpClientTest {
     }
 
     private fun client(engine: MockEngine) =
-        McpClient(HttpClient(engine) { expectSuccess = true }, "https://mcp.example.com/mcp")
+        McpClient(ru.outsideproarts.oassist.core.model.diagnostics.Diagnostics, HttpClient(engine) { expectSuccess = true }, "https://mcp.example.com/mcp")
 
     @Test
     fun listTools_handshakesAndLists() = runTest {
@@ -167,7 +167,7 @@ class McpClientTest {
         // Висящий сервер: маленький таймаут детерминированно стреляет
         // на виртуальном времени (единственное отложенное событие).
         val hanging = MockEngine { awaitCancellation() }
-        val mcp = McpClient(HttpClient(hanging) { expectSuccess = true }, "https://mcp.example.com/mcp")
+        val mcp = McpClient(ru.outsideproarts.oassist.core.model.diagnostics.Diagnostics, HttpClient(hanging) { expectSuccess = true }, "https://mcp.example.com/mcp")
         val tool = McpTool(
             serverId = "s",
             serverName = "S",

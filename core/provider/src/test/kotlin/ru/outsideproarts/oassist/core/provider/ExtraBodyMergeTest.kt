@@ -60,7 +60,7 @@ class ExtraBodyMergeTest {
         var body = ""
         val http = capturingClient { body = it }
         try {
-            val client = ModelClient.create(profile(extraBody = """{"user":"u1"}"""), secrets, http)
+            val client = ModelClient.create(ru.outsideproarts.oassist.core.model.diagnostics.Diagnostics, profile(extraBody = """{"user":"u1"}"""), secrets, http)
             client.probeCapabilities("m1")
 
             assertTrue("body: $body", body.contains("\"model\":\"m1\""))
@@ -75,7 +75,7 @@ class ExtraBodyMergeTest {
         var body = ""
         val http = capturingClient { body = it }
         try {
-            val client = ModelClient.create(profile(extraBody = """{"model":"OVERRIDE"}"""), secrets, http)
+            val client = ModelClient.create(ru.outsideproarts.oassist.core.model.diagnostics.Diagnostics, profile(extraBody = """{"model":"OVERRIDE"}"""), secrets, http)
             client.probeCapabilities("m1")
 
             assertTrue("body: $body", body.contains("\"model\":\"OVERRIDE\""))
@@ -89,7 +89,7 @@ class ExtraBodyMergeTest {
         var body = ""
         val http = capturingClient { body = it }
         try {
-            val client = ModelClient.create(profile(extraBody = null), secrets, http)
+            val client = ModelClient.create(ru.outsideproarts.oassist.core.model.diagnostics.Diagnostics, profile(extraBody = null), secrets, http)
             client.probeCapabilities("m1")
 
             assertTrue("body: $body", body.contains("\"model\":\"m1\""))
@@ -110,7 +110,7 @@ class ExtraBodyMergeTest {
             install(ContentNegotiation) { json(WireJson) }
         }
         try {
-            val client = ModelClient.create(
+            val client = ModelClient.create(ru.outsideproarts.oassist.core.model.diagnostics.Diagnostics,
                 profile(extraBody = null, catalogPath = "catalog/").copy(fetchScheme = ModelFetchScheme.MODELS),
                 secrets,
                 http,

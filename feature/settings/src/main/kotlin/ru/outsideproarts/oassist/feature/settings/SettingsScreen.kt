@@ -54,6 +54,7 @@ fun SettingsScreen(
     onNavigateToSkills: () -> Unit = {},
     onNavigateToMemory: () -> Unit = {},
     onNavigateToAssistant: () -> Unit = {},
+    onNavigateToDiagnostics: () -> Unit = {},
     onExport: () -> Unit = {},
     onImport: () -> Unit = {},
     onWipe: () -> Unit = {},
@@ -128,35 +129,35 @@ fun SettingsScreen(
                 subtitle = stringResource(R.string.mode_config_title),
                 icon = Icons.Default.ChevronRight,
                 onClick = { onNavigateToModeConfig("CHAT") },
-                
+
             )
             OAssistSettingRow(
                 title = stringResource(R.string.mode_assistant),
                 subtitle = stringResource(R.string.mode_config_title),
                 icon = Icons.Default.ChevronRight,
                 onClick = { onNavigateToModeConfig("ASSISTANT") },
-                
+
             )
             OAssistSettingRow(
                 title = stringResource(R.string.mode_share),
                 subtitle = stringResource(R.string.mode_config_title),
                 icon = Icons.Default.ChevronRight,
                 onClick = { onNavigateToModeConfig("SHARE") },
-                
+
             )
             OAssistSettingRow(
                 title = stringResource(R.string.settings_assistant_title),
                 subtitle = stringResource(R.string.settings_assistant_subtitle),
                 icon = Icons.Default.ChevronRight,
                 onClick = onNavigateToAssistant,
-                
+
             )
             OAssistSettingRow(
                 title = stringResource(R.string.tools_settings_title),
                 subtitle = stringResource(R.string.tools_settings_subtitle),
                 icon = Icons.Default.ChevronRight,
                 onClick = onNavigateToTools,
-                
+
             )
             OAssistSettingRow(
                 title = stringResource(R.string.settings_search_title),
@@ -169,39 +170,45 @@ fun SettingsScreen(
                 subtitle = stringResource(R.string.mcp_settings_subtitle),
                 icon = Icons.Default.ChevronRight,
                 onClick = onNavigateToMcp,
-                
+
             )
             OAssistSettingRow(
                 title = stringResource(R.string.skills_title),
                 subtitle = stringResource(R.string.skills_subtitle),
                 icon = Icons.Default.ChevronRight,
                 onClick = onNavigateToSkills,
-                
+
             )
             OAssistSettingRow(
                 title = stringResource(R.string.memory_title),
                 subtitle = stringResource(R.string.memory_subtitle),
                 icon = Icons.Default.ChevronRight,
                 onClick = onNavigateToMemory,
-                
+
+            )
+            OAssistSettingRow(
+                title = stringResource(R.string.diagnostics_title),
+                subtitle = stringResource(R.string.diagnostics_subtitle),
+                icon = Icons.Default.ChevronRight,
+                onClick = onNavigateToDiagnostics,
             )
             OAssistSettingRow(
                 title = stringResource(R.string.data_export),
                 icon = Icons.Default.ChevronRight,
                 onClick = onExport,
-                
+
             )
             OAssistSettingRow(
                 title = stringResource(R.string.data_import),
                 icon = Icons.Default.ChevronRight,
                 onClick = onImport,
-                
+
             )
             OAssistSettingRow(
                 title = stringResource(R.string.data_wipe),
                 icon = Icons.Default.ChevronRight,
                 onClick = onWipe,
-                
+
             )
         }
 

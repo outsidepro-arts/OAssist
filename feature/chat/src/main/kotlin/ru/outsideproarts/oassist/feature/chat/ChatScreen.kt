@@ -1,5 +1,6 @@
 package ru.outsideproarts.oassist.feature.chat
 
+import ru.outsideproarts.oassist.core.model.diagnostics.launchDiagnostic
 import android.Manifest
 import android.content.pm.PackageManager
 import androidx.activity.compose.rememberLauncherForActivityResult
@@ -230,7 +231,7 @@ fun ChatScreen(
     /** Фоновое имя диалога от модели; до ответа остаётся плейсхолдер. */
     fun generateTitle(userMsg: String, expectedFirstTurn: StoredTurn) {
         if (titleLocked || turnStore.firstOrNull() !== expectedFirstTurn) return
-        scope.launch {
+        scope.launch(ru.outsideproarts.oassist.core.model.diagnostics.DiagnosticContext(expectedFirstTurn.diagnosticOperationId ?: ru.outsideproarts.oassist.core.model.diagnostics.Diagnostics.newOperationId())) {
             if (titleLocked || turnStore.firstOrNull() !== expectedFirstTurn) return@launch
             val generated = runCatching {
                 ChatTitler.generateTitle(sendMode(), userMsg, AgentFactory.get(), firstAnswer = expectedFirstTurn.answer)
@@ -256,9 +257,11 @@ fun ChatScreen(
         answer: String,
         usage: ProviderUsage?,
         turn: List<ChatMessage>,
+        diagnosticOperationId: String,
     ) {
         turnStore.add(
             StoredTurn(
+                diagnosticOperationId = diagnosticOperationId,
                 userText = userMsg,
                 userAudio = audio,
                 work = work,
@@ -283,11 +286,19 @@ fun ChatScreen(
                 val placeholder = ChatTitler.placeholder(nameSeed)
                 if (isFirstTurn && chatTitle.isBlank()) chatTitle = placeholder
                 if (repo != null) {
+                    val diagnosticOwner = viewModel.diagnosticOperations
+                    val diagnosticSnapshot = diagnosticOwner.toList()
+                    val savedTitle = chatTitle.ifBlank { placeholder }
+                    val savedMode = sendMode()
                     scope.launch {
-                        val id = repo.createChat(sendMode(), chatTitle.ifBlank { placeholder })
-                        chatId = id
+                        val id = repo.createChat(savedMode, savedTitle)
+                        diagnosticSnapshot.forEach { repo.bindDiagnosticOperation(id, it) }
                         repo.appendTurn(id, stored)
-                        if (isFirstTurn) generateTitle(userMsg, stored)
+                        if (chatId == null && turnStore.any { it === stored }) {
+                            chatId = id
+                        }
+                        diagnosticOwner.toList().forEach { repo.bindDiagnosticOperation(id, it) }
+                        if (isFirstTurn && chatId == id) generateTitle(userMsg, stored)
                     }
                 }
             }
@@ -310,7 +321,12 @@ fun ChatScreen(
             assistantIndex = messages.size
             messages.add(ChatItem(ChatRole.ASSISTANT, isStreaming = true))
         }
-        streamJob = scope.launch {
+        val diagnosticId = ru.outsideproarts.oassist.core.model.diagnostics.Diagnostics.newOperationId()
+        viewModel.diagnosticOperations.add(diagnosticId)
+        val diagnosticChatId = chatId
+        val diagnosticRepo = ChatHandle.get()
+        val diagnosticGeneration = diagnosticChatId?.let { diagnosticRepo?.diagnosticGeneration(it) }
+        streamJob = scope.launchDiagnostic(sendMode().name, diagnosticId) launch@ {
             // Хронологическое полотно (мыслевые блоки ↔ тулы) + ответ + usage.
             val timeline = ru.outsideproarts.oassist.core.agent.WorkTimelineBuilder()
             // Разделение в синтезе: комментарии и ответ — два независимых спикера
@@ -338,6 +354,9 @@ fun ChatScreen(
             var turnTranscript: List<ChatMessage> = emptyList()
             var turnRecorded = false
             try {
+                if (diagnosticChatId != null && diagnosticRepo != null && diagnosticGeneration != null) {
+                    diagnosticRepo.bindDiagnosticOperation(diagnosticChatId, diagnosticId, diagnosticGeneration)
+                }
                 val session = sendMessage(sendMode(), userMsg, history, audio) { turnTranscript = it }
                 error = session.chunks.collectSafe { chunk ->
                     when (chunk) {
@@ -388,6 +407,7 @@ fun ChatScreen(
                                 answer = timeline.answerText,
                                 usage = chunk.usage,
                                 turn = turnTranscript,
+                                diagnosticOperationId = diagnosticId,
                             )
                             turnRecorded = true
                         }
@@ -427,6 +447,7 @@ fun ChatScreen(
                             answer = timeline.answerText,
                             usage = timeline.usage,
                             turn = fallbackTurn,
+                            diagnosticOperationId = diagnosticId,
                         )
                         turnRecorded = true
                     }
@@ -513,6 +534,7 @@ fun ChatScreen(
 
     fun openChat(summary: ChatSummary) {
         cancelTurn()
+        viewModel.diagnosticOperations = mutableListOf()
         chatId = summary.id
         chatKind = summary.kind
         chatTitle = summary.title
@@ -537,6 +559,7 @@ fun ChatScreen(
      */
     fun resetChat() {
         cancelTurn()
+        viewModel.diagnosticOperations = mutableListOf()
         chatId = null
         chatKind = ChatKind.REGULAR
         chatTitle = ""
@@ -556,6 +579,7 @@ fun ChatScreen(
         val repo = ChatHandle.get() ?: return
         if (chatId != null || turnStore.isEmpty()) return
         val turns = turnStore.toList()
+        val diagnosticOperations = viewModel.diagnosticOperations.toList()
         // Аудио-ход без текста: имя — из первого текстового хода или ответа.
         val fallbackTitle = ChatTitler.placeholder(
             turns.firstOrNull { it.userText.isNotBlank() }?.userText
@@ -565,6 +589,7 @@ fun ChatScreen(
         val title = chatTitle
         scope.launch {
             val id = repo.createChat(sendMode(), title)
+            diagnosticOperations.forEach { repo.bindDiagnosticOperation(id, it) }
             turns.forEach { repo.appendTurn(id, it) }
             chatId = id
         }

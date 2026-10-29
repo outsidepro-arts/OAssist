@@ -98,6 +98,8 @@ sealed interface ChatChunk {
 
 /** Интерфейс клиента модели. */
 interface ModelClient {
+    /** Values used only for synchronous diagnostic redaction during this client call. */
+    fun diagnosticSecrets(): Collection<String> = emptyList()
     /** Запрос списка моделей у провайдера. */
     suspend fun fetchModels(): List<ModelInfo>
 
@@ -133,28 +135,31 @@ interface ModelClient {
          * [modelsDev] — каталог models.dev для авто-резолва протокола/имён агрегаторов.
          */
         suspend fun create(
+            diagnostics: ru.outsideproarts.oassist.core.model.diagnostics.DiagnosticRecorder,
             profile: ProviderProfile,
             secretStore: ru.outsideproarts.oassist.core.data.secret.SecretStore,
-            httpClient: io.ktor.client.HttpClient = ru.outsideproarts.oassist.core.net.HttpClientFactory.create(),
+            httpClient: io.ktor.client.HttpClient = ru.outsideproarts.oassist.core.net.HttpClientFactory.create(diagnostics),
             overrides: ProviderAuth? = null,
             protocolOverride: suspend (modelId: String) -> ModelProtocol? = { null },
             modelsDev: ru.outsideproarts.oassist.core.provider.modelsdev.ModelsDevCatalog? = null,
         ): ModelClient {
             val auth = resolveProviderAuth(profile, secretStore, overrides)
             return RoutingModelClient(
-                template = endpointTemplate(profile, auth),
+                template = endpointTemplate(profile, auth, diagnostics),
                 http = httpClient,
                 fixedProtocol = profile.protocol,
                 fetchScheme = profile.fetchScheme,
                 protocolOverride = protocolOverride,
                 modelsDev = modelsDev,
                 catalogKey = profile.preset.catalogKeyResolver(),
+                diagnostics = diagnostics,
             )
         }
 
         /** Шаблон точек подключения профиля: схема auth и оформление — из настроек. */
-        private fun endpointTemplate(profile: ProviderProfile, auth: ProviderAuth): EndpointConfig =
+        private fun endpointTemplate(profile: ProviderProfile, auth: ProviderAuth, diagnostics: ru.outsideproarts.oassist.core.model.diagnostics.DiagnosticRecorder): EndpointConfig =
             EndpointConfig(
+                diagnostics = diagnostics,
                 protocol = profile.protocol ?: ModelProtocol.OPENAI_COMPLETIONS,
                 baseUrl = profile.baseUrl,
                 auth = auth,

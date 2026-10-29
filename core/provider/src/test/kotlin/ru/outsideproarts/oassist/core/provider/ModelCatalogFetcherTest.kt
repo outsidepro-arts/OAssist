@@ -23,7 +23,7 @@ import ru.outsideproarts.oassist.core.model.ProviderPreset
  */
 class ModelCatalogFetcherTest {
 
-    private fun endpoint(baseUrl: String): EndpointConfig = EndpointConfig(
+    private fun endpoint(baseUrl: String): EndpointConfig = EndpointConfig(ru.outsideproarts.oassist.core.model.diagnostics.Diagnostics,
         protocol = ModelProtocol.OPENAI_COMPLETIONS,
         baseUrl = baseUrl,
         auth = ProviderAuth(),

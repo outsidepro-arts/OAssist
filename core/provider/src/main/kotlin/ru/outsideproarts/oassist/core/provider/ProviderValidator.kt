@@ -27,6 +27,7 @@ sealed interface ProviderValidationResult {
  * [probeTimeoutMs] — таймаут пробы; null отключает (используется в тестах).
  */
 class ProviderValidator(
+    private val diagnostics: ru.outsideproarts.oassist.core.model.diagnostics.DiagnosticRecorder,
     private val secretStore: SecretStore,
     private val httpClient: HttpClient,
     private val probeTimeoutMs: Long? = DEFAULT_PROBE_TIMEOUT_MS,
@@ -61,7 +62,7 @@ class ProviderValidator(
             )
         }
         return try {
-            val client = ModelClient.create(profile, secretStore, httpClient, overrides)
+            val client = ModelClient.create(diagnostics, profile, secretStore, httpClient, overrides)
             val models = if (probeTimeoutMs != null) {
                 withTimeoutOrNull(probeTimeoutMs) { client.fetchModels() }
                     ?: return ProviderValidationResult.Failure(ProviderError.Network("timeout"))

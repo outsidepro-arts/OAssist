@@ -35,6 +35,7 @@ class ChatSessionViewModel : ViewModel() {
     val messages = mutableStateListOf<ChatItem>()
     // Ходы накапливаются в памяти — источник истины для истории модели и записи в БД.
     val turnStore = mutableStateListOf<StoredTurn>()
+    var diagnosticOperations = mutableListOf<String>()
 
     var chatId by mutableStateOf<String?>(null)
     var chatKind by mutableStateOf(ChatKind.REGULAR)

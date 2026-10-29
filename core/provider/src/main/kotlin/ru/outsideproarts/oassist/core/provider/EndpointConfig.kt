@@ -16,6 +16,9 @@ import ru.outsideproarts.oassist.core.model.ProviderProfile
 import ru.outsideproarts.oassist.core.provider.anthropic.AnthropicClient
 import ru.outsideproarts.oassist.core.provider.gemini.GeminiClient
 import java.util.Base64
+import ru.outsideproarts.oassist.core.model.diagnostics.DiagnosticKind
+import ru.outsideproarts.oassist.core.model.diagnostics.Diagnostics
+import ru.outsideproarts.oassist.core.model.diagnostics.emit
 
 private val SECRET_FILLER: Char = Char.MIN_VALUE
 
@@ -40,6 +43,7 @@ fun interface RequestHeaders {
  * запроса (схема auth, заголовки агрегатора). Все пути дописываются как есть.
  */
 class EndpointConfig(
+    val diagnostics: ru.outsideproarts.oassist.core.model.diagnostics.DiagnosticRecorder,
     val protocol: ModelProtocol,
     val baseUrl: String,
     val auth: ProviderAuth,
@@ -126,13 +130,32 @@ internal fun extraBodyJson(extraBody: String?): JsonObject? {
  * Сериализация — тем же wire-JSON, что и ContentNegotiation: база тела запроса
  * с дополнениями обязана совпадать с обычным телом.
  */
-internal inline fun <reified T> HttpRequestBuilder.setBodyDecorated(endpoint: EndpointConfig, body: T) {
+internal inline fun <reified T> HttpRequestBuilder.setBodyDecorated(endpoint: EndpointConfig, body: T, diagnosticParent: ru.outsideproarts.oassist.core.model.diagnostics.DiagnosticContext? = null) {
+    diagnosticParent?.operationId?.let { attributes.put(ru.outsideproarts.oassist.core.net.DiagnosticOperationKey, it) }
+    attributes.put(ru.outsideproarts.oassist.core.net.DiagnosticAttemptKey, java.util.concurrent.atomic.AtomicInteger())
     val extra = endpoint.extraBody
+    runCatching {
+        val encoded = ru.outsideproarts.oassist.core.net.WireJson.encodeToJsonElement(body)
+        val effective = if (extra == null) encoded else JsonObject(encoded.jsonObject + extra)
+        endpoint.diagnostics.emit(DiagnosticKind.PROVIDER_REQUEST,
+            parentOperationId = diagnosticParent?.operationId,
+            attributes = mapOf("protocol" to endpoint.protocol.name),
+            content = effective.toString(), secrets = endpoint.diagnosticSecrets() + diagnosticParent?.secrets.orEmpty())
+    }.onFailure {
+        endpoint.diagnostics.emit(DiagnosticKind.PROVIDER_ERROR, attributes = mapOf("stage" to "diagnostic_request_encoding"))
+    }
     if (extra == null) {
         setBody(body)
         return
     }
     setBody(JsonObject(ru.outsideproarts.oassist.core.net.WireJson.encodeToJsonElement(body).jsonObject + extra))
+}
+
+internal fun EndpointConfig.diagnosticSecrets(): List<String> = buildList {
+    auth.apiKey?.let { add(String(it)) }
+    auth.basicUser?.let(::add)
+    auth.basicPassword?.let { add(String(it)) }
+    addAll(auth.extraHeaders.values)
 }
 
 /** Разделитель «головы» диалога: прежний символ-разделитель без эскейпов. */

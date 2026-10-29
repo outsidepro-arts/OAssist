@@ -7,6 +7,7 @@ import io.ktor.client.request.HttpRequestBuilder
 import io.ktor.client.request.headers
 import io.ktor.client.request.request
 import ru.outsideproarts.oassist.core.provider.setBodyDecorated
+import ru.outsideproarts.oassist.core.provider.diagnosticSecrets
 import io.ktor.client.statement.bodyAsText
 import io.ktor.http.ContentType
 import io.ktor.http.HttpMethod
@@ -47,10 +48,12 @@ class AnthropicClient internal constructor(
     private val endpoint: EndpointConfig,
     private val http: HttpClient,
 ) : ModelClient {
+    override fun diagnosticSecrets(): Collection<String> = endpoint.diagnosticSecrets()
 
     override suspend fun fetchModels(): List<ModelInfo> = fetchModelCatalog(endpoint, http)
 
     override suspend fun probeCapabilities(modelId: String): Set<ModelCapability> {
+        val diagnosticParent = kotlinx.coroutines.currentCoroutineContext()[ru.outsideproarts.oassist.core.model.diagnostics.DiagnosticContext]
         val requestDto = AnthropicMessagesRequest(
             model = modelId,
             maxTokens = PROBE_MAX_TOKENS,
@@ -64,7 +67,7 @@ class AnthropicClient internal constructor(
                 url.takeFrom(messagesUrl(endpoint.baseUrl))
                 applyAuth(dialogKey = dialogKey(emptyList()))
                 contentType(ContentType.Application.Json)
-                setBodyDecorated(endpoint, requestDto)
+                setBodyDecorated(endpoint, requestDto, diagnosticParent)
             }
             ProviderJson.decodeFromString(
                 AnthropicMessageResponseDto.serializer(),
@@ -75,6 +78,7 @@ class AnthropicClient internal constructor(
             // 400 — модель не приняла `tools`: сигнал, а не ошибка.
             // «Не тот протокол» (агрегаторы) пробрасывается — гейт фолбэка.
             if (e.response.status == HttpStatusCode.BadRequest && !isProtocolUnsupportedMessage(e.message)) {
+                ru.outsideproarts.oassist.core.provider.recordProviderHttpError(endpoint.diagnostics, diagnosticParent?.operationId, e, endpoint.diagnosticSecrets() + diagnosticParent?.secrets.orEmpty())
                 return emptySet()
             }
             throw e
@@ -87,6 +91,7 @@ class AnthropicClient internal constructor(
         tools: List<ToolSchemaDto>,
         reasoningEnabled: Boolean,
     ): Flow<ChatChunk> = flow {
+        val diagnosticParent = kotlinx.coroutines.currentCoroutineContext()[ru.outsideproarts.oassist.core.model.diagnostics.DiagnosticContext]
         val (system, mapped) = mapAnthropicMessages(messages, thinkingEnabled = reasoningEnabled)
         // budget_tokens обязан быть < max_tokens: при включённом thinking
         // поднимаем потолок, иначе API 400 ("max_tokens must exceed budget").
@@ -104,13 +109,15 @@ class AnthropicClient internal constructor(
             stream = true,
             thinking = thinking,
         )
-        http.sse(
+        val capture = ru.outsideproarts.oassist.core.provider.SseDiagnosticCapture(endpoint,
+            diagnosticParent)
+        try { http.sse(
             request = {
                 method = HttpMethod.Post
                 url.takeFrom(messagesUrl(endpoint.baseUrl))
                 applyAuth(dialogKey = dialogKey(messages))
                 contentType(ContentType.Application.Json)
-                setBodyDecorated(endpoint, requestDto)
+                setBodyDecorated(endpoint, requestDto, diagnosticParent)
             },
         ) {
             val acc = AnthropicStreamAccumulator()
@@ -142,6 +149,7 @@ class AnthropicClient internal constructor(
             incoming.collect { event ->
                 val type = event.event ?: return@collect
                 val data = event.data ?: return@collect
+                capture.add(data)
                 when (type) {
                     "message_start" -> {
                         runCatching {
@@ -224,7 +232,7 @@ class AnthropicClient internal constructor(
                 abrupt = !sawStop,
                 usage = currentUsage().withRateLimits(rateLimits),
             ))
-        }
+        } } finally { runCatching { capture.flush() } }
     }
 
     private fun HttpRequestBuilder.applyAuth(dialogKey: String) {
@@ -259,12 +267,14 @@ class AnthropicClient internal constructor(
         internal fun messagesUrl(baseUrl: String): String = "${baseUrl.trimEnd('/')}/messages"
 
         suspend fun fromProfile(
+            diagnostics: ru.outsideproarts.oassist.core.model.diagnostics.DiagnosticRecorder,
             profile: ProviderProfile,
             secretStore: SecretStore,
             httpClient: HttpClient,
             overrides: ProviderAuth? = null,
         ): AnthropicClient = AnthropicClient(
             EndpointConfig(
+                diagnostics = diagnostics,
                 protocol = ModelProtocol.ANTHROPIC_MESSAGES,
                 baseUrl = profile.baseUrl,
                 auth = resolveProviderAuth(profile, secretStore, overrides),

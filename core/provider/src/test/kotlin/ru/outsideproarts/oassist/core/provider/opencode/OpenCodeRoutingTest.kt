@@ -75,7 +75,7 @@ class OpenCodeRoutingTest {
     fun fetchModels_usesOpenAiList_withZenHeaders() = runTest {
         var path = ""
         val captured = mutableMapOf<String, String>()
-        val client = ModelClient.create(zenProfile, secrets, mockClient { request ->
+        val client = ModelClient.create(ru.outsideproarts.oassist.core.model.diagnostics.Diagnostics, zenProfile, secrets, mockClient { request ->
             path = request.url.encodedPath
             request.headers.entries()
                 .filter { it.key.lowercase().startsWith("x-opencode") || it.key.lowercase() == "authorization" }
@@ -95,7 +95,7 @@ class OpenCodeRoutingTest {
     @Test
     fun probe_routesByResolvedProtocol() = runTest {
         val calls = mutableListOf<Pair<String, Map<String, String>>>()
-        val client = ModelClient.create(zenProfile, secrets, mockClient { request ->
+        val client = ModelClient.create(ru.outsideproarts.oassist.core.model.diagnostics.Diagnostics, zenProfile, secrets, mockClient { request ->
             calls += request.url.encodedPath to request.headers.entries()
                 .associate { it.key.lowercase() to it.value.single() }
             respond("{}", status = HttpStatusCode.OK, headers = headersOf("Content-Type", "application/json"))
@@ -128,7 +128,7 @@ class OpenCodeRoutingTest {
     @Test
     fun probe_manualOverrideChangesRoute() = runTest {
         var path = ""
-        val client = ModelClient.create(
+        val client = ModelClient.create(ru.outsideproarts.oassist.core.model.diagnostics.Diagnostics,
             zenProfile,
             secrets,
             mockClient { request ->
@@ -149,7 +149,7 @@ class OpenCodeRoutingTest {
     @Test
     fun probe_fallsBackOnUnsupportedProtocol_andLearnsRoute() = runTest {
         val paths = mutableListOf<String>()
-        val client = ModelClient.create(
+        val client = ModelClient.create(ru.outsideproarts.oassist.core.model.diagnostics.Diagnostics,
             zenProfile,
             secrets,
             mockClient { request ->
@@ -177,7 +177,7 @@ class OpenCodeRoutingTest {
     @Test
     fun probe_allUnsupported_throwsLastClassifiedError() = runTest {
         var attempts = 0
-        val client = ModelClient.create(
+        val client = ModelClient.create(ru.outsideproarts.oassist.core.model.diagnostics.Diagnostics,
             zenProfile,
             secrets,
             mockClient {
@@ -196,7 +196,7 @@ class OpenCodeRoutingTest {
     @Test
     fun probe_notUnsupportedError_propagatesImmediately() = runTest {
         var attempts = 0
-        val client = ModelClient.create(
+        val client = ModelClient.create(ru.outsideproarts.oassist.core.model.diagnostics.Diagnostics,
             zenProfile,
             secrets,
             mockClient {

@@ -82,6 +82,10 @@ class VoiceInputRouter(
     fun acquire(enabled: Boolean): Boolean {
         release()
         val decision = decide(enabled)
+        ru.outsideproarts.oassist.core.model.diagnostics.Diagnostics.record(
+            ru.outsideproarts.oassist.core.model.diagnostics.DiagnosticKind.SPEECH,
+            attributes = mapOf("action" to "input_route", "decision" to decision.name),
+        )
         if (decision != BtInputDecision.USE_BLUETOOTH) {
             logInfo("route=microphone decision=$decision")
             return false

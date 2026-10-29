@@ -1,5 +1,6 @@
 package ru.outsideproarts.oassist.feature.share
 
+import ru.outsideproarts.oassist.core.model.diagnostics.launchDiagnostic
 import android.content.Intent
 import android.net.Uri
 import android.os.Bundle
@@ -153,6 +154,7 @@ private fun ShareFlow(payload: SharePayload) {
     var chatTitle by remember { mutableStateOf("") }
     var titleLocked by remember { mutableStateOf(false) }
     val turns = remember { mutableStateListOf<StoredTurn>() }
+    var diagnosticOperations by remember { mutableStateOf(mutableListOf<String>()) }
     var autoSave by remember { mutableStateOf(true) }
     var images by remember { mutableStateOf<List<ImagePart>>(emptyList()) }
     var pendingSwitch by remember { mutableStateOf<(() -> Unit)?>(null) }
@@ -190,7 +192,7 @@ private fun ShareFlow(payload: SharePayload) {
     // Текстовый порядок: локальные fun объявляются до UI, которые их вызывают.
     fun generateTitle(nameSeed: String, expectedFirstTurn: StoredTurn) {
         if (titleLocked || turns.firstOrNull() !== expectedFirstTurn) return
-        scope.launch {
+        scope.launch(ru.outsideproarts.oassist.core.model.diagnostics.DiagnosticContext(expectedFirstTurn.diagnosticOperationId ?: ru.outsideproarts.oassist.core.model.diagnostics.Diagnostics.newOperationId())) {
             if (titleLocked || turns.firstOrNull() !== expectedFirstTurn) return@launch
             val generated = runCatching {
                 ChatTitler.generateTitle(AssistMode.SHARE, nameSeed, AgentFactory.get())
@@ -218,11 +220,18 @@ private fun ShareFlow(payload: SharePayload) {
                 val placeholder = ChatTitler.placeholder(nameSeed)
                 if (isFirstTurn && chatTitle.isBlank()) chatTitle = placeholder
                 if (repo != null) {
+                    val diagnosticOwner = diagnosticOperations
+                    val diagnosticSnapshot = diagnosticOwner.toList()
+                    val savedTitle = chatTitle.ifBlank { placeholder }
                     scope.launch {
-                        val id = repo.createChat(AssistMode.SHARE, chatTitle.ifBlank { placeholder })
-                        chatId = id
+                        val id = repo.createChat(AssistMode.SHARE, savedTitle)
+                        diagnosticSnapshot.forEach { repo.bindDiagnosticOperation(id, it) }
                         repo.appendTurn(id, stored)
-                        if (isFirstTurn) generateTitle(nameSeed, stored)
+                        if (chatId == null && turns.any { it === stored }) {
+                            chatId = id
+                        }
+                        diagnosticOwner.toList().forEach { repo.bindDiagnosticOperation(id, it) }
+                        if (isFirstTurn && chatId == id) generateTitle(nameSeed, stored)
                     }
                 }
             }
@@ -257,12 +266,18 @@ private fun ShareFlow(payload: SharePayload) {
         response = ""
         turnUsage = null
         var turnTranscript: List<ChatMessage> = emptyList()
+        val diagnosticId = ru.outsideproarts.oassist.core.model.diagnostics.Diagnostics.newOperationId()
+        diagnosticOperations.add(diagnosticId)
+        val diagnosticChatId = chatId
+        val diagnosticRepo = ChatHandle.get()
+        val diagnosticGeneration = diagnosticChatId?.let { diagnosticRepo?.diagnosticGeneration(it) }
         var turnRecorded = false
         fun recordTurn() {
             if (turnRecorded) return
             turnRecorded = true
             if (timeline.isEmpty) return
             val stored = StoredTurn(
+                diagnosticOperationId = diagnosticId,
                 userText = userMsg,
                 modelUserInput = modelInput,
                 userImages = images,
@@ -281,7 +296,10 @@ private fun ShareFlow(payload: SharePayload) {
             activeUserMsg = null
             persistTurn(stored, nameSeed = query)
         }
-        scope.launch {
+        scope.launchDiagnostic("SHARE", diagnosticId) launch@ {
+            if (diagnosticChatId != null && diagnosticRepo != null && diagnosticGeneration != null) {
+                diagnosticRepo.bindDiagnosticOperation(diagnosticChatId, diagnosticId, diagnosticGeneration)
+            }
             val tts = runCatching {
                 AgentFactory.get().modeConfig(AssistMode.SHARE).effectiveTts()
             }.getOrElse { ru.outsideproarts.oassist.core.model.TtsConfig.DEFAULT }
@@ -446,6 +464,7 @@ private fun ShareFlow(payload: SharePayload) {
             payload = payload,
             chats = chats,
             onOpenChat = { summary ->
+                diagnosticOperations = mutableListOf()
                 chatId = summary.id
                 chatTitle = summary.title
                 titleLocked = true
@@ -458,6 +477,7 @@ private fun ShareFlow(payload: SharePayload) {
                 }
             },
             onNewChat = {
+                diagnosticOperations = mutableListOf()
                 chatId = null
                 chatTitle = ""
                 titleLocked = false
@@ -521,11 +541,13 @@ private fun ShareFlow(payload: SharePayload) {
                 val repo = ChatHandle.get()
                 if (chatId == null && repo != null && turns.isNotEmpty()) {
                     val snapshot = turns.toList()
+                    val diagnosticSnapshot = diagnosticOperations.toList()
                     val fallback = ChatTitler.placeholder(snapshot.firstOrNull()?.userText.orEmpty())
                     if (chatTitle.isBlank()) chatTitle = fallback
                     val title = chatTitle
                     scope.launch {
                         val id = repo.createChat(AssistMode.SHARE, title)
+                        diagnosticSnapshot.forEach { repo.bindDiagnosticOperation(id, it) }
                         snapshot.forEach { repo.appendTurn(id, it) }
                         chatId = id
                     }
@@ -541,11 +563,13 @@ private fun ShareFlow(payload: SharePayload) {
                 val repo = ChatHandle.get()
                 if (chatId == null && repo != null && turns.isNotEmpty()) {
                     val snapshot = turns.toList()
+                    val diagnosticSnapshot = diagnosticOperations.toList()
                     val fallback = ChatTitler.placeholder(snapshot.firstOrNull()?.userText.orEmpty())
                     if (chatTitle.isBlank()) chatTitle = fallback
                     val title = chatTitle
                     scope.launch {
                         val id = repo.createChat(AssistMode.SHARE, title)
+                        diagnosticSnapshot.forEach { repo.bindDiagnosticOperation(id, it) }
                         snapshot.forEach { repo.appendTurn(id, it) }
                         chatId = id
                     }

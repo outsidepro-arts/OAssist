@@ -62,7 +62,7 @@ class RoutingModelClientTest {
             respond("missing", status = HttpStatusCode.NotFound)
         }
         try {
-            val client = ModelClient.create(profile(ModelProtocol.ANTHROPIC_MESSAGES), emptySecrets, engine)
+            val client = ModelClient.create(ru.outsideproarts.oassist.core.model.diagnostics.Diagnostics, profile(ModelProtocol.ANTHROPIC_MESSAGES), emptySecrets, engine)
             val result = runCatching { client.probeCapabilities("m") }
             assertTrue("expected failure, got $result", result.isFailure)
             assertEquals(1, requests)
@@ -85,7 +85,7 @@ class RoutingModelClientTest {
             }
         }
         try {
-            val client = ModelClient.create(profile(null), emptySecrets, engine)
+            val client = ModelClient.create(ru.outsideproarts.oassist.core.model.diagnostics.Diagnostics, profile(null), emptySecrets, engine)
             // custom-model не распознаётся эвристикой → completions, потом фолбэк на messages.
             assertEquals(setOf(ModelCapability.TOOLS), client.probeCapabilities("custom-model"))
             assertEquals(2, requests)
@@ -113,7 +113,7 @@ class RoutingModelClientTest {
             }
         }
         try {
-            val client = ModelClient.create(profile(null), emptySecrets, engine)
+            val client = ModelClient.create(ru.outsideproarts.oassist.core.model.diagnostics.Diagnostics, profile(null), emptySecrets, engine)
             assertEquals(setOf(ModelCapability.TOOLS), client.probeCapabilities("custom-model"))
             assertEquals(2, requests)
         } finally {
@@ -129,7 +129,7 @@ class RoutingModelClientTest {
             respond("tools not accepted", status = HttpStatusCode.BadRequest)
         }
         try {
-            val client = ModelClient.create(
+            val client = ModelClient.create(ru.outsideproarts.oassist.core.model.diagnostics.Diagnostics,
                 profile(ModelProtocol.ANTHROPIC_MESSAGES),
                 emptySecrets,
                 engine,
@@ -150,7 +150,7 @@ class RoutingModelClientTest {
             respond("""{"data":[]}""", status = HttpStatusCode.OK, headers = headersOf("Content-Type", "application/json"))
         }
         try {
-            val client = ModelClient.create(
+            val client = ModelClient.create(ru.outsideproarts.oassist.core.model.diagnostics.Diagnostics,
                 profile(null).copy(fetchScheme = ModelFetchScheme.NONE),
                 emptySecrets,
                 engine,
@@ -170,7 +170,7 @@ class RoutingModelClientTest {
             respond("tools not accepted", status = HttpStatusCode.BadRequest)
         }
         try {
-            val client = ModelClient.create(profile(null), emptySecrets, engine)
+            val client = ModelClient.create(ru.outsideproarts.oassist.core.model.diagnostics.Diagnostics, profile(null), emptySecrets, engine)
             assertEquals(emptySet<ModelCapability>(), client.probeCapabilities("gemini-2.5-flash"))
             assertEquals(listOf("/models/gemini-2.5-flash:generateContent"), paths)
         } finally {

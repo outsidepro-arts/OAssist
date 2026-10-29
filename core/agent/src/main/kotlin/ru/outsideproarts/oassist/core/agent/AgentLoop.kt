@@ -2,6 +2,9 @@ package ru.outsideproarts.oassist.core.agent
 
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.flow
+import kotlinx.coroutines.flow.flowOn
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
@@ -20,6 +23,12 @@ import ru.outsideproarts.oassist.core.provider.ModelClient
 import ru.outsideproarts.oassist.core.provider.openai.ToolFunctionSchemaDto
 import ru.outsideproarts.oassist.core.provider.openai.ToolSchemaDto
 import ru.outsideproarts.oassist.core.provider.retryEarlyFailure
+import ru.outsideproarts.oassist.core.model.diagnostics.DiagnosticKind
+import ru.outsideproarts.oassist.core.model.diagnostics.Diagnostics
+import ru.outsideproarts.oassist.core.model.diagnostics.DiagnosticContext
+import ru.outsideproarts.oassist.core.model.diagnostics.DiagnosticRecorder
+import ru.outsideproarts.oassist.core.model.diagnostics.emit
+import kotlinx.serialization.encodeToString
 
 /**
  * Агентный цикл: отправляет сообщения в модель, выполняет вызовы инструментов,
@@ -51,7 +60,10 @@ class AgentLoop(
     /** Заблокирован ли экран в момент запроса (пометка модели и подписи диалога). */
     private val screenLocked: () -> Boolean = { false },
     private val fallbackFarewell: String? = null,
+    private val diagnostics: DiagnosticRecorder,
 ) {
+    private fun diagnosticSecrets(): Collection<String> =
+        modelClient.diagnosticSecrets() + toolRegistry?.diagnosticSecrets().orEmpty()
 
     /** Ответить на запрос подтверждения; `false` — такого ожидания нет. */
     fun resolveApproval(callId: String, decision: ApprovalDecision): Boolean =
@@ -71,6 +83,12 @@ class AgentLoop(
         promptContext: List<ContextData> = emptyList(),
         modelUserInput: ModelUserInput? = null,
     ): Flow<ChatChunk> = flow {
+        val diagnosticOperation = Diagnostics.newOperationId()
+        val parentOperation = currentCoroutineContext()[DiagnosticContext]?.operationId
+        diagnostics.emit(DiagnosticKind.OPERATION_START, diagnosticOperation,
+            parentOperationId = parentOperation,
+            attributes = mapOf("mode" to sessionScope, "operation" to "agent"), secrets = diagnosticSecrets())
+        try {
         val initialInput = modelUserInput ?: ModelUserInput(userMessage)
         val userImages = if (visionEnabled) images.orEmpty() else emptyList()
         val userText = if (!visionEnabled && !images.isNullOrEmpty()) {
@@ -105,6 +123,8 @@ class AgentLoop(
                 ),
             )
         } ?: emptyList()
+        diagnostics.emit(DiagnosticKind.TOOL_SCHEMA, diagnosticOperation,
+            content = Json.encodeToString(tools), secrets = diagnosticSecrets())
 
         var rounds = 0
         // Обрыв стрима модели виден только здесь (внутренний Finish не форвардится).
@@ -136,6 +156,9 @@ class AgentLoop(
                 liveSkillInstructions.toList(),
                 liveToolStatuses,
             )
+            diagnostics.emit(DiagnosticKind.AGENT_ROUND, diagnosticOperation,
+                attributes = mapOf("round" to rounds.toString(), "model" to modelId),
+                content = Json.encodeToString(roundMessages), secrets = diagnosticSecrets())
             val streamRound = modelClient.chatCompletionStream(
                 modelId = modelId,
                 messages = roundMessages,
@@ -150,7 +173,7 @@ class AgentLoop(
                     tools = tools,
                     reasoningEnabled = reasoningEnabled,
                 )
-            }).collect { chunk ->
+            }).flowOn(DiagnosticContext(diagnosticOperation, secrets = diagnosticSecrets())).collect { chunk ->
                 when (chunk) {
                     is ChatChunk.Content -> contentSb.append(chunk.delta)
                     // Мысли — live (UI показывает процесс размышления), без буферизации.
@@ -171,6 +194,11 @@ class AgentLoop(
                 }
             }
             val reasoning = buildReasoningBlock(reasoningSb, reasoningSignature, replayItems)
+            diagnostics.emit(DiagnosticKind.PROVIDER_RESPONSE, diagnosticOperation,
+                attributes = mapOf("round" to rounds.toString(), "abrupt" to streamAbrupt.toString()),
+                content = Json.encodeToString(ChatMessage(ChatRole.ASSISTANT, contentSb.toString(),
+                    toolCalls = toolCalls.map { ru.outsideproarts.oassist.core.model.ToolCallRef(it.id, it.name, it.argumentsJson) },
+                    reasoning = reasoning)), secrets = diagnosticSecrets())
 
             if (toolCalls.isEmpty()) {
                 if (contentSb.isNotEmpty()) emit(ChatChunk.Content(contentSb.toString()))
@@ -189,6 +217,8 @@ class AgentLoop(
                 val finalUsage = turnUsageWithRequests()
                 emit(ChatChunk.Finish(reason = "stop", abrupt = streamAbrupt, usage = finalUsage))
                 finalUsage?.let { events?.onTurnUsage(it) }
+                diagnostics.emit(DiagnosticKind.OPERATION_END, diagnosticOperation,
+                    attributes = mapOf("reason" to "stop", "abrupt" to streamAbrupt.toString()), secrets = diagnosticSecrets())
                 return@flow
             }
 
@@ -226,6 +256,10 @@ class AgentLoop(
                     Json.parseToJsonElement(tc.argumentsJson).jsonObject
                 }
                 val args = parsedArgs.getOrElse { kotlinx.serialization.json.buildJsonObject { } }
+                diagnostics.emit(DiagnosticKind.TOOL_CALL, diagnosticOperation,
+                    attributes = mapOf("name" to tc.name, "call_id" to tc.id,
+                        "arguments_valid" to parsedArgs.isSuccess.toString()),
+                    content = tc.argumentsJson, secrets = diagnosticSecrets())
                 val farewellElement = if (terminalBye) args["farewell"] else null
                 val invalidFarewell = terminalBye && (
                     parsedArgs.isFailure || (farewellElement != null &&
@@ -243,8 +277,13 @@ class AgentLoop(
                     invalidByeBatch -> ToolResult(false, "bye должен быть единственным вызовом раунда; повторите запрос отдельно")
                     invalidFarewell -> ToolResult(false, "Некорректные аргументы bye: farewell должен быть строкой")
                     terminalBye && farewell == null -> ToolResult(false, "Для bye не задан текст прощания")
-                    else -> executeOneTool(tc, args) { emit(it) }
+                    else -> executeOneTool(tc, args, diagnosticOperation) { emit(it) }
                 }
+                diagnostics.emit(DiagnosticKind.TOOL_RESULT, diagnosticOperation,
+                    attributes = mapOf("name" to tc.name, "call_id" to tc.id,
+                        "success" to result.success.toString(), "images_omitted" to result.images.size.toString()),
+                    content = Json.encodeToString(ChatMessage(ChatRole.TOOL, result.output, images = result.images)),
+                    secrets = diagnosticSecrets())
                 if (result.success && toolRegistry?.find(tc.name) is SkillGetTool) {
                     result.ownerInstructions?.takeIf { it.isNotBlank() }?.let(liveSkillInstructions::add)
                 }
@@ -287,6 +326,8 @@ class AgentLoop(
                     val finalUsage = turnUsageWithRequests()
                     emit(ChatChunk.Finish(reason = "stop", abrupt = streamAbrupt, usage = finalUsage, closeSession = true))
                     finalUsage?.let { events?.onTurnUsage(it) }
+                    diagnostics.emit(DiagnosticKind.OPERATION_END, diagnosticOperation,
+                        attributes = mapOf("reason" to "bye"), secrets = diagnosticSecrets())
                     return@flow
                 }
             }
@@ -297,6 +338,16 @@ class AgentLoop(
         val finalUsage = turnUsageWithRequests()
         emit(ChatChunk.Finish(reason = "max_tool_rounds", usage = finalUsage))
         finalUsage?.let { events?.onTurnUsage(it) }
+        diagnostics.emit(DiagnosticKind.OPERATION_END, diagnosticOperation,
+            attributes = mapOf("reason" to "max_tool_rounds"), secrets = diagnosticSecrets())
+        } catch (e: kotlinx.coroutines.CancellationException) {
+            diagnostics.emit(DiagnosticKind.OPERATION_CANCELLED, diagnosticOperation, secrets = diagnosticSecrets())
+            throw e
+        } catch (e: Throwable) {
+            diagnostics.emit(DiagnosticKind.OPERATION_ERROR, diagnosticOperation,
+                attributes = mapOf("error" to e.javaClass.simpleName), secrets = diagnosticSecrets())
+            throw e
+        }
     }
 
     suspend fun complete(
@@ -345,6 +396,7 @@ class AgentLoop(
     private suspend fun executeOneTool(
         tc: ChatChunk.ToolCall,
         args: JsonObject,
+        diagnosticOperation: String,
         emitChunk: suspend (ChatChunk) -> Unit,
     ): ToolResult {
         if (toolRegistry == null) return ToolResult(false, "Инструменты недоступны")
@@ -354,13 +406,22 @@ class AgentLoop(
         }
 
         val permResult = gateRuntimePermissions(tool)
-        if (permResult != null) return permResult
+        if (permResult != null) {
+            diagnostics.emit(DiagnosticKind.TOOL_CALL, diagnosticOperation,
+                attributes = mapOf("name" to tc.name, "call_id" to tc.id, "stage" to "runtime_permission"), secrets = diagnosticSecrets())
+            return permResult
+        }
 
         val groupKey = toolRegistry.groupKey(tc.name)
-        return when (approvalPolicy.state(groupKey, sessionScope)) {
-            ApprovalState.ALLOW -> toolRegistry.execute(tc.name, args)
+        val approvalState = approvalPolicy.state(groupKey, sessionScope)
+        diagnostics.emit(DiagnosticKind.TOOL_CALL, diagnosticOperation,
+            attributes = mapOf("name" to tc.name, "call_id" to tc.id, "approval_state" to approvalState.name), secrets = diagnosticSecrets())
+        return when (approvalState) {
+            ApprovalState.ALLOW -> withContext(DiagnosticContext(diagnosticOperation)) {
+                toolRegistry.execute(tc.name, args)
+            }
             ApprovalState.DENY -> ToolResult(false, DENIED_MESSAGE)
-            ApprovalState.ASK -> askAndExecute(toolRegistry, tc, args, tool, groupKey, emitChunk)
+            ApprovalState.ASK -> askAndExecute(toolRegistry, tc, args, tool, groupKey, diagnosticOperation, emitChunk)
         }
     }
 
@@ -402,6 +463,7 @@ class AgentLoop(
         args: JsonObject,
         tool: Tool?,
         groupKey: String,
+        diagnosticOperation: String,
         emitChunk: suspend (ChatChunk) -> Unit,
     ): ToolResult {
         val summary = tool?.describeForConfirmation(args) ?: "${tc.name}: ${tc.argumentsJson}"
@@ -420,6 +482,8 @@ class AgentLoop(
             ),
         )
         val decision = approvalController.awaitDecision(tc.id)
+        diagnostics.emit(DiagnosticKind.TOOL_CALL, diagnosticOperation,
+            attributes = mapOf("name" to tc.name, "call_id" to tc.id, "approval_decision" to decision.name), secrets = diagnosticSecrets())
         when (decision) {
             ApprovalDecision.ALLOW_SESSION -> approvalPolicy.setSessionAllow(groupKey, sessionScope)
             ApprovalDecision.ALWAYS_ALLOW -> approvalPolicy.setRemembered(groupKey, ApprovalState.ALLOW)
@@ -430,7 +494,7 @@ class AgentLoop(
         return if (decision == ApprovalDecision.DENY || decision == ApprovalDecision.ALWAYS_DENY) {
             ToolResult(false, DENIED_MESSAGE + note)
         } else {
-            val result = registry.execute(tc.name, args)
+            val result = withContext(DiagnosticContext(diagnosticOperation)) { registry.execute(tc.name, args) }
             result.copy(output = note + result.output)
         }
     }

@@ -8,6 +8,7 @@ import io.ktor.client.request.headers
 import io.ktor.client.request.parameter
 import io.ktor.client.request.request
 import ru.outsideproarts.oassist.core.provider.setBodyDecorated
+import ru.outsideproarts.oassist.core.provider.diagnosticSecrets
 import io.ktor.client.statement.bodyAsText
 import io.ktor.http.ContentType
 import io.ktor.http.HttpMethod
@@ -48,10 +49,12 @@ class GeminiClient internal constructor(
     private val endpoint: EndpointConfig,
     private val http: HttpClient,
 ) : ModelClient {
+    override fun diagnosticSecrets(): Collection<String> = endpoint.diagnosticSecrets()
 
     override suspend fun fetchModels(): List<ModelInfo> = fetchModelCatalog(endpoint, http)
 
     override suspend fun probeCapabilities(modelId: String): Set<ModelCapability> {
+        val diagnosticParent = kotlinx.coroutines.currentCoroutineContext()[ru.outsideproarts.oassist.core.model.diagnostics.DiagnosticContext]
         val requestDto = GeminiGenerateRequest(
             contents = listOf(GeminiContentDto(parts = listOf(GeminiPartDto(text = PROBE_TEXT)))),
             tools = listOf(GeminiToolsDto(functionDeclarations = listOf(
@@ -64,7 +67,7 @@ class GeminiClient internal constructor(
                 url.takeFrom(contentUrl(endpoint.baseUrl, modelId))
                 applyAuth(dialogKey = dialogKey(emptyList()))
                 contentType(ContentType.Application.Json)
-                setBodyDecorated(endpoint, requestDto)
+                setBodyDecorated(endpoint, requestDto, diagnosticParent)
             }
             ProviderJson.decodeFromString(
                 GeminiStreamChunkDto.serializer(),
@@ -75,6 +78,7 @@ class GeminiClient internal constructor(
             // 400 — модель не приняла `tools`: сигнал, а не ошибка.
             // «Не тот протокол» (агрегаторы) пробрасывается — гейт фолбэка.
             if (e.response.status == HttpStatusCode.BadRequest && !isProtocolUnsupportedMessage(e.message)) {
+                ru.outsideproarts.oassist.core.provider.recordProviderHttpError(endpoint.diagnostics, diagnosticParent?.operationId, e, endpoint.diagnosticSecrets() + diagnosticParent?.secrets.orEmpty())
                 return emptySet()
             }
             throw e
@@ -87,20 +91,23 @@ class GeminiClient internal constructor(
         tools: List<ToolSchemaDto>,
         reasoningEnabled: Boolean,
     ): Flow<ChatChunk> = flow {
+        val diagnosticParent = kotlinx.coroutines.currentCoroutineContext()[ru.outsideproarts.oassist.core.model.diagnostics.DiagnosticContext]
         val (system, contents) = mapGeminiContents(messages)
         val requestDto = GeminiGenerateRequest(
             systemInstruction = system,
             contents = contents,
             tools = mapGeminiTools(tools),
         )
-        http.sse(
+        val capture = ru.outsideproarts.oassist.core.provider.SseDiagnosticCapture(endpoint,
+            diagnosticParent)
+        try { http.sse(
             request = {
                 method = HttpMethod.Post
                 url.takeFrom(generateUrl(endpoint.baseUrl, modelId))
                 applyAuth(dialogKey = dialogKey(messages))
                 contentType(ContentType.Application.Json)
                 parameter("alt", "sse")
-                setBodyDecorated(endpoint, requestDto)
+                setBodyDecorated(endpoint, requestDto, diagnosticParent)
             },
         ) {
             var nextId = 0
@@ -110,6 +117,7 @@ class GeminiClient internal constructor(
             val rateLimits = RateLimitHeaders.parse(call.response.headers)
             incoming.collect { event ->
                 val data = event.data ?: return@collect
+                capture.add(data)
                 val dto = runCatching {
                     ProviderJson.decodeFromString(GeminiStreamChunkDto.serializer(), data)
                 }.getOrNull()
@@ -141,7 +149,7 @@ class GeminiClient internal constructor(
                 abrupt = finish == null,
                 usage = usage.withRateLimits(rateLimits),
             ))
-        }
+        } } finally { runCatching { capture.flush() } }
     }
 
     private fun HttpRequestBuilder.applyAuth(dialogKey: String) {
@@ -165,12 +173,14 @@ class GeminiClient internal constructor(
             "${baseUrl.trimEnd('/')}/models/${modelId.removePrefix(MODELS_PREFIX)}:streamGenerateContent"
 
         suspend fun fromProfile(
+            diagnostics: ru.outsideproarts.oassist.core.model.diagnostics.DiagnosticRecorder,
             profile: ProviderProfile,
             secretStore: SecretStore,
             httpClient: HttpClient,
             overrides: ProviderAuth? = null,
         ): GeminiClient = GeminiClient(
             EndpointConfig(
+                diagnostics = diagnostics,
                 protocol = ModelProtocol.GEMINI_GENERATE,
                 baseUrl = profile.baseUrl,
                 auth = resolveProviderAuth(profile, secretStore, overrides),

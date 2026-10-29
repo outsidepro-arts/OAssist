@@ -17,7 +17,7 @@ import org.junit.Test
 class HttpRequestRetryTest {
 
     private fun client(engine: MockEngine): HttpClient = HttpClient(engine) {
-        installRetryPolicy(maxDelayMs = 20, randomizationMs = 0)
+        installRetryPolicy(ru.outsideproarts.oassist.core.model.diagnostics.Diagnostics, maxDelayMs = 20, randomizationMs = 0)
         expectSuccess = true
     }
 

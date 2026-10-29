@@ -4,6 +4,10 @@ import androidx.room.withTransaction
 import java.util.UUID
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
+import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.atomic.AtomicLong
 import ru.outsideproarts.oassist.core.data.db.ChatEntity
 import ru.outsideproarts.oassist.core.data.db.OAssistDatabase
 import ru.outsideproarts.oassist.core.data.db.TurnEntity
@@ -23,6 +27,9 @@ class ChatRepository(
     private val media: ChatMediaStore,
     private val clock: () -> Long = { System.currentTimeMillis() },
 ) {
+    private val diagnosticOwnershipLock = Mutex()
+    private val deletedChatIds = mutableSetOf<String>()
+    private val diagnosticGenerations = ConcurrentHashMap<String, AtomicLong>()
 
     fun observeChats(): Flow<List<ChatSummary>> =
         database.chatDao().observeAll().map { list -> list.map { it.toSummary() } }
@@ -50,9 +57,18 @@ class ChatRepository(
     }
 
     suspend fun deleteChat(id: String) {
-        database.withTransaction {
-            database.turnDao().deleteForChat(id)
-            database.chatDao().delete(id)
+        val diagnosticRoots = database.turnDao().listForChat(id)
+            .mapNotNull { TurnCodec.diagnosticOperationId(it.payload) }.toSet()
+        diagnosticOwnershipLock.withLock {
+            diagnosticGenerations.computeIfAbsent(id) { AtomicLong() }.incrementAndGet()
+            deletedChatIds.add(id)
+            kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+                onDiagnosticDelete(id, diagnosticRoots)
+            }
+            database.withTransaction {
+                database.turnDao().deleteForChat(id)
+                database.chatDao().delete(id)
+            }
         }
         media.deleteChat(id)
     }
@@ -126,6 +142,25 @@ class ChatRepository(
             database.chatDao().deleteAll()
         }
         media.deleteAll()
+    }
+
+    var onDiagnosticDelete: (String, Set<String>) -> Unit = { _, _ -> }
+    var onDiagnosticBind: (String, String) -> Unit = { _, _ -> }
+    var onDiagnosticDiscard: (String) -> Unit = { }
+
+    fun diagnosticGeneration(chatId: String): Long =
+        diagnosticGenerations.computeIfAbsent(chatId) { AtomicLong() }.get()
+
+    suspend fun bindDiagnosticOperation(chatId: String, operationId: String, generation: Long = diagnosticGeneration(chatId)) {
+        diagnosticOwnershipLock.withLock {
+            if (chatId == ASSISTANT_CHAT_ID && generation == diagnosticGeneration(chatId) && chatId in deletedChatIds) {
+                deletedChatIds.remove(chatId)
+            }
+            kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+                if (generation != diagnosticGeneration(chatId) || chatId in deletedChatIds) onDiagnosticDiscard(operationId)
+                else onDiagnosticBind(chatId, operationId)
+            }
+        }
     }
 
     private fun ChatEntity.toSummary(): ChatSummary = ChatSummary(

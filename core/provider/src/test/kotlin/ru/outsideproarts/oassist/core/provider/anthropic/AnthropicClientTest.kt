@@ -42,7 +42,7 @@ class AnthropicClientTest {
             baseUrl = baseUrl,
         )
         return kotlinx.coroutines.runBlocking {
-            AnthropicClient.fromProfile(
+            AnthropicClient.fromProfile(ru.outsideproarts.oassist.core.model.diagnostics.Diagnostics,
                 profile,
                 emptySecrets,
                 http,

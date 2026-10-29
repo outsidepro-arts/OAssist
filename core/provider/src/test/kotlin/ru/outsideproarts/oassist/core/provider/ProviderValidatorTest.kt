@@ -46,7 +46,7 @@ class ProviderValidatorTest {
         respond("unexpected request", status = HttpStatusCode.InternalServerError)
     }
 
-    private fun validator(engine: MockEngine) = ProviderValidator(
+    private fun validator(engine: MockEngine) = ProviderValidator(ru.outsideproarts.oassist.core.model.diagnostics.Diagnostics,
         emptySecrets,
         HttpClient(engine) { expectSuccess = true },
         probeTimeoutMs = null,

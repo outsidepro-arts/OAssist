@@ -29,6 +29,7 @@ class McpTool(
      */
     private val callTimeoutMs: Long = CALL_TIMEOUT_MS,
 ) : Tool {
+    override fun diagnosticSecrets(): Collection<String> = client.diagnosticSecrets()
 
     override val schema: ToolSchema = ToolSchema(
         name = displayName,

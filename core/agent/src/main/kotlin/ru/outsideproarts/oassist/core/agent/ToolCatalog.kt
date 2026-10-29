@@ -6,6 +6,7 @@ import ru.outsideproarts.oassist.core.device.PrivExecutor
 import ru.outsideproarts.oassist.core.model.ToolGroups
 import ru.outsideproarts.oassist.core.model.ToolPreferences
 import ru.outsideproarts.oassist.core.speech.VoiceCaptureController
+import ru.outsideproarts.oassist.core.model.diagnostics.DiagnosticRecorder
 
 /** Метаданные инструмента для экрана настроек (без Context — имя и группа разрешений). */
 data class ToolDescriptor(
@@ -110,6 +111,7 @@ object ToolCatalog {
         priv: PrivExecutor,
         search: SearchActions,
         externalTools: List<Tool> = emptyList(),
+        diagnostics: DiagnosticRecorder,
     ): ToolRegistry {
         val builtIn = createTools(actions, ui, notify, media, webContent, webRender, voiceCapture, memory, skills, priv, search)
         val builtInNames = builtIn.map { it.schema.name }.toSet()
@@ -118,6 +120,7 @@ object ToolCatalog {
         return ToolRegistry(
             tools = builtIn + external,
             disabled = prefs.disabled,
+            diagnostics = diagnostics,
         )
     }
 }

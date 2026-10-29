@@ -2,6 +2,9 @@ package ru.outsideproarts.oassist.core.data.chat
 
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.jsonPrimitive
+import kotlinx.serialization.json.contentOrNull
 import ru.outsideproarts.oassist.core.model.AudioPart
 import ru.outsideproarts.oassist.core.model.ChatMessage
 import ru.outsideproarts.oassist.core.model.ChatRole
@@ -17,6 +20,7 @@ import ru.outsideproarts.oassist.core.model.WorkEvent
 
 @Serializable
 internal data class TurnPayload(
+    val diagnosticOperationId: String? = null,
     val userText: String = "",
     val modelUserInput: ModelUserInputJson? = null,
     val userAudio: MediaJson? = null,
@@ -89,6 +93,7 @@ object TurnCodec {
 
     fun encode(turn: StoredTurn, chatId: String, turnId: String, media: ChatMediaStore): String {
         val payload = TurnPayload(
+            diagnosticOperationId = turn.diagnosticOperationId,
             userText = turn.userText,
             modelUserInput = turn.modelUserInput?.let {
                 ModelUserInputJson(it.requestText, it.context.map { part -> part.toJson() })
@@ -118,12 +123,17 @@ object TurnCodec {
         return json.encodeToString(TurnPayload.serializer(), payload)
     }
 
+    fun diagnosticOperationId(payload: String): String? = runCatching {
+        json.parseToJsonElement(payload).jsonObject["diagnosticOperationId"]?.jsonPrimitive?.contentOrNull
+    }.getOrNull()
+
     /** Null — payload нечитаем (повреждён); загрузка диалога такие ходы пропускает. */
     fun decode(payload: String, media: ChatMediaStore): StoredTurn? {
         val dto = runCatching {
             json.decodeFromString(TurnPayload.serializer(), payload)
         }.getOrNull() ?: return null
         return StoredTurn(
+            diagnosticOperationId = dto.diagnosticOperationId,
             userText = dto.userText,
             modelUserInput = dto.modelUserInput?.let {
                 ModelUserInput(it.requestText, it.context.map { part -> part.toModel() })

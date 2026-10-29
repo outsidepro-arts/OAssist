@@ -11,6 +11,12 @@ import io.ktor.http.contentType
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.buildJsonObject
+import ru.outsideproarts.oassist.core.model.diagnostics.DiagnosticContext
+import ru.outsideproarts.oassist.core.model.diagnostics.DiagnosticKind
+import ru.outsideproarts.oassist.core.model.diagnostics.DiagnosticRecorder
+import ru.outsideproarts.oassist.core.model.diagnostics.Diagnostics
+import ru.outsideproarts.oassist.core.model.diagnostics.emit
+import kotlinx.coroutines.currentCoroutineContext
 
 /**
  * Ошибка MCP-сервера: человекочитаемый текст без тел ответов целиком
@@ -33,10 +39,21 @@ data class McpToolInfo(
  * см. `McpServerRepository.resolveHeaders`): клиент секретов не касается.
  */
 class McpClient(
+    private val diagnostics: DiagnosticRecorder,
     private val http: HttpClient,
     private val url: String,
     private val headers: Map<String, String> = emptyMap(),
 ) {
+    internal fun diagnosticSecrets(): Collection<String> = headers.flatMap { (name, value) ->
+        val credentials = if (name.equals(HttpHeaders.Authorization, ignoreCase = true) ||
+            name.equals(HttpHeaders.ProxyAuthorization, ignoreCase = true)
+        ) {
+            val parts = value.trim().split(Regex("\\s+"), limit = 2)
+            if (parts.size == 2 && (parts[0].equals("Bearer", ignoreCase = true) ||
+                    parts[0].equals("Basic", ignoreCase = true))) listOf(parts[1]) else emptyList()
+        } else emptyList()
+        listOf(value) + credentials
+    }
 
     /** Сессия Streamable HTTP: null — stateless-сервер. */
     private var sessionId: String? = null
@@ -109,8 +126,17 @@ class McpClient(
     }
 
     private suspend fun doPost(method: String, params: JsonElement): McpResponseDto {
+        val operation = Diagnostics.newOperationId()
+        val parent = currentCoroutineContext()[DiagnosticContext]?.operationId
+        val secrets = diagnosticSecrets()
+        diagnostics.emit(DiagnosticKind.OPERATION_START, operation, parentOperationId = parent,
+            attributes = mapOf("operation" to "mcp", "method" to method),
+            content = params.toString(), secrets = secrets)
+        try {
         val request = McpRequestDto(id = nextId(), method = method, params = params)
         val httpResponse = http.post(url) {
+            attributes.put(ru.outsideproarts.oassist.core.net.DiagnosticOperationKey, operation)
+            attributes.put(ru.outsideproarts.oassist.core.net.DiagnosticAttemptKey, java.util.concurrent.atomic.AtomicInteger())
             // tools/call может иметь сайд-эффект (отправить/создать): авто-повтор
             // задвоит действие, если запрос дошёл, а ответ потерялся. initialize
             // и tools/list идемпотентны — им повтор HttpRequestRetry полезен.
@@ -128,7 +154,19 @@ class McpClient(
         }
         httpResponse.headers[SESSION_HEADER]?.let { sessionId = it }
         val contentType = httpResponse.headers[HttpHeaders.ContentType]
-        return parseRpcBody(httpResponse.bodyAsText(), contentType, method)
+        val parsed = parseRpcBody(httpResponse.bodyAsText(), contentType, method)
+        diagnostics.emit(DiagnosticKind.OPERATION_END, operation,
+            attributes = mapOf("status" to httpResponse.status.value.toString(), "method" to method),
+            content = McpJson.encodeToString(McpResponseDto.serializer(), parsed), secrets = secrets)
+        return parsed
+        } catch (e: kotlinx.coroutines.CancellationException) {
+            diagnostics.emit(DiagnosticKind.OPERATION_CANCELLED, operation, secrets = secrets)
+            throw e
+        } catch (e: Throwable) {
+            diagnostics.emit(DiagnosticKind.OPERATION_ERROR, operation,
+                attributes = mapOf("error" to e.javaClass.simpleName, "method" to method), secrets = secrets)
+            throw e
+        }
     }
 
     companion object {

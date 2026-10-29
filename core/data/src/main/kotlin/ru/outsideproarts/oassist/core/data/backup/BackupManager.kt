@@ -80,6 +80,7 @@ class BackupManager(private val data: DataContainer) {
         data.memory.clear()
         data.approvals.clear()
         data.chats.clearAll()
+        data.diagnostics.clear()
         data.secretStore.clearAll()
         data.settings.setLanguage(AppLanguage.DEFAULT)
     }

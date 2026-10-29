@@ -110,7 +110,7 @@ class RuntimeContextWireTest {
                     protocol = case.protocol,
                     baseUrl = server.baseUrl + case.basePath,
                 )
-                val client = ModelClient.create(profile, secrets, http)
+                val client = ModelClient.create(ru.outsideproarts.oassist.core.model.diagnostics.Diagnostics, profile, secrets, http)
                 AgentLoop(client).stream(
                     modelId = "model-under-test",
                     systemPrompt = prompt.instructions,
@@ -179,7 +179,7 @@ class RuntimeContextWireTest {
                 preset = ProviderPreset.CUSTOM, protocol = ModelProtocol.OPENAI_COMPLETIONS,
                 baseUrl = server.baseUrl + "/v1",
             )
-            val agent = AgentLoop(ModelClient.create(profile, secrets, http), ToolRegistry(listOf(PingTool())))
+            val agent = AgentLoop(ModelClient.create(ru.outsideproarts.oassist.core.model.diagnostics.Diagnostics, profile, secrets, http), ToolRegistry(listOf(PingTool())))
             agent.stream(
                 modelId = "model-under-test",
                 systemPrompt = prompt.instructions,
@@ -235,7 +235,7 @@ class RuntimeContextWireTest {
                 preset = ProviderPreset.CUSTOM, protocol = ModelProtocol.OPENAI_COMPLETIONS,
                 baseUrl = server.baseUrl + "/v1",
             )
-            AgentLoop(ModelClient.create(profile, secrets, http)).stream(
+            AgentLoop(ModelClient.create(ru.outsideproarts.oassist.core.model.diagnostics.Diagnostics, profile, secrets, http)).stream(
                 modelId = "model-under-test",
                 systemPrompt = null,
                 history = emptyList(),

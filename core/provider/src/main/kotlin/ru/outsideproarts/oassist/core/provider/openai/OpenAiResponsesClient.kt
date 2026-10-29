@@ -6,6 +6,7 @@ import io.ktor.client.plugins.sse.sse
 import io.ktor.client.request.HttpRequestBuilder
 import io.ktor.client.request.request
 import ru.outsideproarts.oassist.core.provider.setBodyDecorated
+import ru.outsideproarts.oassist.core.provider.diagnosticSecrets
 import io.ktor.client.statement.bodyAsText
 import io.ktor.http.ContentType
 import io.ktor.http.HttpHeaders
@@ -54,10 +55,12 @@ class OpenAiResponsesClient internal constructor(
     private val endpoint: EndpointConfig,
     private val http: HttpClient,
 ) : ModelClient {
+    override fun diagnosticSecrets(): Collection<String> = endpoint.diagnosticSecrets()
 
     override suspend fun fetchModels(): List<ModelInfo> = fetchModelCatalog(endpoint, http)
 
     override suspend fun probeCapabilities(modelId: String): Set<ModelCapability> {
+        val diagnosticParent = kotlinx.coroutines.currentCoroutineContext()[ru.outsideproarts.oassist.core.model.diagnostics.DiagnosticContext]
         val requestDto = ResponsesRequestDto(
             model = modelId,
             input = listOf(userTextItem(PROBE_TEXT)),
@@ -72,7 +75,7 @@ class OpenAiResponsesClient internal constructor(
                 url.takeFrom(responsesUrl())
                 applyAuth(dialogKey = dialogKey(emptyList()))
                 contentType(ContentType.Application.Json)
-                setBodyDecorated(endpoint, requestDto)
+                setBodyDecorated(endpoint, requestDto, diagnosticParent)
             }
             ProviderJson.decodeFromString(ResponsesStreamEventDto.serializer(), response.bodyAsText())
             return setOf(ModelCapability.TOOLS)
@@ -80,6 +83,7 @@ class OpenAiResponsesClient internal constructor(
             // 400 — сервер не принял `tools`: сигнал, а не ошибка.
             // «Не тот протокол» (агрегаторы) пробрасывается — гейт фолбэка.
             if (e.response.status == HttpStatusCode.BadRequest && !isProtocolUnsupportedMessage(e.message)) {
+                ru.outsideproarts.oassist.core.provider.recordProviderHttpError(endpoint.diagnostics, diagnosticParent?.operationId, e, endpoint.diagnosticSecrets() + diagnosticParent?.secrets.orEmpty())
                 return emptySet()
             }
             throw e
@@ -92,6 +96,7 @@ class OpenAiResponsesClient internal constructor(
         tools: List<ToolSchemaDto>,
         reasoningEnabled: Boolean,
     ): Flow<ChatChunk> = flow {
+        val diagnosticParent = kotlinx.coroutines.currentCoroutineContext()[ru.outsideproarts.oassist.core.model.diagnostics.DiagnosticContext]
         val (instructions, input) = mapResponsesInput(messages)
         val requestDto = ResponsesRequestDto(
             model = modelId,
@@ -105,13 +110,15 @@ class OpenAiResponsesClient internal constructor(
             reasoning = if (reasoningEnabled) ResponsesReasoningDto(summary = "auto") else null,
             include = if (reasoningEnabled) listOf(REASONING_ENCRYPTED_INCLUDE) else null,
         )
-        http.sse(
+        val capture = ru.outsideproarts.oassist.core.provider.SseDiagnosticCapture(endpoint,
+            diagnosticParent)
+        try { http.sse(
             request = {
                 method = HttpMethod.Post
                 url.takeFrom(responsesUrl())
                 applyAuth(dialogKey = dialogKey(messages))
                 contentType(ContentType.Application.Json)
-                setBodyDecorated(endpoint, requestDto)
+                setBodyDecorated(endpoint, requestDto, diagnosticParent)
             },
         ) {
             val pending = mutableMapOf<String, PendingCall>()
@@ -121,6 +128,7 @@ class OpenAiResponsesClient internal constructor(
             val rateLimits = RateLimitHeaders.parse(call.response.headers)
             incoming.collect { event ->
                 val data = event.data ?: return@collect
+                capture.add(data)
                 val dto = runCatching {
                     ProviderJson.decodeFromString(ResponsesStreamEventDto.serializer(), data)
                 }.getOrNull()
@@ -225,7 +233,7 @@ class OpenAiResponsesClient internal constructor(
                 abrupt = lastFinish == null,
                 usage = usage.withRateLimits(rateLimits),
             ))
-        }
+        } } finally { runCatching { capture.flush() } }
     }
 
     private fun responsesUrl(): String = URLBuilder(endpoint.baseUrl).apply {

@@ -49,7 +49,7 @@ class McpToolNameTest {
         try {
             val tool = McpTool(
                 "server", "server \"name\"", "read", "mcp_server__read", docs, parameters,
-                McpClient(http, "https://example.test/mcp", emptyMap()),
+                McpClient(ru.outsideproarts.oassist.core.model.diagnostics.Diagnostics, http, "https://example.test/mcp", emptyMap()),
             )
             val quoted = Json.parseToJsonElement(tool.schema.description.substringAfter('\n')).jsonObject
             assertEquals(docs, quoted["documentation"]!!.jsonPrimitive.content)

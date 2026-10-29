@@ -42,7 +42,7 @@ class GeminiClientTest {
             baseUrl = baseUrl,
         )
         return kotlinx.coroutines.runBlocking {
-            GeminiClient.fromProfile(
+            GeminiClient.fromProfile(ru.outsideproarts.oassist.core.model.diagnostics.Diagnostics,
                 profile,
                 emptySecrets,
                 http,

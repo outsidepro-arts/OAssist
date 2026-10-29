@@ -383,6 +383,10 @@ class SpeechOutput(
     fun speak(sentence: String) {
         val text = MarkdownPlain.strip(sentence.trim())
         if (text.isEmpty()) return
+        ru.outsideproarts.oassist.core.model.diagnostics.Diagnostics.record(
+            ru.outsideproarts.oassist.core.model.diagnostics.DiagnosticKind.SPEECH,
+            attributes = mapOf("action" to "output_submit", "channel" to channel.name, "characters" to text.length.toString()),
+        )
         when (channel) {
             SpeechOutputChannel.OFF -> {}
             SpeechOutputChannel.SYSTEM_TTS -> {
@@ -491,6 +495,10 @@ class SpeechOutput(
      * скринридера тоже сбрасывается. Уже сказанное остаётся сказанным.
      */
     fun stop() {
+        ru.outsideproarts.oassist.core.model.diagnostics.Diagnostics.record(
+            ru.outsideproarts.oassist.core.model.diagnostics.DiagnosticKind.SPEECH,
+            attributes = mapOf("action" to "output_stop"),
+        )
         tts?.stop()
         resetUtterances()
         screenReader.stop()

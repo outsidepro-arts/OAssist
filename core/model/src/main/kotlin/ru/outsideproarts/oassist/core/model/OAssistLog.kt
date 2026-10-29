@@ -37,14 +37,18 @@ object OAssistLog : RedactingLogger {
         if (priority < minPriority) return
         val safe = SecretRedactor.redact(message)
         val safeTag = SecretRedactor.redact(tag)
-        sink?.invoke(priority, safeTag, safe, throwable)
+        val safeThrowable = throwable?.let(::sanitizeLogThrowable)
+        sink?.invoke(priority, safeTag, safe, safeThrowable)
         when (priority) {
-            Log.VERBOSE -> Log.v(safeTag, safe, throwable)
-            Log.DEBUG -> Log.d(safeTag, safe, throwable)
-            Log.INFO -> Log.i(safeTag, safe, throwable)
-            Log.WARN -> Log.w(safeTag, safe, throwable)
-            Log.ERROR -> Log.e(safeTag, safe, throwable)
+            Log.VERBOSE -> Log.v(safeTag, safe, safeThrowable)
+            Log.DEBUG -> Log.d(safeTag, safe, safeThrowable)
+            Log.INFO -> Log.i(safeTag, safe, safeThrowable)
+            Log.WARN -> Log.w(safeTag, safe, safeThrowable)
+            Log.ERROR -> Log.e(safeTag, safe, safeThrowable)
             else -> Log.println(priority, safeTag, safe)
         }
     }
 }
+
+internal fun sanitizeLogThrowable(source: Throwable): Throwable =
+    Throwable(source.javaClass.simpleName).apply { stackTrace = source.stackTrace }

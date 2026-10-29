@@ -4,6 +4,7 @@ import io.ktor.client.HttpClient
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.flow
+import kotlinx.coroutines.flow.flowOn
 import ru.outsideproarts.oassist.core.model.ChatMessage
 import ru.outsideproarts.oassist.core.model.ModelCapability
 import ru.outsideproarts.oassist.core.model.ModelFetchScheme
@@ -19,6 +20,13 @@ import ru.outsideproarts.oassist.core.provider.openai.ToolSchemaDto
 import ru.outsideproarts.oassist.core.provider.opencode.ProtocolResolution
 import ru.outsideproarts.oassist.core.provider.opencode.catalogKey
 import ru.outsideproarts.oassist.core.provider.opencode.OpenCodeRequestHeaders
+import ru.outsideproarts.oassist.core.model.diagnostics.DiagnosticKind
+import ru.outsideproarts.oassist.core.model.diagnostics.Diagnostics
+import ru.outsideproarts.oassist.core.model.diagnostics.DiagnosticContext
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.withContext
+import ru.outsideproarts.oassist.core.model.diagnostics.DiagnosticRecorder
+import ru.outsideproarts.oassist.core.model.diagnostics.emit
 
 /**
  * Универсальный клиент с роутингом проводного протокола модели — для любого
@@ -44,7 +52,9 @@ class RoutingModelClient internal constructor(
     private val protocolOverride: suspend (modelId: String) -> ModelProtocol?,
     private val modelsDev: ModelsDevCatalog?,
     private val catalogKey: suspend (baseUrl: String) -> String?,
+    private val diagnostics: DiagnosticRecorder,
 ) : ModelClient {
+    override fun diagnosticSecrets(): Collection<String> = template.diagnosticSecrets()
 
     private val clients: Map<ModelProtocol, ModelClient> =
         ModelProtocol.entries.associateWith { protocol ->
@@ -94,19 +104,36 @@ class RoutingModelClient internal constructor(
     }
 
     override suspend fun probeCapabilities(modelId: String): Set<ModelCapability> {
+        val operation = Diagnostics.newOperationId()
+        val context = currentCoroutineContext()[DiagnosticContext]
+        val parent = context?.operationId
+        diagnostics.emit(DiagnosticKind.OPERATION_START, operation, parentOperationId = parent,
+            attributes = mapOf("operation" to "probe", "model" to modelId))
         var lastError: Throwable? = null
         for (protocol in protocolsFor(modelId)) {
+            diagnostics.emit(DiagnosticKind.ROUTING, operation, attributes = mapOf("protocol" to protocol.name))
             try {
-                val result = clients.getValue(protocol).probeCapabilities(modelId)
+                val result = withContext(DiagnosticContext(operation, parent, context?.secrets.orEmpty())) {
+                    clients.getValue(protocol).probeCapabilities(modelId)
+                }
                 learned[modelId] = protocol
+                diagnostics.emit(DiagnosticKind.OPERATION_END, operation, attributes = mapOf("protocol" to protocol.name))
                 return result
             } catch (e: CancellationException) {
+                diagnostics.emit(DiagnosticKind.OPERATION_CANCELLED, operation)
                 throw e
             } catch (e: Throwable) {
-                if (!isProtocolUnsupported(e)) throw e
+                recordProviderHttpError(diagnostics, operation, e, diagnosticSecrets() + context?.secrets.orEmpty())
+                diagnostics.emit(DiagnosticKind.PROVIDER_ERROR, operation,
+                    attributes = mapOf("protocol" to protocol.name, "error" to e.javaClass.simpleName))
+                if (!isProtocolUnsupported(e)) {
+                    diagnostics.emit(DiagnosticKind.OPERATION_ERROR, operation, attributes = mapOf("error" to e.javaClass.simpleName))
+                    throw e
+                }
                 lastError = e
             }
         }
+        diagnostics.emit(DiagnosticKind.OPERATION_ERROR, operation, attributes = mapOf("error" to "NoWorkingProtocol"))
         throw lastError ?: IllegalStateException("no protocols for $modelId")
     }
 
@@ -116,27 +143,48 @@ class RoutingModelClient internal constructor(
         tools: List<ToolSchemaDto>,
         reasoningEnabled: Boolean,
     ): Flow<ChatChunk> = flow {
+        val operation = Diagnostics.newOperationId()
+        val context = currentCoroutineContext()[DiagnosticContext]
+        val parent = context?.operationId
+        diagnostics.emit(DiagnosticKind.OPERATION_START, operation,
+            parentOperationId = parent,
+            attributes = mapOf("operation" to "model_stream", "model" to modelId), secrets = context?.secrets.orEmpty())
         var lastError: Throwable? = null
         for (protocol in protocolsFor(modelId)) {
+            diagnostics.emit(DiagnosticKind.ROUTING, operation, attributes = mapOf("protocol" to protocol.name))
             var emittedAny = false
             try {
                 clients.getValue(protocol)
                     .chatCompletionStream(modelId, messages, tools, reasoningEnabled)
+                    .flowOn(DiagnosticContext(operation, parent, context?.secrets.orEmpty()))
                     .collect { chunk ->
                         emittedAny = true
                         emit(chunk)
                     }
                 learned[modelId] = protocol
+                diagnostics.emit(DiagnosticKind.OPERATION_END, operation,
+                    attributes = mapOf("protocol" to protocol.name))
                 return@flow
             } catch (e: CancellationException) {
+                diagnostics.emit(DiagnosticKind.OPERATION_CANCELLED, operation)
                 throw e
             } catch (e: Throwable) {
+                recordProviderHttpError(diagnostics, operation, e, diagnosticSecrets() + context?.secrets.orEmpty())
+                diagnostics.emit(DiagnosticKind.PROVIDER_ERROR, operation,
+                    attributes = mapOf("protocol" to protocol.name, "error" to e.javaClass.simpleName,
+                        "emitted" to emittedAny.toString(), "fallback" to (!emittedAny && isProtocolUnsupported(e)).toString()))
                 // Повтор — только до первого чанка и только по явному сигналу
                 // «не тот протокол»: после начала ответа перепробовка молча удвоила бы ход.
-                if (emittedAny || !isProtocolUnsupported(e)) throw e
+                if (emittedAny || !isProtocolUnsupported(e)) {
+                    diagnostics.emit(DiagnosticKind.OPERATION_ERROR, operation,
+                        attributes = mapOf("error" to e.javaClass.simpleName))
+                    throw e
+                }
                 lastError = e
             }
         }
+        diagnostics.emit(DiagnosticKind.OPERATION_ERROR, operation,
+            attributes = mapOf("error" to (lastError?.javaClass?.simpleName ?: "NoProtocols")))
         throw lastError ?: IllegalStateException("no protocols for $modelId")
     }
 }
@@ -155,6 +203,7 @@ internal fun protocolClient(
 
 /** Шаблон запросов профиля для нового протокола (та же схема auth/оформления). */
 internal fun EndpointConfig.withProtocol(protocol: ModelProtocol): EndpointConfig = EndpointConfig(
+    diagnostics = diagnostics,
     protocol = protocol,
     baseUrl = baseUrl,
     auth = auth,

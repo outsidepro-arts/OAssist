@@ -49,6 +49,23 @@ class VoiceInputRouterTest {
         }
     }
 
+    @Test fun routeDecisionIsRecordedWithoutAudioContent() {
+        val events = mutableListOf<ru.outsideproarts.oassist.core.model.diagnostics.DiagnosticEvent>()
+        val previous = ru.outsideproarts.oassist.core.model.diagnostics.Diagnostics.swapForTest(object : ru.outsideproarts.oassist.core.model.diagnostics.DiagnosticRecorder {
+            override fun record(event: ru.outsideproarts.oassist.core.model.diagnostics.DiagnosticEvent, secrets: Collection<String>) { events.add(event) }
+            override fun health() = ru.outsideproarts.oassist.core.model.diagnostics.DiagnosticHealth(true, true, 0, 0)
+        })
+        try {
+            assertFalse(VoiceInputRouter(FakeBackend(btInputPresent = false), FakeFlag()).acquire(true))
+            val route = events.single { it.kind == ru.outsideproarts.oassist.core.model.diagnostics.DiagnosticKind.SPEECH }
+            assertEquals("input_route", route.attributes["action"])
+            assertEquals("USE_MIC", route.attributes["decision"])
+            assertTrue(route.content == null)
+        } finally {
+            ru.outsideproarts.oassist.core.model.diagnostics.Diagnostics.swapForTest(previous)
+        }
+    }
+
     @Test
     fun decide_prefersBluetoothWhenConnectedAndGranted() {
         val router = VoiceInputRouter(FakeBackend(), FakeFlag())

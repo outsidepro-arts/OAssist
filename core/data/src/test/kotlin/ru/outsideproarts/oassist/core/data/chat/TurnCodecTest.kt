@@ -27,6 +27,12 @@ import ru.outsideproarts.oassist.core.model.WorkEvent
 
 class TurnCodecTest {
 
+    @Test fun diagnosticIdentitySurvivesCodecWithoutReadingMedia() {
+        val payload = """{"diagnosticOperationId":"run-123","userImages":[{"path":"missing-file"}]}"""
+        assertEquals("run-123", TurnCodec.diagnosticOperationId(payload))
+        assertNull(TurnCodec.diagnosticOperationId("{}"))
+    }
+
     private lateinit var root: File
     private lateinit var media: ChatMediaStore
 

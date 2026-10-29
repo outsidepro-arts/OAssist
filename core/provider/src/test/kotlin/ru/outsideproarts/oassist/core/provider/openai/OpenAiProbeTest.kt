@@ -42,7 +42,7 @@ class OpenAiProbeTest {
             baseUrl = "https://api.example.com/v1",
         )
         return kotlinx.coroutines.runBlocking {
-            OpenAiCompatibleClient.fromProfile(
+            OpenAiCompatibleClient.fromProfile(ru.outsideproarts.oassist.core.model.diagnostics.Diagnostics,
                 profile,
                 emptySecrets,
                 http,
@@ -99,7 +99,7 @@ class OpenAiProbeTest {
             baseUrl = "https://opencode.ai/zen/v1",
         )
         val zen = kotlinx.coroutines.runBlocking {
-            OpenAiCompatibleClient.fromProfile(
+            OpenAiCompatibleClient.fromProfile(ru.outsideproarts.oassist.core.model.diagnostics.Diagnostics,
                 profile,
                 emptySecrets,
                 http,

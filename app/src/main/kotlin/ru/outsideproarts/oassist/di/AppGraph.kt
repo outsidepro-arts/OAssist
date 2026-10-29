@@ -71,7 +71,7 @@ class AppGraph private constructor(context: Context) {
     val providers: ProviderRepository
         get() = data.providers
 
-    val httpClient by lazy { HttpClientFactory.create() }
+    val httpClient by lazy { HttpClientFactory.create(ru.outsideproarts.oassist.core.model.diagnostics.Diagnostics) }
 
     /** Каталог models.dev: маршрутизация протокола моделей агрегаторов (OpenCode). */
     val modelsDevCatalog by lazy {
@@ -214,11 +214,11 @@ class AppGraph private constructor(context: Context) {
      */
     suspend fun privilegeExecutor(): ru.outsideproarts.oassist.core.device.PrivExecutor {
         if (shizukuExecutor.isBinderAlive() && shizukuExecutor.isPermissionGranted()) {
-            return shizukuExecutor
+            return ru.outsideproarts.oassist.core.device.DiagnosticPrivExecutor(shizukuExecutor)
         }
         val root = cachedRootAvailable ?: rootExecutor.isAvailable().also { cachedRootAvailable = it }
-        if (root) return rootExecutor
-        return noopExecutor
+        if (root) return ru.outsideproarts.oassist.core.device.DiagnosticPrivExecutor(rootExecutor)
+        return ru.outsideproarts.oassist.core.device.DiagnosticPrivExecutor(noopExecutor)
     }
 
     /**
@@ -281,6 +281,7 @@ class AppGraph private constructor(context: Context) {
 
     suspend fun modelClientFor(profile: ProviderProfile): ModelClient =
         ModelClient.create(
+            ru.outsideproarts.oassist.core.model.diagnostics.Diagnostics,
             profile,
             data.secretStore,
             httpClient,
@@ -308,6 +309,13 @@ class AppGraph private constructor(context: Context) {
         }
 
         override suspend fun agentFor(profile: ProviderProfile, mode: ru.outsideproarts.oassist.core.model.AssistMode): ru.outsideproarts.oassist.core.agent.AgentLoop {
+            val diagnosticId = kotlin.coroutines.coroutineContext[ru.outsideproarts.oassist.core.model.diagnostics.DiagnosticContext]?.operationId
+                ?: ru.outsideproarts.oassist.core.model.diagnostics.Diagnostics.newOperationId()
+            ru.outsideproarts.oassist.core.model.diagnostics.Diagnostics.record(
+                ru.outsideproarts.oassist.core.model.diagnostics.DiagnosticKind.LIFECYCLE,
+                operationId = diagnosticId,
+                attributes = mapOf("action" to "prepare_agent", "mode" to mode.name),
+            )
             val client = modelClientFor(profile)
             val prefs = data.toolConfigs.snapshot()
             val tools = ru.outsideproarts.oassist.core.agent.ToolCatalog.createRegistry(
@@ -324,6 +332,7 @@ class AppGraph private constructor(context: Context) {
                 privilegeExecutor(),
                 searchActions,
                 resolveMcpTools(),
+                diagnostics = ru.outsideproarts.oassist.core.model.diagnostics.Diagnostics,
             )
             val modeModelId = data.providers.modeConfig(mode).modelId
             val modelCapabilities = data.providers.observeModelCatalog(profile.id).first()
@@ -336,6 +345,7 @@ class AppGraph private constructor(context: Context) {
             return ru.outsideproarts.oassist.core.agent.AgentLoop(
                 client,
                 tools,
+                diagnostics = ru.outsideproarts.oassist.core.model.diagnostics.Diagnostics,
                 approvalPolicy = approvalPolicy,
                 events = narratorEvents,
                 visionEnabled = visionEnabled,
@@ -455,12 +465,20 @@ class AppGraph private constructor(context: Context) {
      * предлагаются модели), чтобы один упавший сервер не ронял весь агент.
      */
     private suspend fun resolveMcpTools(): List<ru.outsideproarts.oassist.core.agent.Tool> {
-        val servers = runCatching { data.mcpServers.snapshot() }.getOrElse { return emptyList() }
+        val servers = try { data.mcpServers.snapshot() } catch (cancel: kotlinx.coroutines.CancellationException) {
+            throw cancel
+        } catch (error: Exception) {
+            ru.outsideproarts.oassist.core.model.diagnostics.Diagnostics.record(
+                ru.outsideproarts.oassist.core.model.diagnostics.DiagnosticKind.MCP,
+                attributes = mapOf("action" to "snapshot_failed", "errorType" to error.javaClass.simpleName),
+            )
+            return emptyList()
+        }
         return servers.filter { it.enabled }.flatMap { config ->
             runCatching {
                 kotlinx.coroutines.withTimeoutOrNull(MCP_LIST_TIMEOUT_MS) {
                     val headers = data.mcpServers.resolveHeaders(config)
-                    val client = ru.outsideproarts.oassist.core.agent.mcp.McpClient(httpClient, config.url, headers)
+                    val client = ru.outsideproarts.oassist.core.agent.mcp.McpClient(ru.outsideproarts.oassist.core.model.diagnostics.Diagnostics, httpClient, config.url, headers)
                     client.listTools().map { info ->
                         ru.outsideproarts.oassist.core.agent.mcp.McpTool(
                             serverId = config.id,
@@ -473,11 +491,27 @@ class AppGraph private constructor(context: Context) {
                         )
                     }
                 }
-            }.getOrNull().orEmpty()
+            }.onFailure { error ->
+                if (error is kotlinx.coroutines.CancellationException) throw error
+                ru.outsideproarts.oassist.core.model.diagnostics.Diagnostics.record(
+                    ru.outsideproarts.oassist.core.model.diagnostics.DiagnosticKind.MCP,
+                    attributes = mapOf("action" to "catalog_failed", "errorType" to error.javaClass.simpleName),
+                )
+            }.getOrNull().also { tools ->
+                if (tools == null) ru.outsideproarts.oassist.core.model.diagnostics.Diagnostics.record(
+                    ru.outsideproarts.oassist.core.model.diagnostics.DiagnosticKind.MCP,
+                    attributes = mapOf("action" to "catalog_unavailable"),
+                )
+            }.orEmpty()
         }
     }
 
     init {
+        data.diagnostics
+        ru.outsideproarts.oassist.core.model.diagnostics.Diagnostics.record(
+            ru.outsideproarts.oassist.core.model.diagnostics.DiagnosticKind.LIFECYCLE,
+            attributes = mapOf("action" to "process_start", "android" to android.os.Build.VERSION.SDK_INT.toString(), "version" to ru.outsideproarts.oassist.BuildConfig.VERSION_NAME, "versionCode" to ru.outsideproarts.oassist.BuildConfig.VERSION_CODE.toString(), "manufacturer" to android.os.Build.MANUFACTURER, "model" to android.os.Build.MODEL),
+        )
         ru.outsideproarts.oassist.core.agent.AgentFactory.register(agentFactory)
         ru.outsideproarts.oassist.core.data.chat.ChatHandle.register(data.chats)
         networkMonitor.start()

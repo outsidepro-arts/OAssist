@@ -176,7 +176,7 @@ class OpenAiResponsesTest {
 
         try {
             val client = OpenAiResponsesClient(
-                EndpointConfig(
+                EndpointConfig(ru.outsideproarts.oassist.core.model.diagnostics.Diagnostics,
                     protocol = ModelProtocol.OPENAI_RESPONSES,
                     baseUrl = "http://127.0.0.1:${server.address.port}/v1",
                     auth = ProviderAuth(),
@@ -298,7 +298,7 @@ class OpenAiResponsesTest {
             bodies = (request.body as TextContent).text
             respond("{}", status = HttpStatusCode.OK, headers = headersOf("Content-Type", "application/json"))
         }
-        val client = ModelClient.create(
+        val client = ModelClient.create(ru.outsideproarts.oassist.core.model.diagnostics.Diagnostics,
             ru.outsideproarts.oassist.core.model.ProviderProfile(
                 id = "p1",
                 name = "OpenAI",
@@ -320,7 +320,7 @@ class OpenAiResponsesTest {
         val bad = mockClient {
             respond("{}", status = HttpStatusCode.BadRequest, headers = headersOf("Content-Type", "application/json"))
         }
-        val badClient = ModelClient.create(
+        val badClient = ModelClient.create(ru.outsideproarts.oassist.core.model.diagnostics.Diagnostics,
             ru.outsideproarts.oassist.core.model.ProviderProfile(
                 id = "p2",
                 name = "OpenAI",
@@ -339,7 +339,7 @@ class OpenAiResponsesTest {
     fun fetchModels_usesOpenAiStyleList() = runTest {
         var path = ""
         var auth = ""
-        val client = ModelClient.create(
+        val client = ModelClient.create(ru.outsideproarts.oassist.core.model.diagnostics.Diagnostics,
             ru.outsideproarts.oassist.core.model.ProviderProfile(
                 id = "p1",
                 name = "OpenAI",

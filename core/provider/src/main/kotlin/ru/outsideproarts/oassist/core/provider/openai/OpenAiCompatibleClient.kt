@@ -8,6 +8,7 @@ import io.ktor.client.request.HttpRequestBuilder
 import io.ktor.client.request.headers
 import io.ktor.client.request.request
 import ru.outsideproarts.oassist.core.provider.setBodyDecorated
+import ru.outsideproarts.oassist.core.provider.diagnosticSecrets
 import io.ktor.client.statement.bodyAsText
 import io.ktor.http.ContentType
 import io.ktor.http.HttpHeaders
@@ -52,10 +53,12 @@ class OpenAiCompatibleClient internal constructor(
     private val endpoint: EndpointConfig,
     private val http: HttpClient,
 ) : ModelClient {
+    override fun diagnosticSecrets(): Collection<String> = endpoint.diagnosticSecrets()
 
     override suspend fun fetchModels(): List<ModelInfo> = fetchModelCatalog(endpoint, http)
 
     override suspend fun probeCapabilities(modelId: String): Set<ModelCapability> {
+        val diagnosticParent = kotlinx.coroutines.currentCoroutineContext()[ru.outsideproarts.oassist.core.model.diagnostics.DiagnosticContext]
         val chatUrl = URLBuilder(endpoint.baseUrl).apply {
             appendPathSegments("chat", "completions")
         }.buildString()
@@ -72,7 +75,7 @@ class OpenAiCompatibleClient internal constructor(
                 url.takeFrom(chatUrl)
                 applyAuth(dialogKey = dialogKey(emptyList()))
                 contentType(ContentType.Application.Json)
-                setBodyDecorated(endpoint, requestDto)
+                setBodyDecorated(endpoint, requestDto, diagnosticParent)
             }
             ProviderJson.decodeFromString(ChatResponseDto.serializer(), response.bodyAsText())
             return setOf(ModelCapability.TOOLS)
@@ -81,6 +84,7 @@ class OpenAiCompatibleClient internal constructor(
             // гейт): это сигнал, а не ошибка. 401/404/сеть — пробрасываются выше.
             // «Не тот протокол» (агрегаторы) тоже пробрасывается — гейт фолбэка.
             if (e.response.status == HttpStatusCode.BadRequest && !isProtocolUnsupportedMessage(e.message)) {
+                ru.outsideproarts.oassist.core.provider.recordProviderHttpError(endpoint.diagnostics, diagnosticParent?.operationId, e, endpoint.diagnosticSecrets() + diagnosticParent?.secrets.orEmpty())
                 return emptySet()
             }
             throw e
@@ -93,6 +97,7 @@ class OpenAiCompatibleClient internal constructor(
         tools: List<ToolSchemaDto>,
         reasoningEnabled: Boolean,
     ): Flow<ChatChunk> = flow {
+        val diagnosticParent = kotlinx.coroutines.currentCoroutineContext()[ru.outsideproarts.oassist.core.model.diagnostics.DiagnosticContext]
         val chatUrl = URLBuilder(endpoint.baseUrl).apply {
             appendPathSegments("chat", "completions")
         }.buildString()
@@ -105,13 +110,15 @@ class OpenAiCompatibleClient internal constructor(
             // совместимые серверы лишнее поле игнорируют.
             streamOptions = StreamOptionsDto(includeUsage = true),
         )
-        http.sse(
+        val capture = ru.outsideproarts.oassist.core.provider.SseDiagnosticCapture(endpoint,
+            diagnosticParent)
+        try { http.sse(
             request = {
                 method = HttpMethod.Post
                 url.takeFrom(chatUrl)
                 applyAuth(dialogKey = dialogKey(messages))
                 contentType(ContentType.Application.Json)
-                setBodyDecorated(endpoint, requestDto)
+                setBodyDecorated(endpoint, requestDto, diagnosticParent)
             },
         ) {
             val assembler = ToolCallAssembler()
@@ -144,6 +151,7 @@ class OpenAiCompatibleClient internal constructor(
                 }
             }.collect { event ->
                 val data = event.data ?: return@collect
+                capture.add(data)
                 val dto = runCatching {
                     ProviderJson.decodeFromString(ChatResponseDto.serializer(), data)
                 }.getOrNull()
@@ -192,7 +200,7 @@ class OpenAiCompatibleClient internal constructor(
                 abrupt = lastFinish == null && !sawDone,
                 usage = usage.withRateLimits(rateLimits),
             ))
-        }
+        } } finally { runCatching { capture.flush() } }
     }
 
     private fun HttpRequestBuilder.applyAuth(dialogKey: String) {
@@ -218,12 +226,14 @@ class OpenAiCompatibleClient internal constructor(
         )
 
         suspend fun fromProfile(
+            diagnostics: ru.outsideproarts.oassist.core.model.diagnostics.DiagnosticRecorder,
             profile: ProviderProfile,
             secretStore: SecretStore,
             httpClient: HttpClient,
             overrides: ProviderAuth? = null,
         ): OpenAiCompatibleClient = OpenAiCompatibleClient(
             EndpointConfig(
+                diagnostics = diagnostics,
                 protocol = ModelProtocol.OPENAI_COMPLETIONS,
                 baseUrl = profile.baseUrl,
                 auth = resolveProviderAuth(profile, secretStore, overrides),

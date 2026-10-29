@@ -380,6 +380,7 @@ private fun OAssistApp(
                     onNavigateToSkills = { navController.navigate("skills") },
                     onNavigateToMemory = { navController.navigate("memory") },
                     onNavigateToAssistant = { navController.navigate("assistant_access") },
+                    onNavigateToDiagnostics = { navController.navigate("diagnostics") },
                     onExport = { exportLauncher.launch("oassist-backup.json") },
                     onImport = { importLauncher.launch(arrayOf("application/json")) },
                     onWipe = { showWipeDialog = true },
@@ -467,6 +468,12 @@ private fun OAssistApp(
                             text = ""
                         }
                     },
+                    onBack = { navController.popBackStack() },
+                )
+            }
+            composable("diagnostics") {
+                ru.outsideproarts.oassist.feature.settings.DiagnosticsScreen(
+                    store = graph.data.diagnostics,
                     onBack = { navController.popBackStack() },
                 )
             }
@@ -567,6 +574,7 @@ private fun OAssistApp(
                                 runCatching {
                                     val headers = graph.data.mcpServers.resolveHeaders(config)
                                     val client = ru.outsideproarts.oassist.core.agent.mcp.McpClient(
+                                        ru.outsideproarts.oassist.core.model.diagnostics.Diagnostics,
                                         graph.httpClient,
                                         config.url,
                                         headers,
@@ -811,7 +819,7 @@ private suspend fun saveProvider(
         basicUser = secrets.basicUser,
         basicPassword = secrets.basicPassword?.toCharArray(),
     )
-    val validator = ProviderValidator(graph.data.secretStore, graph.httpClient)
+    val validator = ProviderValidator(ru.outsideproarts.oassist.core.model.diagnostics.Diagnostics, graph.data.secretStore, graph.httpClient)
     when (val result = validator.validate(updated, overrides)) {
         is ProviderValidationResult.Failure -> Result.failure(result.error)
         else -> {

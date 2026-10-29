@@ -39,7 +39,7 @@ class AuthSchemeTest {
         try {
             kotlinx.coroutines.runBlocking {
                 fetchModelCatalog(
-                    EndpointConfig(
+                    EndpointConfig(ru.outsideproarts.oassist.core.model.diagnostics.Diagnostics,
                         protocol = protocol,
                         baseUrl = "https://h.test/v1",
                         auth = auth,
@@ -151,7 +151,7 @@ class AuthSchemeTest {
                 basicUserRef = "provider.p.basicUser",
                 basicPasswordRef = "provider.p.basicPassword",
             )
-            ModelClient.create(profile, secrets, http).fetchModels()
+            ModelClient.create(ru.outsideproarts.oassist.core.model.diagnostics.Diagnostics, profile, secrets, http).fetchModels()
             assertEquals(basic64("user", "pass"), captured["authorization"])
         } finally {
             http.close()

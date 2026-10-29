@@ -121,7 +121,7 @@ class StreamUsageTest {
                 headers = headersOf("Content-Type" to listOf("text/event-stream")),
             )
         }
-        val client = GeminiClient.fromProfile(
+        val client = GeminiClient.fromProfile(ru.outsideproarts.oassist.core.model.diagnostics.Diagnostics,
             profile("https://generativelanguage.googleapis.com"),
             secrets,
             http(engine),
@@ -149,7 +149,7 @@ class StreamUsageTest {
                 ),
             )
         }
-        val client = GeminiClient.fromProfile(
+        val client = GeminiClient.fromProfile(ru.outsideproarts.oassist.core.model.diagnostics.Diagnostics,
             profile("https://generativelanguage.googleapis.com"),
             secrets,
             http(engine),
@@ -176,7 +176,7 @@ class StreamUsageTest {
                 headers = headersOf("Content-Type" to listOf("text/event-stream")),
             )
         }
-        val client = AnthropicClient.fromProfile(
+        val client = AnthropicClient.fromProfile(ru.outsideproarts.oassist.core.model.diagnostics.Diagnostics,
             profile("https://api.anthropic.com"),
             secrets,
             http(engine),
@@ -210,7 +210,7 @@ class StreamUsageTest {
                 ),
             )
         }
-        val client = OpenAiCompatibleClient.fromProfile(
+        val client = OpenAiCompatibleClient.fromProfile(ru.outsideproarts.oassist.core.model.diagnostics.Diagnostics,
             profile("https://opencode.ai/zen/go/v1"),
             secrets,
             http(engine),

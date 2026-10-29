@@ -76,7 +76,7 @@ class OpenCodeZenHeadersTest {
                 .forEach { captured[it.key.lowercase()] = it.value.single() }
             respond("""{"data":[]}""", status = HttpStatusCode.OK, headers = headersOf("Content-Type", "application/json"))
         }
-        val client = ModelClient.create(zenProfile, secretsWithKey("test-key"), mockClient(engine))
+        val client = ModelClient.create(ru.outsideproarts.oassist.core.model.diagnostics.Diagnostics, zenProfile, secretsWithKey("test-key"), mockClient(engine))
 
         client.fetchModels()
 
@@ -96,7 +96,7 @@ class OpenCodeZenHeadersTest {
             request.headers["x-opencode-request"]?.let { requestIds += it }
             respond("""{"data":[]}""", status = HttpStatusCode.OK, headers = headersOf("Content-Type", "application/json"))
         }
-        val client = ModelClient.create(zenProfile, emptySecrets, mockClient(engine))
+        val client = ModelClient.create(ru.outsideproarts.oassist.core.model.diagnostics.Diagnostics, zenProfile, emptySecrets, mockClient(engine))
 
         client.fetchModels()
         client.fetchModels()
@@ -139,7 +139,7 @@ class OpenCodeZenHeadersTest {
             respond("""{"data":[]}""", status = HttpStatusCode.OK, headers = headersOf("Content-Type", "application/json"))
         }
         val profile = zenProfile.copy(preset = ProviderPreset.CUSTOM, protocol = ModelProtocol.OPENAI_COMPLETIONS)
-        val client = OpenAiCompatibleClient.fromProfile(profile, emptySecrets, mockClient(engine))
+        val client = OpenAiCompatibleClient.fromProfile(ru.outsideproarts.oassist.core.model.diagnostics.Diagnostics, profile, emptySecrets, mockClient(engine))
 
         client.fetchModels()
 

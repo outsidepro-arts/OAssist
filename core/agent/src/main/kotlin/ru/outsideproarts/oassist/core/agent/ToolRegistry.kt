@@ -4,6 +4,12 @@ import kotlinx.serialization.json.JsonObject
 import ru.outsideproarts.oassist.core.model.PrivilegeLevel
 import ru.outsideproarts.oassist.core.model.ToolGroups
 import ru.outsideproarts.oassist.core.model.ImagePart
+import ru.outsideproarts.oassist.core.model.diagnostics.DiagnosticKind
+import ru.outsideproarts.oassist.core.model.diagnostics.DiagnosticContext
+import ru.outsideproarts.oassist.core.model.diagnostics.Diagnostics
+import kotlinx.coroutines.currentCoroutineContext
+import ru.outsideproarts.oassist.core.model.diagnostics.DiagnosticRecorder
+import ru.outsideproarts.oassist.core.model.diagnostics.emit
 
 /** Описание инструмента для передачи в LLM (OpenAI function calling). */
 data class ToolSchema(
@@ -25,6 +31,7 @@ data class ToolResult(
 /** Инструмент агента. */
 interface Tool {
     val schema: ToolSchema
+    fun diagnosticSecrets(): Collection<String> = emptyList()
 
     /**
      * Ключ группы разрешений: решение пользователя (разрешить/запретить) действует
@@ -62,6 +69,7 @@ interface Tool {
 class ToolRegistry(
     private val tools: List<Tool>,
     private val disabled: Set<String> = emptySet(),
+    private val diagnostics: DiagnosticRecorder,
 ) {
 
     /** Схемы для модели: только включённые — выключенные модель не должна вызывать. */
@@ -72,19 +80,38 @@ class ToolRegistry(
 
     fun isEnabled(name: String): Boolean = name !in disabled
 
+    fun diagnosticSecrets(): List<String> = tools.flatMap { it.diagnosticSecrets() }
+
     /** Группа разрешений тула; неизвестный — [ToolGroups.UNKNOWN] (fail-closed). */
     fun groupKey(name: String): String = find(name)?.groupKey ?: ToolGroups.UNKNOWN
 
     suspend fun execute(name: String, arguments: JsonObject): ToolResult {
-        val tool = find(name) ?: return ToolResult(false, "Инструмент '$name' не найден")
-        if (!isEnabled(name)) return ToolResult(false, "Инструмент '$name' отключён в настройках")
+        val operation = Diagnostics.newOperationId()
+        val parent = currentCoroutineContext()[DiagnosticContext]?.operationId
+        val secrets = diagnosticSecrets()
+        diagnostics.emit(DiagnosticKind.OPERATION_START, operation, parentOperationId = parent,
+            attributes = mapOf("operation" to "tool", "name" to name), secrets = secrets)
+        val tool = find(name) ?: run {
+            diagnostics.emit(DiagnosticKind.OPERATION_END, operation, attributes = mapOf("reason" to "unknown"), secrets = secrets)
+            return ToolResult(false, "Инструмент '$name' не найден")
+        }
+        if (!isEnabled(name)) {
+            diagnostics.emit(DiagnosticKind.OPERATION_END, operation, attributes = mapOf("reason" to "disabled"), secrets = secrets)
+            return ToolResult(false, "Инструмент '$name' отключён в настройках")
+        }
         // runCatching глотает и CancellationException: «Стоп» превращался бы
         // в фейковый ToolResult(false) в ленте/таймлайне — пробрасываем отмену.
         return try {
-            tool.execute(arguments)
+            val result = tool.execute(arguments)
+            diagnostics.emit(DiagnosticKind.OPERATION_END, operation,
+                attributes = mapOf("success" to result.success.toString()), secrets = secrets)
+            result
         } catch (e: kotlinx.coroutines.CancellationException) {
+            diagnostics.emit(DiagnosticKind.OPERATION_CANCELLED, operation, secrets = secrets)
             throw e
         } catch (e: Throwable) {
+            diagnostics.emit(DiagnosticKind.OPERATION_ERROR, operation,
+                attributes = mapOf("error" to e.javaClass.simpleName), secrets = secrets)
             ToolResult(false, "Ошибка: ${e.message}")
         }
     }
