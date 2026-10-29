@@ -48,6 +48,36 @@ class PromptRendererTest {
     }
 
     @Test
+    fun stepsLimit_positive_isNumber() {
+        val out = PromptRenderer.render("L={steps_limit}", PromptInputs(locale = "ru-RU", stepsLimit = 15))
+
+        assertEquals("L=15", out.instructions)
+    }
+
+    @Test
+    fun stepsLimit_zero_isExplicitUnlimitedPhrase() {
+        val ru = PromptRenderer.render("L={steps_limit}", PromptInputs(locale = "ru-RU", stepsLimit = 0))
+        val en = PromptRenderer.render("L={steps_limit}", PromptInputs(locale = "en-US", stepsLimit = 0))
+
+        assertEquals("L=без ограничений", ru.instructions)
+        assertEquals("L=unlimited", en.instructions)
+    }
+
+    @Test
+    fun stepsLimit_negative_treatedAsUnlimited() {
+        val out = PromptRenderer.render("L={steps_limit}", PromptInputs(locale = "ru-RU", stepsLimit = -3))
+
+        assertEquals("L=без ограничений", out.instructions)
+    }
+
+    @Test
+    fun stepsLimit_absent_isEmpty() {
+        val out = PromptRenderer.render("L={steps_limit}", PromptInputs())
+
+        assertEquals("L=", out.instructions)
+    }
+
+    @Test
     fun memory_cappedWithMark() {
         val long = "x".repeat(PromptRenderer.MAX_MEMORY_CHARS + 100)
 

@@ -15,6 +15,8 @@ data class PromptInputs(
     val skills: List<SkillInfo> = emptyList(),
     val screenContext: String? = null,
     val sharedContent: String? = null,
+    /** Лимит шагов инструментов за один ход; 0 — без лимита, null — не передан (пустая подстановка). */
+    val stepsLimit: Int? = null,
 )
 
 data class RuntimePrompt(
@@ -24,7 +26,7 @@ data class RuntimePrompt(
 
 /**
  * Сборка системного промпта из шаблона с плейсхолдерами:
- * `{locale} {time} {device} {memory} {skills} {screen_context} {shared_content}`.
+ * `{locale} {time} {device} {memory} {skills} {screen_context} {shared_content} {steps_limit}`.
  * Чистый рендер, JVM-тестируем. Капы с пометками — контекст не резиновый,
  * обрезка всегда явная, не молчаливая.
  */
@@ -46,6 +48,7 @@ object PromptRenderer {
                 "memory" -> dataReference(memory, ContextSource.MEMORY, context, russian)
                 "screen_context" -> dataReference(screen, ContextSource.SCREEN, context, russian)
                 "shared_content" -> dataReference(shared, ContextSource.SHARED_CONTENT, context, russian)
+                "steps_limit" -> stepsLimitText(inputs.stepsLimit, russian)
                 else -> match.value
             }
         }
@@ -71,7 +74,18 @@ object PromptRenderer {
         }
     }
 
-    private val PLACEHOLDER = Regex("\\{(locale|time|device|memory|skills|screen_context|shared_content)\\}")
+    private val PLACEHOLDER =
+        Regex("\\{(locale|time|device|memory|skills|screen_context|shared_content|steps_limit)\\}")
+
+    /**
+     * Значение `{steps_limit}`: число шагов либо явное «без ограничений».
+     * Null (значение не передано) — пустая подстановка, как у остальных плейсхолдеров.
+     */
+    fun stepsLimitText(limit: Int?, russian: Boolean = true): String = when {
+        limit == null -> ""
+        limit <= 0 -> if (russian) "без ограничений" else "unlimited"
+        else -> limit.toString()
+    }
 
     fun capMemory(memory: String, russian: Boolean = true): String {
         if (memory.length <= MAX_MEMORY_CHARS) return memory

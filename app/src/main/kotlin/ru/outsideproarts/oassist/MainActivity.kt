@@ -186,7 +186,6 @@ private fun OAssistApp(
                     .collectAsStateWithLifecycle(initialValue = emptyList())
                 val chatConfig = modeConfigs.find { it.mode == AssistMode.CHAT }
                 val isSpeaking by graph.speechOutput.speaking.collectAsStateWithLifecycle()
-                val context = LocalContext.current
                 // Флаг AUDIO_IN — только ручной Switch capabilities модели.
                 var chatModels by remember { mutableStateOf(emptyList<ru.outsideproarts.oassist.core.model.ModelInfo>()) }
                 LaunchedEffect(chatConfig?.providerId) {
@@ -211,46 +210,10 @@ private fun OAssistApp(
                             )
                         // Озвучка режима применяется перед каждым стримом.
                         graph.applyModeTts(config?.effectiveTts() ?: ru.outsideproarts.oassist.core.model.TtsConfig.DEFAULT)
-                        val client = graph.modelClientFor(profile)
-                        val prefs = graph.data.toolConfigs.snapshot()
-                        val toolRegistry = ru.outsideproarts.oassist.core.agent.ToolCatalog.createRegistry(
-                            ru.outsideproarts.oassist.core.agent.DeviceActions(
-                                context.applicationContext,
-                                graph.torchTracker,
-                                graph.foregroundRunner,
-                            ),
-                            graph.uiActions,
-                            graph.notifyActions,
-                            graph.mediaActions,
-                            graph.webContentActions,
-                            graph.webRenderActions,
-                            graph.voiceCapture,
-                            graph.data.memory,
-                            graph.data.skills,
-                            prefs,
-                            graph.privilegeExecutor(),
-                            graph.searchActions,
-                        )
-                        val modelCapabilities = config?.providerId
-                            ?.let { graph.providers.observeModelCatalog(it).first()?.models }
-                            .orEmpty()
-                            .find { it.id == modelId }
-                            ?.capabilities
-                        val visionEnabled = modelCapabilities
-                            ?.contains(ru.outsideproarts.oassist.core.model.ModelCapability.VISION) == true
-                        val reasoningEnabled = modelCapabilities
-                            ?.contains(ru.outsideproarts.oassist.core.model.ModelCapability.REASONING) == true
-                        val agent = ru.outsideproarts.oassist.core.agent.AgentLoop(
-                            client,
-                            toolRegistry,
-                            approvalPolicy = graph.approvalPolicy,
-                            events = graph.narratorEvents,
-                            visionEnabled = visionEnabled,
-                            reasoningEnabled = reasoningEnabled,
-                            sessionScope = mode.name,
-                            permissionRequester = graph.permissionRequester,
-                            screenLocked = { graph.keyguardLockState.isLocked() },
-                        )
+                        // Агент собирается общей фабрикой (общий каталог инструментов,
+                        // лимит шагов, fallback bye) — как в SHARE/ASSISTANT.
+                        val agent = ru.outsideproarts.oassist.core.agent.AgentFactory.get()
+                            .agentFor(profile, mode)
                         val prompt = graph.buildSystemPrompt(mode)
                         ru.outsideproarts.oassist.core.agent.AgentSession(
                             chunks = agent.stream(

@@ -372,19 +372,25 @@ class AppGraph private constructor(context: Context) {
 
     /**
      * Системный промпт режима: сохранённый шаблон initialPrompt как есть,
-     * память, включённые навыки, контекст экрана/шаринга. Фолбэка
-     * «пусто — промпт по умолчанию» нет: поле всегда хранит текст
+     * память, включённые навыки, контекст экрана/шаринга, лимит шагов.
+     * Фолбэка «пусто — промпт по умолчанию» нет: поле всегда хранит текст
      * (legacy-null трактуется как пусто и материализуется в дефолт
      * при первом открытии/сохранении экрана режима).
+     *
+     * @param stepsLimit лимит шагов инструментов для `{steps_limit}`; null —
+     * текущее значение настроек инструментов.
      */
     suspend fun buildSystemPrompt(
         mode: ru.outsideproarts.oassist.core.model.AssistMode,
         screenContext: String? = null,
         sharedContent: String? = null,
+        stepsLimit: Int? = null,
     ): ru.outsideproarts.oassist.core.agent.RuntimePrompt {
         val config = data.providers.modeConfig(mode)
         val language = promptLanguage()
         val template = config.initialPrompt.orEmpty()
+        val toolStepsLimit = stepsLimit
+            ?: runCatching { data.toolConfigs.snapshot().maxToolRounds }.getOrNull()
         return ru.outsideproarts.oassist.core.agent.PromptRenderer.render(
             template,
             ru.outsideproarts.oassist.core.agent.PromptInputs(
@@ -399,6 +405,7 @@ class AppGraph private constructor(context: Context) {
                 } else emptyList(),
                 screenContext = screenContext,
                 sharedContent = sharedContent,
+                stepsLimit = toolStepsLimit,
             ),
         )
     }

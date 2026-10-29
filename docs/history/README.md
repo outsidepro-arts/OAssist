@@ -54,6 +54,11 @@ rg -n -F "Выбор RecognitionService" docs/history/development-log-2026-10-26
 
 ## Последующие записи
 
+- [Лимит шагов инструментов и плейсхолдер {steps_limit}, 2026-10-29](agent-step-limit-2026-10-29.md) —
+  игнорирование «Без лимита» в CHAT из-за ручного дубля AgentLoop без maxToolRounds,
+  перевод чата на общий `agentFor` (возврат MCP-инструментов и fallback bye),
+  плейсхолдер `{steps_limit}` в промпты всех трёх режимов с объяснением «за ход, не за сессию».
+
 - [Упрощение модели провайдера, 2026-10-28](provider-model-simplification-2026-10-28.md) —
   пресеты OpenAI/Google/Anthropic/OpenCode и «Своя настройка» вместо kind, всё под
   капотом пресетов, единый каталог `{base}/[catalogPath]` и «baseUrl с версией»,
