@@ -292,6 +292,7 @@ class ProviderConfigCodecTest {
                 volume = 0.8f,
                 enginePackage = "com.google.android.tts",
                 voiceName = "ru-RU-TestVoice",
+                voiceLocale = "ru-RU",
                 speakToolCalls = false,
                 narrative = false,
             ),
@@ -315,6 +316,27 @@ class ProviderConfigCodecTest {
 
         assertEquals(null, decoded.tts)
         assertEquals(TtsConfig.DEFAULT, decoded.effectiveTts())
+    }
+
+    @Test
+    fun modeConfig_legacyTtsWithoutVoiceLocale_decodesWithNull() {
+        // Конфиги до поля voiceLocale: отсутствующее поле — null («язык не
+        // выбран»), остальное читается как обычно.
+        val legacyJson = """
+            {
+              "mode": "CHAT",
+              "tts": {
+                "channel": "SYSTEM_TTS",
+                "enginePackage": "com.google.android.tts",
+                "voiceName": "ru-RU-TestVoice"
+              }
+            }
+        """.trimIndent()
+
+        val decoded = json.decodeFromString<ModeConfig>(legacyJson)
+
+        assertEquals("ru-RU-TestVoice", decoded.tts?.voiceName)
+        assertEquals(null, decoded.tts?.voiceLocale)
     }
 
     @Test

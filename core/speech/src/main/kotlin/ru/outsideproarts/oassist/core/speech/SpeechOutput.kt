@@ -46,6 +46,14 @@ fun voiceLanguageTags(voices: List<VoiceInfo>): List<String> =
     voices.map { it.localeTag }.distinct().sorted()
 
 /**
+ * Язык выбора синтеза для отображения и фильтра голосов: локаль выбранного
+ * голоса (выбранный голос всегда несёт свой язык), иначе сохранённый выбор,
+ * иначе пусто — язык не выбран и не выдумывается за пользователя.
+ */
+fun selectedVoiceLanguage(voices: List<VoiceInfo>, voiceName: String?, storedLocale: String?): String =
+    voices.find { it.name == voiceName }?.localeTag ?: storedLocale.orEmpty()
+
+/**
  * Озвучка ответов агента. Канал — [SpeechOutputChannel] из `core/model`
  * (единый с настройками и документацией; локального дубликата больше нет).
  *
@@ -80,7 +88,7 @@ class SpeechOutput(
             if (value == SpeechOutputChannel.SYSTEM_TTS) ensureTts()
         }
 
-    var locale: Locale = Locale.forLanguageTag("ru-RU")
+    var locale: Locale = Locale.forLanguageTag(DEFAULT_LOCALE_TAG)
     /** Скорость речи (0.5–2.0). Применяется к движку сразу и при его инициализации. */
     var rate: Float = 1f
     /** Тон речи (0.5–2.0). Применяется к движку сразу и при его инициализации. */
@@ -223,6 +231,10 @@ class SpeechOutput(
         pitch = config.pitch.coerceIn(TtsConfig.MIN_PITCH, TtsConfig.MAX_PITCH)
         volume = config.volume.coerceIn(TtsConfig.MIN_VOLUME, TtsConfig.MAX_VOLUME)
         voiceName = config.voiceName?.takeIf { it.isNotBlank() }
+        // Язык — для голоса по умолчанию; выбранный голос несёт свою локаль сам.
+        locale = config.voiceLocale?.takeIf { it.isNotBlank() }
+            ?.let { Locale.forLanguageTag(it) }
+            ?: Locale.forLanguageTag(DEFAULT_LOCALE_TAG)
         applyEngineParams()
     }
 
@@ -496,5 +508,6 @@ class SpeechOutput(
 
     companion object {
         private const val TAG = "SpeechOutput"
+        private const val DEFAULT_LOCALE_TAG = "ru-RU"
     }
 }

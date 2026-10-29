@@ -49,6 +49,7 @@ import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.unit.dp
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.ui.text.input.KeyboardCapitalization
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.launch
 import ru.outsideproarts.oassist.core.a11y.oassistDropdownClassName
 import ru.outsideproarts.oassist.core.a11y.oassistHeading
@@ -76,6 +77,7 @@ import ru.outsideproarts.oassist.core.speech.VoiceInfo
 import ru.outsideproarts.oassist.core.speech.TtsEngineInfo
 import ru.outsideproarts.oassist.core.speech.RecognitionServiceInfo
 import ru.outsideproarts.oassist.core.speech.voiceLanguageTags
+import ru.outsideproarts.oassist.core.speech.selectedVoiceLanguage
 import ru.outsideproarts.oassist.core.ui.OAssistDimens
 import ru.outsideproarts.oassist.core.ui.components.OAssistLiveStatus
 import ru.outsideproarts.oassist.core.ui.components.OAssistPanel
@@ -133,9 +135,15 @@ fun ModeConfigScreen(
     var ttsVolume by remember { mutableStateOf(baseTts.volume) }
     var ttsVoice by remember { mutableStateOf(baseTts.voiceName ?: "") }
     var ttsEngine by remember { mutableStateOf(baseTts.enginePackage ?: "") }
-    var ttsVoiceLocale by remember { mutableStateOf("") }
+    var ttsVoiceLocale by remember { mutableStateOf(baseTts.voiceLocale ?: "") }
     var ttsToolCalls by remember { mutableStateOf(baseTts.speakToolCalls) }
     var ttsNarrative by remember { mutableStateOf(baseTts.narrative) }
+    var engines by remember { mutableStateOf(emptyList<TtsEngineInfo>()) }
+    var voices by remember { mutableStateOf(emptyList<VoiceInfo>()) }
+    // Отображаемый язык — производное, а не отдельное состояние: локаль
+    // выбранного голоса (он всегда несёт свой язык), иначе сохранённый выбор.
+    // Язык не выдумывается: без голоса и сохранённого выбора остаётся пустым.
+    val effectiveVoiceLocale = selectedVoiceLanguage(voices, ttsVoice, ttsVoiceLocale)
     // Текущая озвучка режима (в т.ч. несохранённые правки) — её сохраняем
     // и по ней же предпрослушиваем пример.
     val currentTts = TtsConfig(
@@ -145,6 +153,7 @@ fun ModeConfigScreen(
         volume = ttsVolume,
         enginePackage = ttsEngine.ifBlank { null },
         voiceName = ttsVoice.ifBlank { null },
+        voiceLocale = effectiveVoiceLocale.ifBlank { null },
         speakToolCalls = ttsToolCalls,
         narrative = ttsNarrative,
     )
@@ -156,8 +165,6 @@ fun ModeConfigScreen(
     var sttRecognizerComponent by remember { mutableStateOf(baseStt.recognizerComponent) }
     var sttBluetoothInput by remember { mutableStateOf(baseStt.bluetoothInput) }
     var recognitionServices by remember { mutableStateOf(emptyList<RecognitionServiceInfo>()) }
-    var engines by remember { mutableStateOf(emptyList<TtsEngineInfo>()) }
-    var voices by remember { mutableStateOf(emptyList<VoiceInfo>()) }
     var engineExpanded by remember { mutableStateOf(false) }
     var localeExpanded by remember { mutableStateOf(false) }
     var voiceExpanded by remember { mutableStateOf(false) }
@@ -189,6 +196,7 @@ fun ModeConfigScreen(
         ttsPitch = tts.pitch
         ttsVolume = tts.volume
         ttsVoice = tts.voiceName ?: ""
+        ttsVoiceLocale = tts.voiceLocale ?: ""
         ttsEngine = tts.enginePackage ?: ""
         ttsToolCalls = tts.speakToolCalls
         ttsNarrative = tts.narrative
@@ -201,7 +209,13 @@ fun ModeConfigScreen(
         sttBluetoothInput = stt.bluetoothInput
     }
     LaunchedEffect(Unit) {
-        engines = runCatching { loadEngines() }.getOrElse { emptyList() }
+        engines = try {
+            loadEngines()
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            emptyList()
+        }
     }
     LaunchedEffect(mode) {
         recognitionServices = loadRecognitionServices()
@@ -211,15 +225,19 @@ fun ModeConfigScreen(
         defaultPromptText = runCatching { loadDefaultPrompt() }.getOrElse { "" }
     }
     // Голоса — лениво по выбранному движку ("": привязанный/дефолт).
-    // После загрузки язык подтягиваем из сохранённого голоса, иначе первый.
+    // Список только читается: выбор языка/голоса отсюда не выводится и не
+    // сверяется — конфиг прилетает асинхронно и может смениться после
+    // загрузки, а сама загрузка может не успеть. Язык и голос отображаются
+    // из сохранённого выбора (см. effectiveVoiceLocale), отменённый эффект
+    // состояние не пишет.
     LaunchedEffect(ttsEngine) {
-        val loaded = runCatching { loadVoices(ttsEngine.ifBlank { null }) }.getOrElse { emptyList() }
-        voices = loaded
-        val savedLocale = loaded.find { it.name == ttsVoice }?.localeTag
-        ttsVoiceLocale = savedLocale
-            ?: loaded.firstOrNull { it.localeTag == ttsVoiceLocale }?.localeTag
-            ?: loaded.firstOrNull()?.localeTag.orEmpty()
-        if (ttsVoice.isNotBlank() && savedLocale == null) ttsVoice = ""
+        voices = try {
+            loadVoices(ttsEngine.ifBlank { null })
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            emptyList()
+        }
     }
 
     val title = when (mode) {
@@ -531,11 +549,17 @@ fun ModeConfigScreen(
                 onChannelChange = { ttsChannel = it },
                 engines = engines,
                 enginePackage = ttsEngine,
-                onEngineChange = { ttsEngine = it },
+                onEngineChange = {
+                    // Имена голосов уникальны только внутри движка: при смене
+                    // движка сохранённый голос и его язык к нему не относятся.
+                    ttsEngine = it
+                    ttsVoice = ""
+                    ttsVoiceLocale = ""
+                },
                 engineExpanded = engineExpanded,
                 onEngineExpandedChange = { engineExpanded = it },
                 voices = voices,
-                voiceLocale = ttsVoiceLocale,
+                voiceLocale = effectiveVoiceLocale,
                 onVoiceLocaleChange = { ttsVoiceLocale = it },
                 localeExpanded = localeExpanded,
                 onLocaleExpandedChange = { localeExpanded = it },
@@ -858,7 +882,11 @@ private fun TtsSection(
         onExpandedChange = onVoiceExpandedChange,
     ) {
         OutlinedTextField(
-            value = localeVoices.find { it.name == voiceName }?.let { voiceTitle(it) }
+            // Значение ищем по всем голосам движка, не по отфильтрованным:
+            // сохранённый голос обязан отображаться даже при пустом списке
+            // (загрузка не успела/не удалась) — его имя, а не «по умолчанию».
+            value = voices.find { it.name == voiceName }?.let { voiceTitle(it) }
+                ?: voiceName.takeIf { it.isNotBlank() }
                 ?: voiceDefault,
             onValueChange = {},
             label = { Text(voiceLabel) },

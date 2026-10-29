@@ -294,6 +294,9 @@ data class ShareExtras(
  * голос и тембр. `enginePackage` — пакет синтезатора (`TextToSpeech.getEngines`),
  * null — системный по умолчанию. `voiceName` — имя из `voices` этого движка
  * (имена уникальны только внутри движка), null — голос по умолчанию.
+ * `voiceLocale` — язык выбора (BCP-47, `localeTag` голосов движка): для
+ * выбранного голоса это его локаль, для голоса по умолчанию — язык синтеза;
+ * null — язык не выбран.
  * `speakToolCalls` — озвучивать вызовы инструментов, но только комментарием
  * агента («ищу контакт…»); тип инструмента не зачитывается никогда.
  * `narrative` — рассказ о работе через экранный чтец (звук TTS не занимает).
@@ -306,6 +309,7 @@ data class TtsConfig(
     val volume: Float = 1f,
     val enginePackage: String? = null,
     val voiceName: String? = null,
+    val voiceLocale: String? = null,
     val speakToolCalls: Boolean = true,
     val narrative: Boolean = true,
 ) {

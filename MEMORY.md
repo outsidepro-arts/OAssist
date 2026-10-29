@@ -105,6 +105,15 @@
 
 ### Речь и жизненный цикл
 
+- Выбор озвучки режима (2026-10-29): `TtsConfig.voiceLocale` хранит язык выбора
+  (BCP-47): локаль выбранного голоса либо язык синтеза для голоса по умолчанию;
+  `SpeechOutput.applyConfig` применяет его к `engine.language` (без поля — прежний
+  дефолт `ru-RU`). На экране режима язык отображается производным от выбранного
+  голоса → сохранённого выбора (за пользователя не выдумывается), загрузка списка
+  голосов выбор не сверяет и не затирает, отменённая загрузка состояние не пишет,
+  смена движка сбрасывает голос и язык явно. Легаси-конфиги без поля читаются как
+  «язык не выбран», при сохранении поле материализуется.
+  Подробности — [запись](docs/history/mode-tts-selection-display-2026-10-29.md).
 - Ответ и нарратив — разные каналы. SCREEN_READER передаёт завершённые предложения
   через `ScreenReaderSpeaker` / `View.announceForAccessibility` (`TYPE_ANNOUNCEMENT`);
   видимый поток ответа не является live region. Старый рецепт скрытого LiveRegion
@@ -280,6 +289,7 @@
 
 | Изменение | Зафиксированные автоматические проверки | Ожидает устройства / TalkBack |
 |---|---|---|
+| Отображение выбора синтеза в режимах (2026-10-29) | Все JVM-тесты проекта без ошибок и пропусков (новые: `SelectedVoiceLanguageTest`, легаси-кодек `voiceLocale`), `:app:assembleDebug`, `lintDebug` core:model/speech/data/feature:settings/app. [Подробности](docs/history/mode-tts-selection-display-2026-10-29.md) | Закрыто по подтверждению пользователя: отображение языка и голоса работает. Отдельные результаты пунктов ручного чеклиста и TalkBack-проход не сообщены |
 | Расширенная статистика использования (2026-10-29) | Все JVM-тесты проекта без ошибок и пропусков (model 50, provider 209, data 64, agent 414, ui 18, net 16, speech 113 и др.; новые — OpenCode-расширение по 4 протоколам, `RateLimitHeaders`, `StreamUsageTest`, расширенные `UsageTest`/`TurnCodecTest`/`AgentLoopUsageTest`), `:app:assembleDebug`, `lintDebug` core:model/provider/data/agent/ui и app. [Подробности](docs/history/usage-stats-expansion-2026-10-29.md) | Сверка формата `usage.opencode` и заголовков лимитов с реальными ответами OpenCode Zen/Go; TalkBack-проход «Информации о чате» |
 | Лимит шагов и плейсхолдер `{steps_limit}` (2026-10-29) | 414 JVM-тестов core:agent без ошибок и пропусков (новые тесты `{steps_limit}` в PromptRendererTest), assembleDebug, lint core:agent/feature:settings/app. [Подробности](docs/history/agent-step-limit-2026-10-29.md) | Закрыто по подтверждению пользователя: на устройстве всё работает. Отдельные результаты пунктов ручного чеклиста не сообщены; TalkBack не требовался (изменён только текст справки) |
 | Упрощение модели провайдера (2026-10-28) | Все JVM-тесты проекта без ошибок и пропусков (новые: пресеты и миграция легаси-kind по host-совпадению с материализацией версии, единый каталог с lenient-парсером и `catalogPath`, мерж `extraBody` в wire-тела, auth-схемы, универсальный роутинг), `:app:assembleDebug`, `lintDebug` для core:model, core:net, core:data, core:provider, feature:settings, app. [Подробности](docs/history/provider-model-simplification-2026-10-28.md) | TalkBack-проход формы провайдера; подключение реального агрегатора как CUSTOM + авто-протокол; миграция реальных данных пользователя на устройстве |
