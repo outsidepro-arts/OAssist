@@ -22,7 +22,6 @@ import ru.outsideproarts.oassist.core.model.ModelInfo
 import ru.outsideproarts.oassist.core.model.ModelProtocol
 import ru.outsideproarts.oassist.core.model.ProviderProfile
 import ru.outsideproarts.oassist.core.model.ProviderUsage
-import ru.outsideproarts.oassist.core.model.mergeUsage
 import ru.outsideproarts.oassist.core.provider.ChatChunk
 import ru.outsideproarts.oassist.core.model.ChatMessage
 import ru.outsideproarts.oassist.core.provider.EndpointConfig
@@ -30,11 +29,14 @@ import ru.outsideproarts.oassist.core.provider.ModelClient
 import ru.outsideproarts.oassist.core.provider.ProviderAuth
 import ru.outsideproarts.oassist.core.provider.ProviderError
 import ru.outsideproarts.oassist.core.provider.ProviderJson
+import ru.outsideproarts.oassist.core.provider.RateLimitHeaders
 import ru.outsideproarts.oassist.core.provider.detectStreamErrorMessage
 import ru.outsideproarts.oassist.core.provider.dialogKey
 import ru.outsideproarts.oassist.core.provider.fetchModelCatalog
 import ru.outsideproarts.oassist.core.provider.isProtocolUnsupportedMessage
+import ru.outsideproarts.oassist.core.provider.mapProviderUsage
 import ru.outsideproarts.oassist.core.provider.resolveProviderAuth
+import ru.outsideproarts.oassist.core.provider.withRateLimits
 import ru.outsideproarts.oassist.core.provider.openai.ToolSchemaDto
 
 /**
@@ -104,6 +106,8 @@ class GeminiClient internal constructor(
             var nextId = 0
             var finish: String? = null
             var usage: ProviderUsage? = null
+            // «Сколько осталось до ограничения» — из заголовков ответа.
+            val rateLimits = RateLimitHeaders.parse(call.response.headers)
             incoming.collect { event ->
                 val data = event.data ?: return@collect
                 val dto = runCatching {
@@ -115,9 +119,9 @@ class GeminiClient internal constructor(
                         ?.let { throw ProviderError.Protocol("gemini: $it") }
                     return@collect
                 }
-                // Usage-only чанк (финальный, с пустыми candidates) — читаем
-                // usageMetadata до гейта, иначе статистика теряется.
-                dto.usageMetadata?.toProviderUsage()?.let { usage = mergeUsage(usage, it) }
+                // usageMetadata кумулятивен и приходит на каждом чанке — берём
+                // последний снимок целиком: суммирование задвоило бы счётчики.
+                dto.usageMetadata?.toProviderUsage()?.let { usage = it }
                 val chunk = dto.takeIf { it.candidates.isNotEmpty() }
                 if (chunk == null) {
                     // `{"error":...}` тоже декодируется как GeminiStreamChunkDto —
@@ -132,7 +136,11 @@ class GeminiClient internal constructor(
                 extracted.chunks.forEach { emit(it) }
             }
             // Без finish_reason соединение закрылось досрочно: ответ мог быть усечён.
-            emit(ChatChunk.Finish(reason = finish ?: "STOP", abrupt = finish == null, usage = usage))
+            emit(ChatChunk.Finish(
+                reason = finish ?: "STOP",
+                abrupt = finish == null,
+                usage = usage.withRateLimits(rateLimits),
+            ))
         }
     }
 
@@ -172,17 +180,22 @@ class GeminiClient internal constructor(
     }
 }
 
-/** Usage-метаданные Gemini в каноническую модель; thinking-токены — в output. */
-internal fun GeminiUsageMetadataDto.toProviderUsage(): ProviderUsage? {
-    val output = sumNullable(candidatesTokenCount, thoughtsTokenCount)
-    val mapped = ProviderUsage.of(
-        inputTokens = promptTokenCount,
-        outputTokens = output,
-        totalTokens = totalTokenCount,
-        cachedTokens = cachedContentTokenCount,
-    )
-    return mapped.takeUnless { it.isEmpty }
-}
+/**
+ * Usage-метаданные Gemini в каноническую модель: thinking-токены — в output
+ * (и отдельной строкой «мышление»), токены результатов инструментов — в
+ * toolTokens (входят в total провайдера, но не в prompt/candidates).
+ * Cost/opencode — расширение OpenCode на Gemini-протоколе.
+ */
+internal fun GeminiUsageMetadataDto.toProviderUsage(): ProviderUsage? = mapProviderUsage(
+    inputTokens = promptTokenCount,
+    outputTokens = sumNullable(candidatesTokenCount, thoughtsTokenCount),
+    totalTokens = totalTokenCount,
+    cachedTokens = cachedContentTokenCount,
+    reasoningTokens = thoughtsTokenCount,
+    toolTokens = toolUsePromptTokenCount,
+    costUsd = cost,
+    openCode = opencode,
+)
 
 private fun sumNullable(a: Long?, b: Long?): Long? = when {
     a == null -> b

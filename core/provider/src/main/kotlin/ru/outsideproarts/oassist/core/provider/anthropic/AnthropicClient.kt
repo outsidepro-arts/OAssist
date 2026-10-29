@@ -23,7 +23,6 @@ import ru.outsideproarts.oassist.core.model.ModelInfo
 import ru.outsideproarts.oassist.core.model.ModelProtocol
 import ru.outsideproarts.oassist.core.model.ProviderProfile
 import ru.outsideproarts.oassist.core.model.ProviderUsage
-import ru.outsideproarts.oassist.core.model.mergeUsage
 import ru.outsideproarts.oassist.core.provider.ChatChunk
 import ru.outsideproarts.oassist.core.model.ChatMessage
 import ru.outsideproarts.oassist.core.provider.EndpointConfig
@@ -31,10 +30,12 @@ import ru.outsideproarts.oassist.core.provider.ModelClient
 import ru.outsideproarts.oassist.core.provider.ProviderAuth
 import ru.outsideproarts.oassist.core.provider.ProviderError
 import ru.outsideproarts.oassist.core.provider.ProviderJson
+import ru.outsideproarts.oassist.core.provider.RateLimitHeaders
 import ru.outsideproarts.oassist.core.provider.dialogKey
 import ru.outsideproarts.oassist.core.provider.fetchModelCatalog
 import ru.outsideproarts.oassist.core.provider.isProtocolUnsupportedMessage
 import ru.outsideproarts.oassist.core.provider.resolveProviderAuth
+import ru.outsideproarts.oassist.core.provider.withRateLimits
 import ru.outsideproarts.oassist.core.provider.openai.ToolSchemaDto
 
 /**
@@ -116,8 +117,10 @@ class AnthropicClient internal constructor(
             var stopReason: String? = null
             var sawStop = false
             var callsFlushed = false
-            var inputUsage: ProviderUsage? = null
-            var outputTokens: Long? = null
+            var startUsage: AnthropicUsageDto? = null
+            var deltaUsage: AnthropicUsageDto? = null
+            // «Сколько осталось до ограничения» — из заголовков ответа.
+            val rateLimits = RateLimitHeaders.parse(call.response.headers)
             suspend fun flushCalls() {
                 if (callsFlushed) return
                 callsFlushed = true
@@ -130,13 +133,10 @@ class AnthropicClient internal constructor(
                     ))
                 }
             }
-            // Итоговый usage хода: input из message_start, output — кумулятивный
-            // из message_delta (перезапись, не сумма). Строится через mergeUsage
-            // ради восстановления totalTokens.
-            fun currentUsage(): ProviderUsage? = mergeUsage(
-                inputUsage,
-                ProviderUsage.of(outputTokens = outputTokens),
-            )
+            // Итоговый usage хода собирается один раз из message_start +
+            // последнего message_delta (см. anthropicUsageOrNull: перекрытие
+            // по полям, а не сумма — у агрегаторов delta несёт полную картину).
+            fun currentUsage(): ProviderUsage? = anthropicUsageOrNull(startUsage, deltaUsage)
             // Сервер закрывает стрим сам; отдельного `[DONE]` у Anthropic нет —
             // финал приходит событием `message_stop`.
             incoming.collect { event ->
@@ -150,10 +150,7 @@ class AnthropicClient internal constructor(
                                 data,
                             )
                         }.getOrNull()?.message?.usage?.let { u ->
-                            inputUsage = ProviderUsage.of(
-                                inputTokens = u.inputTokens,
-                                cachedTokens = u.cacheReadInputTokens,
-                            )
+                            startUsage = u
                         }
                     }
                     "content_block_start" -> {
@@ -200,8 +197,8 @@ class AnthropicClient internal constructor(
                             )
                         }.getOrNull() ?: return@collect
                         deltaEvent.delta?.stopReason?.let { stopReason = it }
-                        // Кумулятивный итог — берём последнее значение.
-                        deltaEvent.usage?.outputTokens?.let { outputTokens = it }
+                        // Кумулятивный итог — берём последнее событие целиком.
+                        deltaEvent.usage?.let { deltaUsage = it }
                     }
                     "message_stop" -> {
                         sawStop = true
@@ -222,7 +219,11 @@ class AnthropicClient internal constructor(
             // Usage несёт только этот финальный Finish (message_stop — без него),
             // иначе аккумуляция в AgentLoop задвоила бы счётчики.
             flushCalls()
-            emit(ChatChunk.Finish(reason = stopReason ?: "end_turn", abrupt = !sawStop, usage = currentUsage()))
+            emit(ChatChunk.Finish(
+                reason = stopReason ?: "end_turn",
+                abrupt = !sawStop,
+                usage = currentUsage().withRateLimits(rateLimits),
+            ))
         }
     }
 

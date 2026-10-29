@@ -114,6 +114,8 @@ class AgentLoop(
         // Сумма usage по раундам хода; промежуточные Finish клиентов usage не несут
         // (задвоение исключено на уровне клиентов).
         var turnUsage: ProviderUsage? = null
+        // Итог хода с числом запросов к модели: round-trip'ы = раунды тулов.
+        fun turnUsageWithRequests(): ProviderUsage? = turnUsage?.copy(requests = rounds)
         while (maxToolRounds <= 0 || rounds < maxToolRounds) {
             rounds++
             val toolCalls = mutableListOf<ChatChunk.ToolCall>()
@@ -184,8 +186,9 @@ class AgentLoop(
                         turn
                     },
                 )
-                emit(ChatChunk.Finish(reason = "stop", abrupt = streamAbrupt, usage = turnUsage))
-                turnUsage?.let { events?.onTurnUsage(it) }
+                val finalUsage = turnUsageWithRequests()
+                emit(ChatChunk.Finish(reason = "stop", abrupt = streamAbrupt, usage = finalUsage))
+                finalUsage?.let { events?.onTurnUsage(it) }
                 return@flow
             }
 
@@ -281,8 +284,9 @@ class AgentLoop(
                     messages.add(ChatMessage(role = ChatRole.ASSISTANT, content = finalText))
                     emit(ChatChunk.Content(finalText, isTerminalFarewell = true))
                     onTurnMessages?.invoke(messages.drop(turnStart).toList())
-                    emit(ChatChunk.Finish(reason = "stop", abrupt = streamAbrupt, usage = turnUsage, closeSession = true))
-                    turnUsage?.let { events?.onTurnUsage(it) }
+                    val finalUsage = turnUsageWithRequests()
+                    emit(ChatChunk.Finish(reason = "stop", abrupt = streamAbrupt, usage = finalUsage, closeSession = true))
+                    finalUsage?.let { events?.onTurnUsage(it) }
                     return@flow
                 }
             }
@@ -290,8 +294,9 @@ class AgentLoop(
 
         emit(ChatChunk.Content("Достигнут лимит вызовов инструментов."))
         onTurnMessages?.invoke(messages.drop(turnStart).toList())
-        emit(ChatChunk.Finish(reason = "max_tool_rounds", usage = turnUsage))
-        turnUsage?.let { events?.onTurnUsage(it) }
+        val finalUsage = turnUsageWithRequests()
+        emit(ChatChunk.Finish(reason = "max_tool_rounds", usage = finalUsage))
+        finalUsage?.let { events?.onTurnUsage(it) }
     }
 
     suspend fun complete(

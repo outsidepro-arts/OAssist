@@ -16,7 +16,10 @@ import ru.outsideproarts.oassist.core.model.ContextData
 import ru.outsideproarts.oassist.core.model.ContextSource
 import ru.outsideproarts.oassist.core.model.ImagePart
 import ru.outsideproarts.oassist.core.model.ModelUserInput
+import ru.outsideproarts.oassist.core.model.BillingSource
 import ru.outsideproarts.oassist.core.model.ProviderUsage
+import ru.outsideproarts.oassist.core.model.RateLimitBucket
+import ru.outsideproarts.oassist.core.model.RateLimitSnapshot
 import ru.outsideproarts.oassist.core.model.ReasoningBlock
 import ru.outsideproarts.oassist.core.model.StoredTurn
 import ru.outsideproarts.oassist.core.model.ToolCallRef
@@ -135,6 +138,48 @@ class TurnCodecTest {
     fun decode_corruptPayload_returnsNull() {
         assertNull(TurnCodec.decode("{не json", media))
         assertNull(TurnCodec.decode("", media))
+    }
+
+    @Test
+    fun roundTrip_preservesExtendedUsage() {
+        val limits = RateLimitSnapshot(
+            requests = RateLimitBucket(limit = 60, remaining = 42, resetAtEpochSeconds = 1_760_000_000),
+        )
+        val original = StoredTurn(
+            userText = "q",
+            answer = "a",
+            usage = ProviderUsage.of(
+                inputTokens = 11,
+                outputTokens = 7,
+                cachedTokens = 3,
+                cacheWriteTokens = 2,
+                reasoningTokens = 5,
+                toolTokens = 1,
+                costUsd = 0.001,
+                listCostUsd = 0.002,
+                allowanceUsd = 0.0009,
+                billingSource = BillingSource.GO,
+                costEstimated = true,
+                requests = 4,
+                rateLimits = limits,
+            ),
+        )
+        val restored = TurnCodec.decode(TurnCodec.encode(original, "c1", "t1", media), media)!!
+        assertEquals(original.usage, restored.usage)
+    }
+
+    @Test
+    fun decode_legacyUsage_withoutNewFields_readsDefaults() {
+        // Payload отгруженных сборок до расширения статистики — без миграции.
+        val legacy = """{"userText":"q","answer":"a","usage":{"inputTokens":11,"outputTokens":7,"totalTokens":18,"cachedTokens":null,"costUsd":0.001}}"""
+        val restored = TurnCodec.decode(legacy, media)!!
+        val usage = restored.usage!!
+        assertEquals(11L, usage.inputTokens)
+        assertEquals(0.001, usage.costUsd)
+        assertNull(usage.reasoningTokens)
+        assertNull(usage.cacheWriteTokens)
+        assertNull(usage.requests)
+        assertNull(usage.rateLimits)
     }
 
     @Test

@@ -47,7 +47,9 @@ class AgentLoopUsageTest {
         )
         val chunks = AgentLoop(client).stream("m", null, emptyList(), "q").toList()
         val finish = chunks.last() as ChatChunk.Finish
-        assertEquals(usage, finish.usage)
+        // Ход добавляет число запросов к модели (один round-trip).
+        assertEquals(usage.copy(requests = 1), finish.usage)
+        assertEquals(1, finish.usage!!.requests)
     }
 
     @Test
@@ -73,6 +75,8 @@ class AgentLoopUsageTest {
         assertEquals(40L, finish.usage!!.outputTokens)
         assertEquals(440L, finish.usage!!.totalTokens)
         assertEquals(0.001, finish.usage!!.costUsd!!, 1e-9)
+        // Два round-trip'а к модели (тул-раунд + финал).
+        assertEquals(2, finish.usage!!.requests)
     }
 
     @Test
@@ -92,6 +96,7 @@ class AgentLoopUsageTest {
         AgentLoop(client, events = events).stream("m", null, emptyList(), "q").toList()
         assertEquals(1, events.recorded.size)
         assertEquals(35L, events.recorded.single().totalTokens)
+        assertEquals(2, events.recorded.single().requests)
     }
 
     @Test

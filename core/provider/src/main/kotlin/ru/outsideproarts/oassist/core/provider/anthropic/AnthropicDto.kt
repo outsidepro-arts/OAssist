@@ -3,6 +3,8 @@ package ru.outsideproarts.oassist.core.provider.anthropic
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.JsonElement
+import ru.outsideproarts.oassist.core.provider.mapProviderUsage
+import ru.outsideproarts.oassist.core.provider.opencode.OpenCodeUsageExtensionDto
 
 /** Ответ GET /v1/models. Лишние поля игнорируются lenient-парсером. */
 @Serializable
@@ -108,7 +110,65 @@ data class AnthropicUsageDto(
     @SerialName("output_tokens") val outputTokens: Long? = null,
     @SerialName("cache_creation_input_tokens") val cacheCreationInputTokens: Long? = null,
     @SerialName("cache_read_input_tokens") val cacheReadInputTokens: Long? = null,
+    /** Разбивка записи кэша по TTL; суммарно — в [cacheCreationInputTokens]. */
+    @SerialName("cache_creation") val cacheCreation: AnthropicCacheCreationDto? = null,
+    /** Стоимость запроса в USD (OpenCode на Anthropic-протоколе); нативный Anthropic не шлёт. */
+    val cost: Double? = null,
+    /** Расширенная статистика OpenCode (billing_source/list_cost/allowance/tokens). */
+    val opencode: OpenCodeUsageExtensionDto? = null,
 )
+
+/** Запись кэша по TTL (5 минут / 1 час). */
+@Serializable
+data class AnthropicCacheCreationDto(
+    @SerialName("ephemeral_5m_input_tokens") val ephemeral5mInputTokens: Long? = null,
+    @SerialName("ephemeral_1h_input_tokens") val ephemeral1hInputTokens: Long? = null,
+)
+
+/**
+ * Итоговый usage хода Anthropic: input/кэш — из message_start, output —
+ * кумулятивный из message_delta. У агрегаторов (OpenCode) message_delta несёт
+ * полную картину, включая cost/opencode, поэтому поля delta выигрывают у start
+ * по одному полю — суммирование задвоило бы input и cost. Полный вход Anthropic
+ * = input + запись кэша + чтение кэша (так считает билл провайдера) — total
+ * восстанавливается с их учётом.
+ */
+internal fun anthropicUsageOrNull(
+    start: AnthropicUsageDto?,
+    delta: AnthropicUsageDto?,
+): ru.outsideproarts.oassist.core.model.ProviderUsage? {
+    if (start == null && delta == null) return null
+    fun <T> pick(selector: (AnthropicUsageDto) -> T?): T? =
+        delta?.let(selector) ?: start?.let(selector)
+
+    val input = pick { it.inputTokens }
+    val output = pick { it.outputTokens }
+    val cacheWrite = pick {
+        it.cacheCreationInputTokens
+            ?: sumNullable(it.cacheCreation?.ephemeral5mInputTokens, it.cacheCreation?.ephemeral1hInputTokens)
+    }
+    val cached = pick { it.cacheReadInputTokens }
+    val total = if (input != null || output != null || cacheWrite != null || cached != null) {
+        (input ?: 0) + (output ?: 0) + (cacheWrite ?: 0) + (cached ?: 0)
+    } else {
+        null
+    }
+    return mapProviderUsage(
+        inputTokens = input,
+        outputTokens = output,
+        totalTokens = total,
+        cachedTokens = cached,
+        cacheWriteTokens = cacheWrite,
+        costUsd = pick { it.cost },
+        openCode = pick { it.opencode },
+    )
+}
+
+private fun sumNullable(a: Long?, b: Long?): Long? = when {
+    a == null -> b
+    b == null -> a
+    else -> a + b
+}
 
 /** Первое событие потока: несёт message с usage (input_tokens известны сразу). */
 @Serializable

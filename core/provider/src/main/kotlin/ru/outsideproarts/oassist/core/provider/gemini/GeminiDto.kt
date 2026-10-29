@@ -3,6 +3,7 @@ package ru.outsideproarts.oassist.core.provider.gemini
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.JsonElement
+import ru.outsideproarts.oassist.core.provider.opencode.OpenCodeUsageExtensionDto
 
 /** Ответ GET /v1beta/models. `name` — вида `models/gemini-2.0-flash`. */
 @Serializable
@@ -94,4 +95,10 @@ data class GeminiUsageMetadataDto(
     @SerialName("cachedContentTokenCount") val cachedContentTokenCount: Long? = null,
     /** Токены thinking-режима — биллятся как output. */
     @SerialName("thoughtsTokenCount") val thoughtsTokenCount: Long? = null,
+    /** Токены результатов инструментов, отданных модели обратно (биллятся как input). */
+    @SerialName("toolUsePromptTokenCount") val toolUsePromptTokenCount: Long? = null,
+    /** Стоимость запроса в USD (OpenCode на Gemini-протоколе); нативный Gemini не шлёт. */
+    val cost: Double? = null,
+    /** Расширенная статистика OpenCode (billing_source/list_cost/allowance/tokens). */
+    val opencode: OpenCodeUsageExtensionDto? = null,
 )

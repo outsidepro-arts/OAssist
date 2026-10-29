@@ -111,4 +111,118 @@ class UsageTest {
         assertNull(aggregateUsage(emptyList()))
         assertNull(aggregateUsage(listOf(StoredTurn(userText = "x"))))
     }
+
+    @Test
+    fun of_mapsExtendedFields() {
+        val limits = RateLimitSnapshot(requests = RateLimitBucket(limit = 100, remaining = 40))
+        val usage = ProviderUsage.of(
+            inputTokens = 10,
+            outputTokens = 5,
+            cachedTokens = 3,
+            cacheWriteTokens = 2,
+            reasoningTokens = 4,
+            toolTokens = 7,
+            costUsd = 0.01,
+            listCostUsd = 0.02,
+            allowanceUsd = 0.005,
+            billingSource = BillingSource.GO,
+            costEstimated = true,
+            requests = 2,
+            rateLimits = limits,
+        )
+        assertEquals(2L, usage.cacheWriteTokens)
+        assertEquals(4L, usage.reasoningTokens)
+        assertEquals(7L, usage.toolTokens)
+        assertEquals(0.02, usage.listCostUsd!!, 1e-9)
+        assertEquals(0.005, usage.allowanceUsd!!, 1e-9)
+        assertEquals(BillingSource.GO, usage.billingSource)
+        assertEquals(true, usage.costEstimated)
+        assertEquals(2, usage.requests)
+        assertEquals(limits, usage.rateLimits)
+    }
+
+    @Test
+    fun merge_sumsExtendedTokensAndRequests() {
+        val a = ProviderUsage.of(
+            cacheWriteTokens = 2,
+            reasoningTokens = 4,
+            toolTokens = 1,
+            listCostUsd = 0.02,
+            allowanceUsd = 0.005,
+            requests = 1,
+        )
+        val b = ProviderUsage.of(
+            cacheWriteTokens = 3,
+            reasoningTokens = 6,
+            toolTokens = 2,
+            listCostUsd = 0.03,
+            allowanceUsd = 0.007,
+            requests = 2,
+        )
+        val merged = mergeUsage(a, b)!!
+        assertEquals(5L, merged.cacheWriteTokens)
+        assertEquals(10L, merged.reasoningTokens)
+        assertEquals(3L, merged.toolTokens)
+        assertEquals(0.05, merged.listCostUsd!!, 1e-9)
+        assertEquals(0.012, merged.allowanceUsd!!, 1e-9)
+        assertEquals(3, merged.requests)
+    }
+
+    @Test
+    fun merge_keepsLatestRateLimitsAndBillingSource() {
+        val old = ProviderUsage.of(
+            billingSource = BillingSource.BALANCE,
+            rateLimits = RateLimitSnapshot(requests = RateLimitBucket(remaining = 10)),
+        )
+        val new = ProviderUsage.of(
+            billingSource = BillingSource.GO,
+            rateLimits = RateLimitSnapshot(requests = RateLimitBucket(remaining = 3)),
+        )
+        val merged = mergeUsage(old, new)!!
+        assertEquals(BillingSource.GO, merged.billingSource)
+        assertEquals(3L, merged.rateLimits!!.requests!!.remaining)
+        // Лимиты — состояние «на сейчас»: при склейке выигрывает последний.
+        assertEquals(10L, mergeUsage(new, old)!!.rateLimits!!.requests!!.remaining)
+    }
+
+    @Test
+    fun rateLimitsOnly_isNotEmpty() {
+        // Usage без токенов, но с лимитами — не пустой: остатки должны дойти до UI.
+        val usage = ProviderUsage.of(rateLimits = RateLimitSnapshot(tokens = RateLimitBucket(remaining = 5)))
+        assertEquals(false, usage.isEmpty)
+        assertEquals(usage, mergeUsage(null, usage))
+    }
+
+    @Test
+    fun totals_accumulatesExtendedAndCountsRequests() {
+        val totals = UsageTotals()
+        totals.record(ProviderUsage.of(inputTokens = 1, outputTokens = 1, cacheWriteTokens = 2, reasoningTokens = 3))
+        totals.record(ProviderUsage.of(inputTokens = 1, outputTokens = 1, toolTokens = 4, requests = 5))
+        val state = totals.state.value
+        assertEquals(2L, state.cacheWriteTokens)
+        assertEquals(3L, state.reasoningTokens)
+        assertEquals(4L, state.toolTokens)
+        // Ход без явных запросов считается одним запросом к модели.
+        assertEquals(6, state.requests)
+    }
+
+    @Test
+    fun aggregate_keepsLatestRateLimits() {
+        val turns = listOf(
+            StoredTurn(userText = "1", usage = ProviderUsage.of(
+                inputTokens = 1,
+                outputTokens = 1,
+                rateLimits = RateLimitSnapshot(requests = RateLimitBucket(remaining = 9)),
+            )),
+            StoredTurn(userText = "2", usage = ProviderUsage.of(
+                inputTokens = 1,
+                outputTokens = 1,
+                requests = 3,
+                rateLimits = RateLimitSnapshot(requests = RateLimitBucket(remaining = 4)),
+            )),
+        )
+        val total = aggregateUsage(turns)!!
+        assertEquals(4L, total.rateLimits!!.requests!!.remaining)
+        assertEquals(3, total.requests)
+    }
 }

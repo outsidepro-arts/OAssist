@@ -37,10 +37,12 @@ import ru.outsideproarts.oassist.core.provider.ImageCodec
 import ru.outsideproarts.oassist.core.provider.ModelClient
 import ru.outsideproarts.oassist.core.provider.ProviderError
 import ru.outsideproarts.oassist.core.provider.ProviderJson
+import ru.outsideproarts.oassist.core.provider.RateLimitHeaders
 import ru.outsideproarts.oassist.core.provider.detectStreamErrorMessage
 import ru.outsideproarts.oassist.core.provider.dialogKey
 import ru.outsideproarts.oassist.core.provider.fetchModelCatalog
 import ru.outsideproarts.oassist.core.provider.isProtocolUnsupportedMessage
+import ru.outsideproarts.oassist.core.provider.withRateLimits
 
 /**
  * Нативный клиент OpenAI Responses API (`POST {base}/responses`).
@@ -115,6 +117,8 @@ class OpenAiResponsesClient internal constructor(
             val pending = mutableMapOf<String, PendingCall>()
             var lastFinish: String? = null
             var usage: ProviderUsage? = null
+            // «Сколько осталось до ограничения» — из заголовков ответа.
+            val rateLimits = RateLimitHeaders.parse(call.response.headers)
             incoming.collect { event ->
                 val data = event.data ?: return@collect
                 val dto = runCatching {
@@ -216,7 +220,11 @@ class OpenAiResponsesClient internal constructor(
             // Страховка: соединение закрылось без completed/incomplete — ответ мог
             // быть усечён, помечаем abrupt. Usage несёт только финальный Finish
             // (событийные — без него), иначе аккумуляция в AgentLoop задвоила бы.
-            emit(ChatChunk.Finish(reason = lastFinish ?: "stop", abrupt = lastFinish == null, usage = usage))
+            emit(ChatChunk.Finish(
+                reason = lastFinish ?: "stop",
+                abrupt = lastFinish == null,
+                usage = usage.withRateLimits(rateLimits),
+            ))
         }
     }
 

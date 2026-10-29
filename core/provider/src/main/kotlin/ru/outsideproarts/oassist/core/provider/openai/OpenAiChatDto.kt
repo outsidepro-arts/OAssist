@@ -3,6 +3,8 @@ package ru.outsideproarts.oassist.core.provider.openai
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.JsonElement
+import ru.outsideproarts.oassist.core.provider.mapProviderUsage
+import ru.outsideproarts.oassist.core.provider.opencode.OpenCodeUsageExtensionDto
 
 /**
  * Сообщение чата или дельта. В потоке дельты поля [role]/[content] могут частично
@@ -82,6 +84,11 @@ data class ChatUsageDto(
     @SerialName("completion_tokens") val completionTokens: Long? = null,
     @SerialName("total_tokens") val totalTokens: Long? = null,
     @SerialName("prompt_tokens_details") val promptTokensDetails: ChatPromptTokensDetailsDto? = null,
+    @SerialName("completion_tokens_details") val completionTokensDetails: ChatCompletionTokensDetailsDto? = null,
+    /** Стоимость запроса в USD внутри usage (OpenCode/прокси); стандартный OpenAI не шлёт. */
+    val cost: Double? = null,
+    /** Расширенная статистика OpenCode (billing_source/list_cost/allowance/tokens). */
+    val opencode: OpenCodeUsageExtensionDto? = null,
 )
 
 @Serializable
@@ -89,20 +96,28 @@ data class ChatPromptTokensDetailsDto(
     @SerialName("cached_tokens") val cachedTokens: Long? = null,
 )
 
+@Serializable
+data class ChatCompletionTokensDetailsDto(
+    /** Токены «мышления» — биллятся как output, в текст ответа не входят. */
+    @SerialName("reasoning_tokens") val reasoningTokens: Long? = null,
+)
+
 /**
  * Usage/cost из ответа в каноническую модель. Cost — нестандартное поле
- * Zen/прокси (top-level), стандартный OpenAI его не шлёт — null честнее выдумок.
+ * Zen/прокси: внутри `usage` (OpenCode) либо top-level (легаси), стандартный
+ * OpenAI его не шлёт — null честнее выдумок.
  */
 internal fun ChatResponseDto.usageOrCost(): ru.outsideproarts.oassist.core.model.ProviderUsage? {
     if (usage == null && cost == null) return null
-    val mapped = ru.outsideproarts.oassist.core.model.ProviderUsage.of(
+    return mapProviderUsage(
         inputTokens = usage?.promptTokens,
         outputTokens = usage?.completionTokens,
         totalTokens = usage?.totalTokens,
         cachedTokens = usage?.promptTokensDetails?.cachedTokens,
-        costUsd = cost,
+        reasoningTokens = usage?.completionTokensDetails?.reasoningTokens,
+        costUsd = usage?.cost ?: cost,
+        openCode = usage?.opencode,
     )
-    return mapped.takeUnless { it.isEmpty }
 }
 
 @Serializable

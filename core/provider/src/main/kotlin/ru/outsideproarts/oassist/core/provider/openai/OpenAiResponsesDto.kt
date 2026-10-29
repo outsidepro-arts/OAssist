@@ -5,6 +5,8 @@ import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
 import ru.outsideproarts.oassist.core.model.ProviderUsage
+import ru.outsideproarts.oassist.core.provider.mapProviderUsage
+import ru.outsideproarts.oassist.core.provider.opencode.OpenCodeUsageExtensionDto
 
 /**
  * DTO OpenAI Responses API (`POST /responses`) — четвёртый проводной протокол
@@ -80,11 +82,24 @@ data class ResponsesUsageDto(
     @SerialName("output_tokens") val outputTokens: Long? = null,
     @SerialName("total_tokens") val totalTokens: Long? = null,
     @SerialName("input_tokens_details") val inputTokensDetails: ResponsesInputTokensDetailsDto? = null,
+    @SerialName("output_tokens_details") val outputTokensDetails: ResponsesOutputTokensDetailsDto? = null,
+    /** Стоимость запроса в USD (OpenCode/прокси); стандартный OpenAI не шлёт. */
+    val cost: Double? = null,
+    /** Расширенная статистика OpenCode (billing_source/list_cost/allowance/tokens). */
+    val opencode: OpenCodeUsageExtensionDto? = null,
 )
 
 @Serializable
 data class ResponsesInputTokensDetailsDto(
     @SerialName("cached_tokens") val cachedTokens: Long? = null,
+    /** Запись в prompt-кэш (TTL 30m/12h у OpenAI); биллится отдельным тарифом. */
+    @SerialName("cache_write_tokens") val cacheWriteTokens: Long? = null,
+)
+
+@Serializable
+data class ResponsesOutputTokensDetailsDto(
+    /** Токены «мышления» — биллятся как output, в текст ответа не входят. */
+    @SerialName("reasoning_tokens") val reasoningTokens: Long? = null,
 )
 
 @Serializable
@@ -98,13 +113,14 @@ data class ResponsesIncompleteDetailsDto(
     val reason: String? = null,
 )
 
-/** Usage Responses в каноническую модель. */
-internal fun ResponsesUsageDto.toProviderUsage(): ProviderUsage? {
-    val mapped = ProviderUsage.of(
-        inputTokens = inputTokens,
-        outputTokens = outputTokens,
-        totalTokens = totalTokens,
-        cachedTokens = inputTokensDetails?.cachedTokens,
-    )
-    return mapped.takeUnless { it.isEmpty }
-}
+/** Usage Responses в каноническую модель (включая cost/opencode у агрегаторов). */
+internal fun ResponsesUsageDto.toProviderUsage(): ProviderUsage? = mapProviderUsage(
+    inputTokens = inputTokens,
+    outputTokens = outputTokens,
+    totalTokens = totalTokens,
+    cachedTokens = inputTokensDetails?.cachedTokens,
+    cacheWriteTokens = inputTokensDetails?.cacheWriteTokens,
+    reasoningTokens = outputTokensDetails?.reasoningTokens,
+    costUsd = cost,
+    openCode = opencode,
+)

@@ -40,11 +40,13 @@ import ru.outsideproarts.oassist.core.provider.ModelClient
 import ru.outsideproarts.oassist.core.provider.ProviderAuth
 import ru.outsideproarts.oassist.core.provider.ProviderError
 import ru.outsideproarts.oassist.core.provider.ProviderJson
+import ru.outsideproarts.oassist.core.provider.RateLimitHeaders
 import ru.outsideproarts.oassist.core.provider.detectStreamErrorMessage
 import ru.outsideproarts.oassist.core.provider.dialogKey
 import ru.outsideproarts.oassist.core.provider.fetchModelCatalog
 import ru.outsideproarts.oassist.core.provider.isProtocolUnsupportedMessage
 import ru.outsideproarts.oassist.core.provider.resolveProviderAuth
+import ru.outsideproarts.oassist.core.provider.withRateLimits
 
 class OpenAiCompatibleClient internal constructor(
     private val endpoint: EndpointConfig,
@@ -131,6 +133,8 @@ class OpenAiCompatibleClient internal constructor(
             var lastFinish: String? = null
             var sawDone = false
             var usage: ProviderUsage? = null
+            // «Сколько осталось до ограничения» — из заголовков ответа.
+            val rateLimits = RateLimitHeaders.parse(call.response.headers)
             incoming.takeWhile { event ->
                 if (event.data == DONE_SENTINEL) {
                     sawDone = true
@@ -183,7 +187,11 @@ class OpenAiCompatibleClient internal constructor(
             // Usage несёт только этот финальный Finish (промежуточные — без него),
             // иначе аккумуляция в AgentLoop задвоила бы счётчики.
             flushCalls()
-            emit(ChatChunk.Finish(reason = lastFinish ?: "stop", abrupt = lastFinish == null && !sawDone, usage = usage))
+            emit(ChatChunk.Finish(
+                reason = lastFinish ?: "stop",
+                abrupt = lastFinish == null && !sawDone,
+                usage = usage.withRateLimits(rateLimits),
+            ))
         }
     }
 
