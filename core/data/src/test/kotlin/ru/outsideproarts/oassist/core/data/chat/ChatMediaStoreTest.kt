@@ -1,6 +1,7 @@
 package ru.outsideproarts.oassist.core.data.chat
 
 import java.io.File
+import java.io.IOException
 import java.util.Base64
 import org.junit.After
 import org.junit.Assert.assertEquals
@@ -79,6 +80,23 @@ class ChatMediaStoreTest {
         store.writeImage("c1", "t1", "u0", ImagePart(imageBase64 = base64("A")))
         store.deleteAll()
         assertFalse(File(root, "c1").exists())
+    }
+
+    @Test
+    fun deleteAll_reportsFailedDeletion() {
+        val undeletableRoot = object : File(root.absolutePath) {
+            override fun delete() = false
+        }
+        val failure = runCatching { ChatMediaStore(undeletableRoot).deleteAll() }.exceptionOrNull()
+        assertTrue(failure is IOException)
+        assertTrue(root.exists())
+    }
+
+    @Test
+    fun deleteTurn_reportsUnreadableChatDirectory() {
+        File(root, "c1").writeText("not a directory")
+        val failure = runCatching { store.deleteTurn("c1", "t1") }.exceptionOrNull()
+        assertTrue(failure is IOException)
     }
 
     @Test

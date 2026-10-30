@@ -3,6 +3,7 @@ package ru.outsideproarts.oassist.core.data.chat
 import ru.outsideproarts.oassist.core.model.AudioPart
 import ru.outsideproarts.oassist.core.model.ImagePart
 import java.io.File
+import java.io.IOException
 import java.util.Base64
 
 /** Ref на медиа-файл диалога: путь относительно корня [ChatMediaStore] + метаданные. */
@@ -54,11 +55,26 @@ class ChatMediaStore(private val root: File) {
     }
 
     fun deleteChat(chatId: String) {
-        runCatching { File(root, chatId).deleteRecursively() }
+        deleteRecursivelyOrThrow(File(root, chatId))
+    }
+
+    internal fun deleteTurn(chatId: String, turnId: String) {
+        val dir = File(root, chatId)
+        if (!dir.exists()) return
+        val files = dir.listFiles() ?: throw IOException("Cannot list chat media directory: $dir")
+        files.filter { it.name.startsWith("${turnId}_") }.forEach {
+            if (!it.delete()) throw IOException("Cannot delete chat media: $it")
+        }
+        val remaining = dir.listFiles() ?: throw IOException("Cannot list chat media directory: $dir")
+        if (remaining.isEmpty() && !dir.delete()) throw IOException("Cannot delete chat media directory: $dir")
     }
 
     fun deleteAll() {
-        runCatching { root.deleteRecursively() }
+        deleteRecursivelyOrThrow(root)
+    }
+
+    private fun deleteRecursivelyOrThrow(path: File) {
+        if (!path.deleteRecursively()) throw IOException("Cannot delete chat media: $path")
     }
 
     private fun write(chatId: String, name: String, data: ByteArray): String? = runCatching {

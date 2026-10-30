@@ -2,12 +2,16 @@ package ru.outsideproarts.oassist.core.data.chat
 
 import androidx.room.withTransaction
 import java.util.UUID
+import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.atomic.AtomicLong
+import kotlin.coroutines.coroutineContext
+import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
-import java.util.concurrent.ConcurrentHashMap
-import java.util.concurrent.atomic.AtomicLong
+import kotlinx.coroutines.withContext
 import ru.outsideproarts.oassist.core.data.db.ChatEntity
 import ru.outsideproarts.oassist.core.data.db.OAssistDatabase
 import ru.outsideproarts.oassist.core.data.db.TurnEntity
@@ -56,33 +60,57 @@ class ChatRepository(
     }
 
     suspend fun deleteChat(id: String) {
-        val diagnosticRoots = database.turnDao().listForChat(id)
-            .mapNotNull { TurnCodec.diagnosticOperationId(it.payload) }.toSet()
         diagnosticOwnershipLock.withLock {
-            diagnosticGenerations.computeIfAbsent(id) { AtomicLong() }.incrementAndGet()
-            deletedChatIds.add(id)
-            kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
-                onDiagnosticDelete(id, diagnosticRoots)
-            }
-            database.withTransaction {
-                database.turnDao().deleteForChat(id)
-                database.chatDao().delete(id)
+            withContext(NonCancellable) {
+                val diagnosticRoots = database.turnDao().listForChat(id)
+                    .mapNotNull { TurnCodec.diagnosticOperationId(it.payload) }.toSet()
+                kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+                    onDiagnosticDelete(id, diagnosticRoots)
+                }
+                media.deleteChat(id)
+                database.withTransaction {
+                    database.turnDao().deleteForChat(id)
+                    database.chatDao().delete(id)
+                }
+                diagnosticGenerations.computeIfAbsent(id) { AtomicLong() }.incrementAndGet()
+                deletedChatIds.add(id)
             }
         }
-        media.deleteChat(id)
     }
 
     suspend fun getChat(id: String): ChatSummary? = database.chatDao().findById(id)?.toSummary()
 
     suspend fun appendTurn(chatId: String, turn: StoredTurn) {
-        val turnId = UUID.randomUUID().toString()
-        val payload = TurnCodec.encode(turn, chatId, turnId, media)
-        val now = clock()
-        database.withTransaction {
-            val seq = database.turnDao().maxSeq(chatId) + 1
-            database.turnDao().insert(TurnEntity(id = turnId, chatId = chatId, seq = seq, payload = payload, createdAt = now))
-            database.chatDao().findById(chatId)?.let {
-                database.chatDao().update(it.copy(updatedAt = now))
+        diagnosticOwnershipLock.withLock {
+            check(database.chatDao().findById(chatId) != null) { "Chat does not exist: $chatId" }
+            val turnId = UUID.randomUUID().toString()
+            var committed = false
+            var failure: Throwable? = null
+            try {
+                val payload = TurnCodec.encode(turn, chatId, turnId, media)
+                val now = clock()
+                coroutineContext.ensureActive()
+                withContext(NonCancellable) {
+                    database.withTransaction {
+                        val chat = checkNotNull(database.chatDao().findById(chatId)) { "Chat does not exist: $chatId" }
+                        val seq = database.turnDao().maxSeq(chatId) + 1
+                        database.turnDao().insert(TurnEntity(id = turnId, chatId = chatId, seq = seq, payload = payload, createdAt = now))
+                        database.chatDao().update(chat.copy(updatedAt = now))
+                    }
+                    committed = true
+                }
+            } catch (error: Throwable) {
+                failure = error
+                throw error
+            } finally {
+                if (!committed) {
+                    try {
+                        media.deleteTurn(chatId, turnId)
+                    } catch (cleanupError: Throwable) {
+                        if (failure == null) throw cleanupError
+                        failure.addSuppressed(cleanupError)
+                    }
+                }
             }
         }
     }
@@ -99,48 +127,52 @@ class ChatRepository(
      * последней сессии. Пустой список — тоже перезапись (вызывать только когда
      * сессия непустая, см. вызывающего).
      */
-    suspend fun replaceAssistantTurns(turns: List<StoredTurn>) {
-        val now = clock()
-        media.deleteChat(ASSISTANT_CHAT_ID)
-        database.withTransaction {
-            val existing = database.chatDao().findById(ASSISTANT_CHAT_ID)
-            if (existing == null) {
-                database.chatDao().insert(
-                    ChatEntity(
-                        id = ASSISTANT_CHAT_ID,
-                        title = "",
-                        kind = ChatKind.ASSISTANT.name,
-                        mode = AssistMode.ASSISTANT.name,
-                        createdAt = now,
-                        updatedAt = now,
-                    ),
-                )
-            } else {
-                database.chatDao().update(existing.copy(updatedAt = now))
-            }
-            database.turnDao().deleteForChat(ASSISTANT_CHAT_ID)
-            turns.forEachIndexed { index, turn ->
-                val turnId = UUID.randomUUID().toString()
-                database.turnDao().insert(
-                    TurnEntity(
-                        id = turnId,
-                        chatId = ASSISTANT_CHAT_ID,
-                        seq = index,
-                        payload = TurnCodec.encode(turn, ASSISTANT_CHAT_ID, turnId, media),
-                        createdAt = now,
-                    ),
-                )
+    suspend fun replaceAssistantTurns(turns: List<StoredTurn>) = diagnosticOwnershipLock.withLock {
+        withContext(NonCancellable) {
+            val now = clock()
+            media.deleteChat(ASSISTANT_CHAT_ID)
+            database.withTransaction {
+                val existing = database.chatDao().findById(ASSISTANT_CHAT_ID)
+                if (existing == null) {
+                    database.chatDao().insert(
+                        ChatEntity(
+                            id = ASSISTANT_CHAT_ID,
+                            title = "",
+                            kind = ChatKind.ASSISTANT.name,
+                            mode = AssistMode.ASSISTANT.name,
+                            createdAt = now,
+                            updatedAt = now,
+                        ),
+                    )
+                } else {
+                    database.chatDao().update(existing.copy(updatedAt = now))
+                }
+                database.turnDao().deleteForChat(ASSISTANT_CHAT_ID)
+                turns.forEachIndexed { index, turn ->
+                    val turnId = UUID.randomUUID().toString()
+                    database.turnDao().insert(
+                        TurnEntity(
+                            id = turnId,
+                            chatId = ASSISTANT_CHAT_ID,
+                            seq = index,
+                            payload = TurnCodec.encode(turn, ASSISTANT_CHAT_ID, turnId, media),
+                            createdAt = now,
+                        ),
+                    )
+                }
             }
         }
     }
 
     /** Полное стирание (wipe/бэкап): чаты, ходы и медиа-файлы. */
-    suspend fun clearAll() {
-        database.withTransaction {
-            database.turnDao().deleteAll()
-            database.chatDao().deleteAll()
+    suspend fun clearAll() = diagnosticOwnershipLock.withLock {
+        withContext(NonCancellable) {
+            media.deleteAll()
+            database.withTransaction {
+                database.turnDao().deleteAll()
+                database.chatDao().deleteAll()
+            }
         }
-        media.deleteAll()
     }
 
     var onDiagnosticDelete: (String, Set<String>) -> Unit = { _, _ -> }

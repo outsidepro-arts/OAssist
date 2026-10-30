@@ -110,6 +110,7 @@ dependencies {
     androidTestImplementation(libs.androidx.compose.ui.test.junit4)
     androidTestImplementation(libs.androidx.test.ext.junit)
     androidTestImplementation(libs.androidx.test.runner)
+    androidTestImplementation(libs.androidx.room.runtime)
     androidTestImplementation(libs.ktor.client.mock)
     androidTestImplementation(libs.ktor.client.content.negotiation)
     androidTestImplementation(libs.ktor.serialization.kotlinx.json)
