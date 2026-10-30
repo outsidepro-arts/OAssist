@@ -272,6 +272,7 @@ fun ChatScreen(
         )
         val repo = ChatHandle.get()
         val currentId = chatId
+        val saver = viewModel.turnSavers.current
         val stored = turnStore.last()
         val isFirstTurn = turnStore.size == 1
         // Аудио-ход для модели не имеет текста: имя строится по ответу ассистента.
@@ -279,7 +280,10 @@ fun ChatScreen(
         when {
             currentId != null -> {
                 if (repo != null) {
-                    scope.launch { repo.appendTurn(currentId, stored) }
+                    viewModel.turnSavers.register(currentId, saver)
+                    saver.save(currentId, create = { currentId }) { id ->
+                        repo.appendTurn(id, stored)
+                    }
                 }
             }
             autoSaveChats -> {
@@ -290,8 +294,14 @@ fun ChatScreen(
                     val diagnosticSnapshot = diagnosticOwner.toList()
                     val savedTitle = chatTitle.ifBlank { placeholder }
                     val savedMode = sendMode()
-                    scope.launch {
-                        val id = repo.createChat(savedMode, savedTitle)
+                    saver.save(
+                        currentId = null,
+                        create = {
+                            val id = java.util.UUID.randomUUID().toString()
+                            viewModel.turnSavers.register(id, saver)
+                            repo.createChat(savedMode, savedTitle, id)
+                        },
+                    ) { id ->
                         diagnosticSnapshot.forEach { repo.bindDiagnosticOperation(id, it) }
                         repo.appendTurn(id, stored)
                         if (chatId == null && turnStore.any { it === stored }) {
@@ -534,6 +544,7 @@ fun ChatScreen(
 
     fun openChat(summary: ChatSummary) {
         cancelTurn()
+        viewModel.turnSavers.openChat(summary.id)
         viewModel.diagnosticOperations = mutableListOf()
         chatId = summary.id
         chatKind = summary.kind
@@ -559,6 +570,7 @@ fun ChatScreen(
      */
     fun resetChat() {
         cancelTurn()
+        viewModel.turnSavers.newChat()
         viewModel.diagnosticOperations = mutableListOf()
         chatId = null
         chatKind = ChatKind.REGULAR
@@ -577,7 +589,7 @@ fun ChatScreen(
     /** Сохранить текущий несохранённый диалог в список (со всеми ходами). */
     fun saveCurrentChat() {
         val repo = ChatHandle.get() ?: return
-        if (chatId != null || turnStore.isEmpty()) return
+        if (chatId != null || turnStore.isEmpty() || viewModel.turnSavers.current.isSaving) return
         val turns = turnStore.toList()
         val diagnosticOperations = viewModel.diagnosticOperations.toList()
         // Аудио-ход без текста: имя — из первого текстового хода или ответа.

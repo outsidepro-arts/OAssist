@@ -56,6 +56,8 @@ class ChatSessionViewModel : ViewModel() {
      */
     val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
 
+    internal val turnSavers = ChatTurnSavers(scope)
+
     override fun onCleared() {
         scope.cancel()
         // Сессия чата заканчивается с закрытием приложения: «разрешено на

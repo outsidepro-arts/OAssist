@@ -34,8 +34,7 @@ class ChatRepository(
     fun observeChats(): Flow<List<ChatSummary>> =
         database.chatDao().observeAll().map { list -> list.map { it.toSummary() } }
 
-    suspend fun createChat(mode: AssistMode, title: String): String {
-        val id = UUID.randomUUID().toString()
+    suspend fun createChat(mode: AssistMode, title: String, id: String = UUID.randomUUID().toString()): String {
         val now = clock()
         database.chatDao().insert(
             ChatEntity(
