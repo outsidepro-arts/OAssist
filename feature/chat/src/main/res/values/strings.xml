@@ -23,6 +23,9 @@
     <string name="chat_listening">Слушаю…</string>
     <string name="chat_open_list">Список чатов</string>
     <string name="chat_save">Сохранить чат</string>
+    <string name="chat_save_failed_retry">Ошибка сохранения. Повторить</string>
+    <string name="chat_delete_failed">Не удалось удалить чат. Повторите удаление из списка чатов.</string>
+    <string name="chat_history_load_failed">Не удалось загрузить историю. Повторите открытие чата после сохранения.</string>
     <string name="chat_delete_current">Удалить чат</string>
     <string name="chat_info_title">Информация о чате</string>
     <string name="chat_info_back">Назад</string>

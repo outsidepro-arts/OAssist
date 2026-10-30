@@ -2,7 +2,10 @@ package ru.outsideproarts.oassist.feature.chat
 
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.CoroutineExceptionHandler
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
 import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.yield
@@ -11,6 +14,43 @@ import org.junit.Assert.assertFalse
 import org.junit.Test
 
 class ChatTurnSaverTest {
+    @Test
+    fun failedFirstWriteDoesNotLetTheNextTurnOvertakeItOrEscapeTheQueue() = runBlocking {
+        val uncaught = mutableListOf<Throwable>()
+        val session = CoroutineScope(coroutineContext + SupervisorJob() + CoroutineExceptionHandler { _, error -> uncaught.add(error) })
+        try {
+            val saved = mutableListOf<String>()
+            val saver = ChatTurnSaver(session)
+            saver.save("chat", create = { error("already exists") }) { throw java.io.IOException("disk full") }
+            val next = saver.save("chat", create = { error("already exists") }) { saved.add("second") }
+            next.join()
+            assertEquals(emptyList<String>(), saved)
+            assertEquals(emptyList<Throwable>(), uncaught)
+        } finally {
+            session.cancel()
+        }
+    }
+
+    @Test
+    fun retryStartsWithTheFailedTurnAndReusesTheCreatedChat() = runBlocking {
+        val saved = mutableListOf<String>()
+        var creations = 0
+        var unavailable = true
+        val saver = ChatTurnSaver(this)
+        saver.save(null, create = { "chat-${++creations}" }) { id ->
+            if (unavailable) throw java.io.IOException("disk full")
+            saved.add("$id:first")
+        }.join()
+        saver.save(null, create = { "chat-${++creations}" }) { id -> saved.add("$id:second") }.join()
+        assertFalse(saver.awaitSaved())
+        assertEquals(emptyList<String>(), saved)
+        unavailable = false
+        saver.retry().join()
+        assertEquals(listOf("chat-1:first", "chat-1:second"), saved)
+        assertEquals(1, creations)
+        org.junit.Assert.assertTrue(saver.awaitSaved())
+    }
+
     @Test
     fun turnsCompletedDuringFirstSaveUseOneChatInOrder() = runBlocking {
         val releaseCreation = CompletableDeferred<Unit>()

@@ -23,6 +23,9 @@
     <string name="chat_listening">Listening…</string>
     <string name="chat_open_list">Chat list</string>
     <string name="chat_save">Save chat</string>
+    <string name="chat_save_failed_retry">Save failed. Retry</string>
+    <string name="chat_delete_failed">Could not delete the chat. Try deleting it again from the chat list.</string>
+    <string name="chat_history_load_failed">Could not load history. Save the chat, then try opening it again.</string>
     <string name="chat_delete_current">Delete chat</string>
     <string name="chat_info_title">Chat info</string>
     <string name="chat_info_back">Back</string>

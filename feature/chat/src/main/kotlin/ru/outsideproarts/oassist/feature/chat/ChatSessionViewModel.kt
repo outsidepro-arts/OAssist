@@ -57,6 +57,11 @@ class ChatSessionViewModel : ViewModel() {
     val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
 
     internal val turnSavers = ChatTurnSavers(scope)
+    internal var historyJob: Job? = null
+    internal var historyGeneration = 0L
+    internal var historyChatId: String? = null
+    var isLoadingHistory by mutableStateOf(false)
+        internal set
 
     override fun onCleared() {
         scope.cancel()

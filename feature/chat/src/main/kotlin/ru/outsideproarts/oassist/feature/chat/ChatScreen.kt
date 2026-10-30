@@ -244,6 +244,33 @@ fun ChatScreen(
         }
     }
 
+    fun persistTurn(
+        repo: ru.outsideproarts.oassist.core.data.chat.ChatRepository,
+        saver: ChatTurnSaver,
+        currentId: String?,
+        stored: StoredTurn,
+        savedMode: AssistMode,
+        savedTitle: String,
+        operations: List<String>,
+        isFirstTurn: Boolean,
+    ) {
+        saver.save(
+            currentId = currentId,
+            create = {
+                val id = java.util.UUID.randomUUID().toString()
+                viewModel.turnSavers.register(id, saver)
+                repo.createChat(savedMode, savedTitle, id)
+            },
+        ) { id ->
+            operations.forEach { repo.bindDiagnosticOperation(id, it) }
+            repo.appendTurn(id, stored)
+            if (viewModel.turnSavers.current === saver && chatId == null) chatId = id
+            if (isFirstTurn && viewModel.turnSavers.current === saver && chatId == id) {
+                generateTitle(stored.userText, stored)
+            }
+        }
+    }
+
     /**
      * Записать завершённый ход: в память (история модели) и, если диалог в
      * списке — в БД. Первый ход при autoSave создаёт диалог сразу (имя —
@@ -277,45 +304,17 @@ fun ChatScreen(
         val isFirstTurn = turnStore.size == 1
         // Аудио-ход для модели не имеет текста: имя строится по ответу ассистента.
         val nameSeed = userMsg.ifBlank { answer }
-        when {
-            currentId != null -> {
-                if (repo != null) {
-                    viewModel.turnSavers.register(currentId, saver)
-                    saver.save(currentId, create = { currentId }) { id ->
-                        repo.appendTurn(id, stored)
-                    }
-                }
+        if (currentId != null || autoSaveChats || saver.hasSaveRequest) {
+            val placeholder = ChatTitler.placeholder(nameSeed)
+            if (isFirstTurn && chatTitle.isBlank()) chatTitle = placeholder
+            if (repo != null) {
+                currentId?.let { viewModel.turnSavers.register(it, saver) }
+                persistTurn(repo, saver, currentId, stored, sendMode(), chatTitle.ifBlank { placeholder },
+                    viewModel.diagnosticOperations.toList(), isFirstTurn)
             }
-            autoSaveChats -> {
-                val placeholder = ChatTitler.placeholder(nameSeed)
-                if (isFirstTurn && chatTitle.isBlank()) chatTitle = placeholder
-                if (repo != null) {
-                    val diagnosticOwner = viewModel.diagnosticOperations
-                    val diagnosticSnapshot = diagnosticOwner.toList()
-                    val savedTitle = chatTitle.ifBlank { placeholder }
-                    val savedMode = sendMode()
-                    saver.save(
-                        currentId = null,
-                        create = {
-                            val id = java.util.UUID.randomUUID().toString()
-                            viewModel.turnSavers.register(id, saver)
-                            repo.createChat(savedMode, savedTitle, id)
-                        },
-                    ) { id ->
-                        diagnosticSnapshot.forEach { repo.bindDiagnosticOperation(id, it) }
-                        repo.appendTurn(id, stored)
-                        if (chatId == null && turnStore.any { it === stored }) {
-                            chatId = id
-                        }
-                        diagnosticOwner.toList().forEach { repo.bindDiagnosticOperation(id, it) }
-                        if (isFirstTurn && chatId == id) generateTitle(userMsg, stored)
-                    }
-                }
-            }
-            isFirstTurn -> {
-                if (chatTitle.isBlank()) chatTitle = ChatTitler.placeholder(nameSeed)
-                generateTitle(userMsg, stored)
-            }
+        } else if (isFirstTurn) {
+            if (chatTitle.isBlank()) chatTitle = ChatTitler.placeholder(nameSeed)
+            generateTitle(userMsg, stored)
         }
     }
 
@@ -492,7 +491,7 @@ fun ChatScreen(
     }
     fun send(text: String, audio: AudioPart? = null) {
         val userMsg = text.trim()
-        if ((userMsg.isEmpty() && audio == null) || isStreaming) return
+        if ((userMsg.isEmpty() && audio == null) || isStreaming || viewModel.isLoadingHistory) return
         messages.add(ChatItem(ChatRole.USER, answer = userMsg, audio = audio))
         isStreaming = true
         // Barge-in: новый вопрос прерывает озвучку предыдущего ответа.
@@ -543,21 +542,41 @@ fun ChatScreen(
     }
 
     fun openChat(summary: ChatSummary) {
+        val previousStream = streamJob
         cancelTurn()
-        viewModel.turnSavers.openChat(summary.id)
-        viewModel.diagnosticOperations = mutableListOf()
-        chatId = summary.id
-        chatKind = summary.kind
-        chatTitle = summary.title
-        titleLocked = true
-        turnStore.clear()
-        messages.clear()
+        viewModel.historyJob?.cancel()
+        val generation = ++viewModel.historyGeneration
+        viewModel.historyChatId = summary.id
+        viewModel.isLoadingHistory = true
+        val saver = viewModel.turnSavers.forChat(summary.id)
         val repo = ChatHandle.get()
-        if (repo != null) {
-            scope.launch {
-                val turns = repo.loadTurns(summary.id)
+        viewModel.historyJob = scope.launch {
+            try {
+                previousStream?.join()
+                check(saver.awaitSaved())
+                val turns = repo?.loadTurns(summary.id).orEmpty()
+                if (viewModel.historyGeneration != generation) return@launch
+                viewModel.turnSavers.openChat(summary.id)
+                viewModel.diagnosticOperations = mutableListOf()
+                chatId = summary.id
+                chatKind = summary.kind
+                chatTitle = summary.title
+                titleLocked = true
+                turnStore.clear()
+                messages.clear()
                 turnStore.addAll(turns)
                 loadTurnsIntoUi(turns)
+            } catch (cancel: kotlinx.coroutines.CancellationException) {
+                throw cancel
+            } catch (_: Exception) {
+                if (viewModel.historyGeneration == generation) {
+                    Toast.makeText(context, R.string.chat_history_load_failed, Toast.LENGTH_LONG).show()
+                }
+            } finally {
+                if (viewModel.historyGeneration == generation) {
+                    viewModel.isLoadingHistory = false
+                    viewModel.historyChatId = null
+                }
             }
         }
         uiScope.launch { drawerState.close() }
@@ -569,16 +588,26 @@ fun ChatScreen(
      * и удалением открытого диалога — удалённый не должен остаться на экране.
      */
     fun resetChat() {
+        val previousStream = streamJob
         cancelTurn()
-        viewModel.turnSavers.newChat()
-        viewModel.diagnosticOperations = mutableListOf()
-        chatId = null
-        chatKind = ChatKind.REGULAR
-        chatTitle = ""
-        titleLocked = false
-        turnStore.clear()
-        messages.clear()
-        pendingApproval = null
+        viewModel.historyJob?.cancel()
+        val generation = ++viewModel.historyGeneration
+        viewModel.historyChatId = null
+        viewModel.isLoadingHistory = true
+        viewModel.historyJob = scope.launch {
+            previousStream?.join()
+            if (viewModel.historyGeneration != generation) return@launch
+            viewModel.turnSavers.newChat()
+            viewModel.diagnosticOperations = mutableListOf()
+            chatId = null
+            chatKind = ChatKind.REGULAR
+            chatTitle = ""
+            titleLocked = false
+            turnStore.clear()
+            messages.clear()
+            pendingApproval = null
+            viewModel.isLoadingHistory = false
+        }
     }
 
     fun startNewChat() {
@@ -589,7 +618,8 @@ fun ChatScreen(
     /** Сохранить текущий несохранённый диалог в список (со всеми ходами). */
     fun saveCurrentChat() {
         val repo = ChatHandle.get() ?: return
-        if (chatId != null || turnStore.isEmpty() || viewModel.turnSavers.current.isSaving) return
+        val saver = viewModel.turnSavers.current
+        if (chatId != null || turnStore.isEmpty() || saver.hasSaveRequest) return
         val turns = turnStore.toList()
         val diagnosticOperations = viewModel.diagnosticOperations.toList()
         // Аудио-ход без текста: имя — из первого текстового хода или ответа.
@@ -599,17 +629,15 @@ fun ChatScreen(
         )
         if (chatTitle.isBlank()) chatTitle = fallbackTitle
         val title = chatTitle
-        scope.launch {
-            val id = repo.createChat(sendMode(), title)
-            diagnosticOperations.forEach { repo.bindDiagnosticOperation(id, it) }
-            turns.forEach { repo.appendTurn(id, it) }
-            chatId = id
+        val mode = sendMode()
+        turns.forEach { stored ->
+            persistTurn(repo, saver, null, stored, mode, title, diagnosticOperations, isFirstTurn = false)
         }
     }
 
     /** Смена диалога с защитой несохранённого: иначе — диалог «Сохранить/Открыть/Отмена». */
     fun requestSwitch(action: () -> Unit) {
-        if (messages.isNotEmpty() && chatId == null) {
+        if (messages.isNotEmpty() && chatId == null && !viewModel.turnSavers.current.hasSaveRequest) {
             pendingSwitch = action
         } else {
             action()
@@ -639,9 +667,30 @@ fun ChatScreen(
         ChatHandle.get()?.let { repo -> scope.launch { repo.renameChat(id, clean) } }
     }
 
+    fun deleteSavedChat(id: String) {
+        ChatHandle.get()?.let { repo ->
+            scope.launch {
+                try {
+                    repo.deleteChat(id)
+                } catch (cancel: kotlinx.coroutines.CancellationException) {
+                    throw cancel
+                } catch (_: Exception) {
+                    Toast.makeText(context, R.string.chat_delete_failed, Toast.LENGTH_LONG).show()
+                }
+            }
+        }
+    }
+
     fun deleteChatFromList(summary: ChatSummary) {
-        ChatHandle.get()?.let { repo -> scope.launch { repo.deleteChat(summary.id) } }
-        if (summary.id == chatId) {
+        val wasCurrent = viewModel.turnSavers.discard(summary.id)
+        if (viewModel.historyChatId == summary.id) {
+            viewModel.historyJob?.cancel()
+            viewModel.historyGeneration++
+            viewModel.historyChatId = null
+            viewModel.isLoadingHistory = false
+        }
+        deleteSavedChat(summary.id)
+        if (summary.id == chatId || wasCurrent) {
             // Удалили открытый диалог — сбросить вид в пустой новый
             // (шторка остаётся: сброс её не закрывает).
             resetChat()
@@ -670,6 +719,10 @@ fun ChatScreen(
     // Итог удержания отправляется только после принятого отпускания.
     fun sendRecognizedText(text: String) {
         if (text.isNotBlank()) {
+            if (viewModel.isLoadingHistory) {
+                input = TextFieldValue(text)
+                return
+            }
             input = TextFieldValue("")
             send(text)
         }
@@ -764,6 +817,7 @@ fun ChatScreen(
                 }
             }
             else -> {
+                if (viewModel.isLoadingHistory) return
                 if (!handle.isSttAvailable(stt.recognizerComponent)) {
                     sttErrorToast(CaptureError.NO_RECOGNIZER)
                     return
@@ -955,6 +1009,11 @@ fun ChatScreen(
                         .oassistTouchTarget()
                         .clickable { showChatInfo = true },
                 )
+                if (viewModel.turnSavers.hasFailures) {
+                    TextButton(onClick = { viewModel.turnSavers.retryFailed() }) {
+                        Text(stringResource(R.string.chat_save_failed_retry))
+                    }
+                }
                 if (messages.isNotEmpty() && chatKind != ChatKind.ASSISTANT) {
                     TextButton(
                         onClick = {
@@ -1080,8 +1139,8 @@ fun ChatScreen(
                         actionContent
                     },
                     holdLabel = holdActionLabel,
-                    canStartHold = (input.text.isBlank() || isSpeaking) && !isStreaming && !capturing,
-                    holdEnabled = !isStreaming &&
+                    canStartHold = (input.text.isBlank() || isSpeaking) && !isStreaming && !capturing && !viewModel.isLoadingHistory,
+                    holdEnabled = !isStreaming && !viewModel.isLoadingHistory &&
                         (input.text.isBlank() || capturing || isSpeaking || holdSession != null),
                     onVoiceAction = ::toggleSttMic,
                     onHoldStart = ::startHold,
@@ -1117,6 +1176,7 @@ fun ChatScreen(
                             stopSpeech?.invoke()
                             return@ChatInputButton
                         }
+                        if (viewModel.isLoadingHistory) return@ChatInputButton
                         if (input.text.isNotBlank()) {
                             val userMsg = input.text.trim()
                             input = TextFieldValue("")
@@ -1167,13 +1227,14 @@ fun ChatScreen(
             onConfirm = {
                 deleteCurrentAsk = false
                 val id = chatId
+                id?.let { viewModel.turnSavers.discard(it) }
                 // Удалённый диалог не должен остаться открытым: сброс вида
                 // в пустой новый чат, затем удаление из списка.
                 resetChat()
                 if (id != null) {
                     val repo = ChatHandle.get()
                     if (repo != null) {
-                        scope.launch { repo.deleteChat(id) }
+                        deleteSavedChat(id)
                     }
                 }
             },
