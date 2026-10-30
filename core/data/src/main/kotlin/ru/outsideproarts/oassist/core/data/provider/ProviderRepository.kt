@@ -88,7 +88,16 @@ class ProviderRepository(
      * значение — alias в [ProviderProfile.extraHeaders].
      */
     suspend fun setExtraHeader(providerId: String, headerName: String, value: CharArray) {
-        val alias = aliasForExtraHeader(providerId, headerName)
+        val headers = getProvider(providerId)?.extraHeaders.orEmpty()
+        val existingAlias = headers[headerName]?.takeUnless { alias ->
+            headers.any { (name, ref) -> name != headerName && ref == alias }
+        }
+        val baseAlias = aliasForExtraHeader(providerId, headerName)
+        var alias = existingAlias ?: baseAlias
+        var suffix = 0
+        while (headers.any { (name, ref) -> name != headerName && ref == alias }) {
+            alias = "$baseAlias.${++suffix}"
+        }
         secrets.put(alias, value)
         updateProvider(providerId) {
             it.copy(extraHeaders = it.extraHeaders + (headerName to alias))
@@ -96,8 +105,12 @@ class ProviderRepository(
     }
 
     suspend fun clearExtraHeader(providerId: String, headerName: String) {
-        val alias = aliasForExtraHeader(providerId, headerName)
-        secrets.delete(alias)
+        val headers = getProvider(providerId)?.extraHeaders.orEmpty()
+        val alias = headers[headerName] ?: return
+        // Older profiles can share a lossy alias; keep it while another header uses it.
+        if (headers.none { (name, ref) -> name != headerName && ref == alias }) {
+            secrets.delete(alias)
+        }
         updateProvider(providerId) {
             it.copy(extraHeaders = it.extraHeaders - headerName)
         }
@@ -167,8 +180,15 @@ class ProviderRepository(
         fun aliasForApiKey(providerId: String): String = "provider.$providerId.apiKey"
         fun aliasForBasicUser(providerId: String): String = "provider.$providerId.basicUser"
         fun aliasForBasicPassword(providerId: String): String = "provider.$providerId.basicPassword"
-        fun aliasForExtraHeader(providerId: String, headerName: String): String =
-            "provider.$providerId.header.${headerName.lowercase().replace(Regex("[^a-z0-9-]"), "_")}"
+        fun aliasForExtraHeader(providerId: String, headerName: String): String {
+            val encodedName = buildString {
+                headerName.lowercase().forEach { char ->
+                    if (char in 'a'..'z' || char in '0'..'9' || char == '-') append(char)
+                    else append('_').append(char.code.toString(16).padStart(4, '0'))
+                }
+            }
+            return "provider.$providerId.header.$encodedName"
+        }
     }
 }
 
