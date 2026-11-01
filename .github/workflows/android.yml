@@ -1,0 +1,283 @@
+name: Android builds
+
+on:
+  push:
+    branches: [master]
+    tags: ['v*']
+
+permissions:
+  contents: read
+
+env:
+  # Keep both channels in this workflow: run_number is scoped to a workflow.
+  VERSION_CODE_BASE: '1000'
+  SIGNING_CERTIFICATE_SHA256: 9a94d8a6cdd03884184da0a52afe27f93acae5b450d59c7e2703f8102381d7af
+
+jobs:
+  metadata:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      version_code: ${{ steps.metadata.outputs.version_code }}
+      version_name: ${{ steps.metadata.outputs.version_name }}
+      variant: ${{ steps.metadata.outputs.variant }}
+      prerelease: ${{ steps.metadata.outputs.prerelease }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Derive and validate build metadata
+        id: metadata
+        shell: pwsh
+        run: |
+          Import-Module ./tools/ci/OAssistCi.psm1
+          $metadata = Get-OAssistCiMetadata -Ref $env:GITHUB_REF -RunNumber $env:GITHUB_RUN_NUMBER -VersionCodeBase $env:VERSION_CODE_BASE
+          @(
+            "version_code=$($metadata.VersionCode)"
+            "version_name=$($metadata.VersionName)"
+            "variant=$($metadata.Variant)"
+            "prerelease=$($metadata.Prerelease.ToString().ToLowerInvariant())"
+          ) | Add-Content -LiteralPath $env:GITHUB_OUTPUT -Encoding utf8
+
+  ci_tools:
+    needs: metadata
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Test CI metadata, reports and APK verification rules
+        shell: pwsh
+        run: |
+          ./tools/ci/Test-OAssistCi.ps1
+          ./tools/ci/Test-PublishOAssistRelease.ps1
+
+  unit:
+    needs: metadata
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        variant: [Debug, Release]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/setup-android
+      - name: Run all Android unit tests
+        # AGP 9 otherwise creates unit tests only for testBuildType (Debug).
+        run: ./gradlew --continue test${{ matrix.variant }}UnitTest -Pandroid.onlyEnableUnitTestForTheTestedBuildType=false
+      - name: Require executed tests without skips
+        if: ${{ !cancelled() }}
+        shell: pwsh
+        env:
+          TEST_VARIANT: ${{ matrix.variant }}
+        run: |
+          Import-Module ./tools/ci/OAssistCi.psm1
+          $pattern = '[\\/]build[\\/]test-results[\\/]test' + $env:TEST_VARIANT + 'UnitTest[\\/]'
+          $reports = @(Get-ChildItem app,core,feature -Recurse -File -Filter 'TEST-*.xml' | Where-Object FullName -Match $pattern | ForEach-Object FullName)
+          Test-OAssistTestReports -ReportFiles $reports
+      - name: Upload unit test reports
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: unit-${{ matrix.variant }}-${{ github.run_attempt }}
+          path: |
+            **/build/test-results/test${{ matrix.variant }}UnitTest/**
+            **/build/reports/tests/test${{ matrix.variant }}UnitTest/**
+
+  lint_tests:
+    needs: metadata
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/setup-android
+      - name: Run lint implementation and Gradle contract tests
+        run: ./gradlew --continue :diagnostic-lint:test
+      - name: Require executed tests without skips
+        if: ${{ !cancelled() }}
+        shell: pwsh
+        run: |
+          Import-Module ./tools/ci/OAssistCi.psm1
+          $reports = @(Get-ChildItem diagnostic-lint/build/test-results/test -Recurse -File -Filter 'TEST-*.xml' | ForEach-Object FullName)
+          Test-OAssistTestReports -ReportFiles $reports
+      - name: Upload lint test reports
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: lint-tests-${{ github.run_attempt }}
+          path: |
+            diagnostic-lint/build/test-results/test/**
+            diagnostic-lint/build/reports/tests/test/**
+
+  checks:
+    needs: metadata
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/setup-android
+      # These test tasks run in the independent unit and lint_tests jobs.
+      # Keep classification, contract presence checks and both lint variants here.
+      - name: Check diagnostic architecture and lint
+        run: ./gradlew --continue verifyDiagnostics -x testDebugUnitTest -x :diagnostic-lint:test
+      - name: Upload lint reports
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: lint-${{ github.run_attempt }}
+          path: |
+            **/build/reports/lint-results-*
+
+  instrumentation:
+    needs: metadata
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        api: [31, 36]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/setup-android
+      - name: Enable KVM for the local Android emulator
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+      - name: Run all instrumentation tests on a local emulator
+        uses: reactivecircus/android-emulator-runner@a421e43855164a8197daf9d8d40fe71c6996bb0d # v2.38.0
+        with:
+          api-level: ${{ matrix.api }}
+          arch: x86_64
+          target: google_apis
+          script: ./gradlew --continue :app:connectedDebugAndroidTest -Pandroid.testInstrumentationRunnerArguments.verifyInternet=true
+      - name: Require executed tests without skips
+        if: ${{ !cancelled() }}
+        shell: pwsh
+        run: |
+          Import-Module ./tools/ci/OAssistCi.psm1
+          $reports = @(Get-ChildItem app/build/outputs/androidTest-results/connected -Recurse -File -Filter 'TEST-*.xml' | ForEach-Object FullName)
+          Test-OAssistTestReports -ReportFiles $reports
+      - name: Upload Android test reports
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: instrumentation-api-${{ matrix.api }}-${{ github.run_attempt }}
+          path: |
+            app/build/outputs/androidTest-results/connected/**
+            app/build/reports/androidTests/connected/**
+
+  apk:
+    needs: [metadata, ci_tools, unit, lint_tests, checks, instrumentation]
+    # Nightlies wait for every test job but remain downloadable after failures.
+    # Release APKs require every check to succeed. Manual cancellation stops both.
+    if: >-
+      ${{ !cancelled() && needs.metadata.result == 'success' &&
+          (github.ref == 'refs/heads/master' ||
+           (needs.ci_tools.result == 'success' && needs.unit.result == 'success' &&
+            needs.lint_tests.result == 'success' && needs.checks.result == 'success' &&
+            needs.instrumentation.result == 'success')) }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    outputs:
+      artifact_id: ${{ steps.upload.outputs.artifact-id }}
+      apk_name: ${{ steps.build.outputs.apk_name }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/setup-android
+      - name: Record test results with the APK
+        shell: pwsh
+        env:
+          CHECK_RESULTS: ${{ toJSON(needs) }}
+        run: |
+          "Test results for $env:GITHUB_SHA`n" | Add-Content -LiteralPath $env:GITHUB_STEP_SUMMARY
+          $results = $env:CHECK_RESULTS | ConvertFrom-Json -AsHashtable
+          foreach ($name in $results.Keys | Sort-Object) {
+            "* ${name}: $($results[$name].result)" | Add-Content -LiteralPath $env:GITHUB_STEP_SUMMARY
+          }
+      - name: Build APK with the shared version counter
+        id: build
+        shell: pwsh
+        env:
+          BUILD_VARIANT: ${{ needs.metadata.outputs.variant }}
+          BUILD_VERSION_CODE: ${{ needs.metadata.outputs.version_code }}
+          BUILD_VERSION_NAME: ${{ needs.metadata.outputs.version_name }}
+        run: |
+          $variant = $env:BUILD_VARIANT
+          # The complete checks already ran as separate jobs. Do not repeat them
+          # through assemble's local diagnostic dependency, especially for nightly.
+          $arguments = @((':app:assemble' + $variant), '-x', (':diagnosticArchitectureCheck' + $variant), ('-PciVersionCode=' + $env:BUILD_VERSION_CODE))
+          if ($env:BUILD_VERSION_NAME) { $arguments += '-PciVersionName=' + $env:BUILD_VERSION_NAME }
+          & ./gradlew @arguments
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $output = Get-Content "app/build/outputs/apk/$($variant.ToLowerInvariant())/output-metadata.json" -Raw | ConvertFrom-Json
+          if ($output.elements.Count -ne 1) { throw 'Expected exactly one APK.' }
+          $unsigned = Join-Path "app/build/outputs/apk/$($variant.ToLowerInvariant())" $output.elements[0].outputFile
+          $apkName = "oassist-$($variant.ToLowerInvariant())-$env:BUILD_VERSION_CODE-$($env:GITHUB_SHA.Substring(0, 7)).apk"
+          New-Item -ItemType Directory -Path dist | Out-Null
+          @("unsigned_apk=$unsigned", "apk_name=$apkName") | Add-Content -LiteralPath $env:GITHUB_OUTPUT
+      - name: Sign and verify the final APK
+        id: signed
+        shell: pwsh
+        env:
+          OASSIST_KEYSTORE_BASE64: ${{ secrets.OASSIST_KEYSTORE_BASE64 }}
+          OASSIST_KEYSTORE_PASSWORD: ${{ secrets.OASSIST_KEYSTORE_PASSWORD }}
+          OASSIST_KEY_ALIAS: ${{ secrets.OASSIST_KEY_ALIAS }}
+          OASSIST_KEY_PASSWORD: ${{ secrets.OASSIST_KEY_PASSWORD }}
+          UNSIGNED_APK: ${{ steps.build.outputs.unsigned_apk }}
+          APK_NAME: ${{ steps.build.outputs.apk_name }}
+          BUILD_VARIANT: ${{ needs.metadata.outputs.variant }}
+          BUILD_VERSION_CODE: ${{ needs.metadata.outputs.version_code }}
+          BUILD_VERSION_NAME: ${{ needs.metadata.outputs.version_name }}
+        run: |
+          Import-Module ./tools/ci/OAssistCi.psm1
+          New-OAssistSignedApk -UnsignedApk $env:UNSIGNED_APK -SignedApk (Join-Path (Resolve-Path dist) $env:APK_NAME) -BuildToolsDirectory (Join-Path $env:ANDROID_HOME 'build-tools/36.0.0') -ExpectedVersionCode ([int]$env:BUILD_VERSION_CODE) -ExpectedVersionName $env:BUILD_VERSION_NAME -Variant $env:BUILD_VARIANT -ExpectedCertificateSha256 $env:SIGNING_CERTIFICATE_SHA256
+      - name: Upload verified APK and checksum
+        id: upload
+        if: ${{ !cancelled() && steps.signed.outcome == 'success' }}
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: oassist-${{ needs.metadata.outputs.variant }}-${{ needs.metadata.outputs.version_code }}-${{ github.run_attempt }}
+          path: |
+            dist/*.apk
+            dist/*.apk.sha256
+          if-no-files-found: error
+
+  release:
+    needs: [metadata, apk]
+    if: ${{ github.ref_type == 'tag' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          artifact-ids: ${{ needs.apk.outputs.artifact_id }}
+          path: dist
+          merge-multiple: true
+      - name: Publish the verified APK as a GitHub release
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ github.ref_name }}
+          PRERELEASE: ${{ needs.metadata.outputs.prerelease }}
+          APK_NAME: ${{ needs.apk.outputs.apk_name }}
+          BUILD_VERSION_CODE: ${{ needs.metadata.outputs.version_code }}
+        run: |
+          ./tools/ci/Publish-OAssistRelease.ps1 -ApkPath (Join-Path dist $env:APK_NAME) -Tag $env:RELEASE_TAG -Prerelease ($env:PRERELEASE -eq 'true') -ExpectedVersionCode ([int]$env:BUILD_VERSION_CODE)
