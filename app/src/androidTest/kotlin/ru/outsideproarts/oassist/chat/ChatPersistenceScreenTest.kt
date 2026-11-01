@@ -5,6 +5,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.SemanticsMatcher
 import androidx.compose.ui.test.hasContentDescription
+import androidx.compose.ui.test.hasSetTextAction
 import androidx.compose.ui.test.hasText
 import androidx.compose.ui.semantics.SemanticsProperties
 import androidx.compose.ui.semantics.getOrNull
@@ -13,6 +14,7 @@ import androidx.compose.ui.test.onFirst
 import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
+import androidx.compose.ui.test.performTextClearance
 import androidx.compose.ui.test.performTextInput
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
@@ -301,6 +303,71 @@ class ChatPersistenceScreenTest {
             }
         }
     }
+
+    @Test fun sortMenuReordersRowsAndKeepsAssistantPinned() = runBlocking {
+        var timestamp = 0L
+        ChatPersistenceFixture(clock = { timestamp }).use { fixture ->
+            timestamp = 3000L
+            fixture.repository.createChat(AssistMode.CHAT, "Apple")
+            timestamp = 1000L
+            fixture.repository.createChat(AssistMode.CHAT, "Banana")
+            timestamp = 2000L
+            fixture.repository.createChat(AssistMode.CHAT, "Cherry")
+            timestamp = 4000L
+            fixture.repository.replaceAssistantTurns(listOf(StoredTurn(userText = "assistant turn")))
+            withScreen(fixture, null, "") { _, _ ->
+                compose.onNodeWithContentDescription(context.getString(ChatR.string.chat_open_list)).performClick()
+                val assistant = context.getString(UiR.string.chats_assistant_title)
+                // Каждый режим выбирается явно: результат не зависит от сохранённого выбора.
+                // Каждое переключение переставляет строки — режим доказан перестановкой,
+                // а не совпадением с исходным порядком выдачи.
+                selectSort(context.getString(UiR.string.chats_sort_alphabetical))
+                compose.waitUntil(10_000) {
+                    drawerOrder(assistant) == listOf(assistant, "Apple", "Banana", "Cherry")
+                }
+                selectSort(context.getString(UiR.string.chats_sort_date_asc))
+                compose.waitUntil(10_000) {
+                    drawerOrder(assistant) == listOf(assistant, "Banana", "Cherry", "Apple")
+                }
+                selectSort(context.getString(UiR.string.chats_sort_date_desc))
+                compose.waitUntil(10_000) {
+                    drawerOrder(assistant) == listOf(assistant, "Apple", "Cherry", "Banana")
+                }
+                // Запрос фильтрует список (релевантность), очистка возвращает сортировку.
+                compose.onNode(
+                    hasText(context.getString(UiR.string.chats_search_hint)) and hasSetTextAction(),
+                ).performTextInput("Cherry")
+                compose.waitUntil(10_000) {
+                    runCatching { chatRow("Cherry").fetchSemanticsNode() }.isSuccess &&
+                        runCatching { chatRow("Apple").fetchSemanticsNode() }.isFailure
+                }
+                compose.onNode(
+                    hasText(context.getString(UiR.string.chats_search_hint)) and hasSetTextAction(),
+                ).performTextClearance()
+                compose.waitUntil(10_000) {
+                    drawerOrder(assistant) == listOf(assistant, "Apple", "Cherry", "Banana")
+                }
+            }
+        }
+    }
+
+    private fun selectSort(label: String) {
+        compose.onNodeWithContentDescription(context.getString(UiR.string.chats_sort_label)).performClick()
+        compose.onNodeWithText(label).performClick()
+        compose.waitForIdle()
+    }
+
+    /**
+     * Заголовки строк шторки сверху вниз: закреплённый ассистент + три чата.
+     * Отсутствующая строка уходит вниз: условие [androidx.compose.ui.test.junit4.ComposeTestRule.waitUntil]
+     * переживает частичную перекомпозицию без исключений.
+     */
+    private fun drawerOrder(assistantTitle: String): List<String> =
+        listOf(assistantTitle, "Apple", "Banana", "Cherry")
+            .sortedBy {
+                runCatching { chatRow(it).fetchSemanticsNode().boundsInRoot.center.y }
+                    .getOrNull() ?: Float.MAX_VALUE
+            }
 
     private fun deleteFromDrawer(title: String) {
         val titleY = chatRow(title).fetchSemanticsNode().boundsInRoot.center.y

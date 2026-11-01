@@ -61,9 +61,11 @@ import ru.outsideproarts.oassist.core.agent.AgentFactory
 import ru.outsideproarts.oassist.core.agent.AgentSession
 import ru.outsideproarts.oassist.core.agent.ChatTitler
 import ru.outsideproarts.oassist.core.data.chat.ChatHandle
+import ru.outsideproarts.oassist.core.data.prefs.SettingsHandle
 import ru.outsideproarts.oassist.core.model.ApprovalDecision
 import ru.outsideproarts.oassist.core.model.AssistMode
 import ru.outsideproarts.oassist.core.model.ChatKind
+import ru.outsideproarts.oassist.core.model.ChatSortOrder
 import ru.outsideproarts.oassist.core.model.ChatSummary
 import ru.outsideproarts.oassist.core.model.ProviderUsage
 import ru.outsideproarts.oassist.core.model.StoredTurn
@@ -164,6 +166,11 @@ fun ChatScreen(
             ?: kotlinx.coroutines.flow.flowOf(emptyList())
     }
     val chats by chatsFlow.collectAsState(initial = emptyList())
+    val sortFlow = remember {
+        SettingsHandle.get()?.chatSort
+            ?: kotlinx.coroutines.flow.flowOf(ChatSortOrder.DATE_DESC)
+    }
+    val sortOrder by sortFlow.collectAsState(initial = ChatSortOrder.DATE_DESC)
     val drawerState = rememberDrawerState(DrawerValue.Closed)
     LaunchedEffect(Unit) {
         autoSaveChats = runCatching {
@@ -955,6 +962,12 @@ fun ChatScreen(
             ModalDrawerSheet {
                 ChatPickerList(
                     chats = chats,
+                    sortOrder = sortOrder,
+                    onSortOrderChange = { order ->
+                        SettingsHandle.get()?.let { settings ->
+                            scope.launch { settings.setChatSort(order) }
+                        }
+                    },
                     onOpenChat = { requestSwitch { openChat(it) } },
                     onNewChat = { requestSwitch { startNewChat() } },
                     onRenameChat = ::renameChat,

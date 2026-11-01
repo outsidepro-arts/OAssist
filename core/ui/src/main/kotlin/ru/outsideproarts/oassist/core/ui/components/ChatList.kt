@@ -13,6 +13,8 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.Sort
+import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material3.AlertDialog
@@ -38,6 +40,11 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.role
+import androidx.compose.ui.semantics.selected
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextOverflow
@@ -47,8 +54,10 @@ import ru.outsideproarts.oassist.core.a11y.oassistMergedContent
 import ru.outsideproarts.oassist.core.a11y.oassistTouchTarget
 import ru.outsideproarts.oassist.core.model.AssistMode
 import ru.outsideproarts.oassist.core.model.ChatKind
+import ru.outsideproarts.oassist.core.model.ChatSortOrder
 import ru.outsideproarts.oassist.core.model.ChatSummary
 import ru.outsideproarts.oassist.core.model.FuzzyMatcher
+import ru.outsideproarts.oassist.core.model.sortedByOrder
 import ru.outsideproarts.oassist.core.ui.R
 
 /**
@@ -186,12 +195,16 @@ fun ChatListItem(
 
 /**
  * Общий список чатов (шторка чата, шаринг): поиск fuzzy, «Новый чат»,
- * закреплённая запись ассистента (не участвует в поиске и удалении),
- * переименование/удаление с подтверждением.
+ * сортировка списка (дата/алфавит; выбор хранится снаружи — [sortOrder] /
+ * [onSortOrderChange]), закреплённая запись ассистента (не участвует
+ * в поиске, сортировке и удалении), переименование/удаление с подтверждением.
+ * Порядок: пустой запрос — выбранная сортировка, введённый — релевантность.
  */
 @Composable
 fun ChatPickerList(
     chats: List<ChatSummary>,
+    sortOrder: ChatSortOrder,
+    onSortOrderChange: (ChatSortOrder) -> Unit,
     onOpenChat: (ChatSummary) -> Unit,
     onNewChat: () -> Unit,
     onRenameChat: (ChatSummary, String) -> Unit,
@@ -219,22 +232,81 @@ fun ChatPickerList(
     val assistant = chats.firstOrNull { it.kind == ChatKind.ASSISTANT }
         .takeIf { includeAssistant }
     val regular = chats.filter { it.kind != ChatKind.ASSISTANT }
-    val filtered = FuzzyMatcher.rank(query, regular) { titleOf(it) }
+    val filtered = if (query.isBlank()) {
+        regular.sortedByOrder(sortOrder)
+    } else {
+        FuzzyMatcher.rank(query, regular) { titleOf(it) }
+    }
+
+    var sortMenuExpanded by remember { mutableStateOf(false) }
+    val sortLabel = stringResource(R.string.chats_sort_label)
+    val currentSortLabel = when (sortOrder) {
+        ChatSortOrder.DATE_DESC -> stringResource(R.string.chats_sort_date_desc)
+        ChatSortOrder.DATE_ASC -> stringResource(R.string.chats_sort_date_asc)
+        ChatSortOrder.TITLE -> stringResource(R.string.chats_sort_alphabetical)
+    }
 
     Column(modifier = modifier.fillMaxSize()) {
-        OutlinedTextField(
-            value = query,
-            onValueChange = { query = it },
-            label = { Text(stringResource(R.string.chats_search_hint)) },
-            singleLine = true,
-            keyboardOptions = KeyboardOptions(
-                keyboardType = KeyboardType.Text,
-                imeAction = ImeAction.Search,
-            ),
+        Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(horizontal = 16.dp, vertical = 8.dp),
-        )
+                .padding(start = 16.dp, end = 8.dp, top = 8.dp, bottom = 8.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            OutlinedTextField(
+                value = query,
+                onValueChange = { query = it },
+                label = { Text(stringResource(R.string.chats_search_hint)) },
+                singleLine = true,
+                keyboardOptions = KeyboardOptions(
+                    keyboardType = KeyboardType.Text,
+                    imeAction = ImeAction.Search,
+                ),
+                modifier = Modifier.weight(1f),
+            )
+            IconButton(
+                onClick = { sortMenuExpanded = true },
+                modifier = Modifier
+                    .oassistTouchTarget()
+                    .semantics { stateDescription = currentSortLabel },
+            ) {
+                Icon(
+                    imageVector = Icons.AutoMirrored.Filled.Sort,
+                    contentDescription = sortLabel,
+                )
+            }
+            DropdownMenu(
+                expanded = sortMenuExpanded,
+                onDismissRequest = { sortMenuExpanded = false },
+            ) {
+                listOf(
+                    ChatSortOrder.DATE_DESC to R.string.chats_sort_date_desc,
+                    ChatSortOrder.DATE_ASC to R.string.chats_sort_date_asc,
+                    ChatSortOrder.TITLE to R.string.chats_sort_alphabetical,
+                ).forEach { (order, labelRes) ->
+                    val isSelected = order == sortOrder
+                    DropdownMenuItem(
+                        text = { Text(stringResource(labelRes)) },
+                        leadingIcon = {
+                            if (isSelected) {
+                                Icon(
+                                    imageVector = Icons.Filled.Check,
+                                    contentDescription = null,
+                                )
+                            }
+                        },
+                        onClick = {
+                            sortMenuExpanded = false
+                            onSortOrderChange(order)
+                        },
+                        modifier = Modifier.semantics {
+                            selected = isSelected
+                            role = Role.RadioButton
+                        },
+                    )
+                }
+            }
+        }
         OAssistSettingRow(title = newChatLabel, onClick = onNewChat)
         if (assistant != null) {
             ChatListItem(

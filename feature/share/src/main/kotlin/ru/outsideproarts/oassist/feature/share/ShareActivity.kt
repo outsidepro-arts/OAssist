@@ -43,11 +43,14 @@ import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.TextFieldValue
 import androidx.lifecycle.viewmodel.compose.viewModel
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import ru.outsideproarts.oassist.core.a11y.oassistHeading
 import ru.outsideproarts.oassist.core.a11y.oassistTouchTarget
 import ru.outsideproarts.oassist.core.agent.AgentFactory
 import ru.outsideproarts.oassist.core.data.chat.ChatHandle
+import ru.outsideproarts.oassist.core.data.prefs.SettingsHandle
+import ru.outsideproarts.oassist.core.model.ChatSortOrder
 import ru.outsideproarts.oassist.core.model.ChatSummary
 import ru.outsideproarts.oassist.core.model.ContextData
 import ru.outsideproarts.oassist.core.model.ContextSource
@@ -181,6 +184,11 @@ private fun ShareFlow(payload: SharePayload) {
             ?: kotlinx.coroutines.flow.flowOf(emptyList())
     }
     val chats by chatsFlow.collectAsState(initial = emptyList())
+    val sortFlow = remember {
+        SettingsHandle.get()?.chatSort
+            ?: kotlinx.coroutines.flow.flowOf(ChatSortOrder.DATE_DESC)
+    }
+    val sortOrder by sortFlow.collectAsState(initial = ChatSortOrder.DATE_DESC)
     // UI-локальные состояния диалогов: живут в композиции, при повороте/смене
     // темы Activity не пересоздаётся, при смерти процесса диалоги закрываются.
     var pendingSwitch by remember { mutableStateOf<(() -> Unit)?>(null) }
@@ -227,6 +235,12 @@ private fun ShareFlow(payload: SharePayload) {
         ShareChatList(
             payload = payload,
             chats = chats,
+            sortOrder = sortOrder,
+            onSortOrderChange = { order ->
+                SettingsHandle.get()?.let { settings ->
+                    vm.scope.launch { settings.setChatSort(order) }
+                }
+            },
             onOpenChat = vm::openChat,
             onNewChat = vm::newChat,
             onRenameChat = vm::renameChat,
@@ -318,6 +332,8 @@ private fun ShareFlow(payload: SharePayload) {
 private fun ShareChatList(
     payload: SharePayload,
     chats: List<ChatSummary>,
+    sortOrder: ChatSortOrder,
+    onSortOrderChange: (ChatSortOrder) -> Unit,
     onOpenChat: (ChatSummary) -> Unit,
     onNewChat: () -> Unit,
     onRenameChat: (ChatSummary, String) -> Unit,
@@ -347,6 +363,8 @@ private fun ShareChatList(
         ShareReceivedPanel(payload = payload, compact = true)
         ChatPickerList(
             chats = chats,
+            sortOrder = sortOrder,
+            onSortOrderChange = onSortOrderChange,
             onOpenChat = onOpenChat,
             onNewChat = onNewChat,
             onRenameChat = onRenameChat,

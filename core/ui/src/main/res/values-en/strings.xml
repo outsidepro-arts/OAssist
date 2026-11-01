@@ -88,6 +88,10 @@
     <string name="chats_new">New chat</string>
     <string name="chats_assistant_title">Assistant</string>
     <string name="chats_search_hint">Search chats</string>
+    <string name="chats_sort_label">Sort chats</string>
+    <string name="chats_sort_date_desc">Date: newest first</string>
+    <string name="chats_sort_date_asc">Date: oldest first</string>
+    <string name="chats_sort_alphabetical">Alphabetical</string>
     <string name="chats_empty">No saved chats</string>
     <string name="chats_no_matches">Nothing found</string>
     <string name="msg_role_user">You</string>

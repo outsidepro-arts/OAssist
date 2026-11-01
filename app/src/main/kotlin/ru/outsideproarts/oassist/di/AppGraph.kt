@@ -514,6 +514,7 @@ class AppGraph private constructor(context: Context) {
         )
         ru.outsideproarts.oassist.core.agent.AgentFactory.register(agentFactory)
         ru.outsideproarts.oassist.core.data.chat.ChatHandle.register(data.chats)
+        ru.outsideproarts.oassist.core.data.prefs.SettingsHandle.register(data.settings)
         networkMonitor.start()
         ru.outsideproarts.oassist.core.net.NetworkHandle.register(
             object : ru.outsideproarts.oassist.core.net.NetworkHandle {
