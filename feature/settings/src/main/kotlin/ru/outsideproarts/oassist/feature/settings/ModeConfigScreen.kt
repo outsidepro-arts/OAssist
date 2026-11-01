@@ -5,6 +5,7 @@ import android.content.pm.PackageManager
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
@@ -42,6 +43,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
@@ -50,7 +52,9 @@ import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.unit.dp
 import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardCapitalization
+import androidx.compose.ui.text.input.KeyboardType
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.launch
 import ru.outsideproarts.oassist.core.a11y.oassistDropdownClassName
@@ -64,6 +68,7 @@ import ru.outsideproarts.oassist.core.model.AssistMode
 import ru.outsideproarts.oassist.core.model.AssistantExtras
 import ru.outsideproarts.oassist.core.model.ModeConfig
 import ru.outsideproarts.oassist.core.model.ShareExtras
+import ru.outsideproarts.oassist.core.model.FuzzyMatcher
 import ru.outsideproarts.oassist.core.model.ModelCapability
 import ru.outsideproarts.oassist.core.model.ModelInfo
 import ru.outsideproarts.oassist.core.model.ModelProtocol
@@ -1349,8 +1354,29 @@ private fun protocolName(protocol: ModelProtocol): String = when (protocol) {
 }
 
 /**
- * Пикер моделей: диалог со списком от провайдера. Тап по модели заполняет
- * поле ID модели выбранной. Список обновляется кнопкой «Обновить».
+ * Отбор моделей в пикере: fuzzy-поиск по label и id (подпоследовательности,
+ * как в списке чатов). Пустой запрос — весь список в исходном порядке;
+ * непустой — по убыванию релевантности. Pure — JVM-тестируем.
+ */
+internal fun filteredModels(query: String, models: List<ModelInfo>): List<ModelInfo> =
+    if (query.isBlank()) {
+        models
+    } else {
+        FuzzyMatcher.rank(query, models) { modelSearchText(it) }
+    }
+
+private fun modelSearchText(model: ModelInfo): String =
+    listOfNotNull(model.label?.takeIf { it.isNotBlank() }, model.id).joinToString(" ")
+
+// Ниже этой высоты (с учётом масштаба шрифта — шапка растёт вместе с ним) поиск
+// и кнопка перестают влезать целиком — пикер переключается на общую прокрутку,
+// чтобы список оставался достижимым.
+private val modelPickerCompactHeight = 280.dp
+
+/**
+ * Пикер моделей: диалог со списком от провайдера с поиском по label и id.
+ * Тап по модели заполняет поле ID модели выбранной. Список обновляется
+ * кнопкой «Обновить».
  */
 @Composable
 private fun ModelPickerDialog(
@@ -1360,64 +1386,108 @@ private fun ModelPickerDialog(
     onPick: (String) -> Unit,
     onDismiss: () -> Unit,
 ) {
+    var query by rememberSaveable { mutableStateOf("") }
+    val filtered = filteredModels(query, models)
     AlertDialog(
         onDismissRequest = onDismiss,
         title = { Text(stringResource(R.string.mode_model_picker_title)) },
         text = {
-            Column(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .verticalScroll(rememberScrollState()),
-                verticalArrangement = Arrangement.spacedBy(OAssistDimens.DenseSpacing),
-            ) {
-                OutlinedButton(
-                    onClick = onRefresh,
-                    enabled = !isLoading,
-                    modifier = Modifier.oassistTouchTarget(),
-                ) {
-                    if (isLoading) {
-                        CircularProgressIndicator(
-                            modifier = Modifier.padding(OAssistDimens.DenseSpacing),
-                            strokeWidth = OAssistDimens.HairlineSpacing,
+            // При крошечной высоте слота (альбом с открытой клавиатурой) фиксированная
+            // шапка обрезала бы список вовсе — в этом режиме скроллим всё содержимое
+            // целиком, иначе шапка закреплена, а список скроллится отдельно.
+            BoxWithConstraints(modifier = Modifier.fillMaxWidth()) {
+                val header: @Composable () -> Unit = {
+                    OutlinedTextField(
+                        value = query,
+                        onValueChange = { query = it },
+                        label = { Text(stringResource(R.string.mode_model_search_hint)) },
+                        singleLine = true,
+                        keyboardOptions = KeyboardOptions(
+                            keyboardType = KeyboardType.Text,
+                            imeAction = ImeAction.Search,
+                        ),
+                        modifier = Modifier.fillMaxWidth(),
+                    )
+                    OutlinedButton(
+                        onClick = onRefresh,
+                        enabled = !isLoading,
+                        modifier = Modifier.oassistTouchTarget(),
+                    ) {
+                        if (isLoading) {
+                            CircularProgressIndicator(
+                                modifier = Modifier.padding(OAssistDimens.DenseSpacing),
+                                strokeWidth = OAssistDimens.HairlineSpacing,
+                            )
+                        } else {
+                            Text(stringResource(R.string.mode_model_refresh))
+                        }
+                    }
+                    if (!isLoading && models.isEmpty()) {
+                        Text(
+                            text = stringResource(R.string.mode_model_empty),
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
                         )
-                    } else {
-                        Text(stringResource(R.string.mode_model_refresh))
+                    } else if (!isLoading && filtered.isEmpty()) {
+                        Text(
+                            text = stringResource(R.string.mode_model_no_matches),
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
                     }
                 }
-                if (!isLoading && models.isEmpty()) {
-                    Text(
-                        text = stringResource(R.string.mode_model_empty),
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                }
-                models.forEach { m ->
-                    val itemLabel = stringResource(
-                        R.string.mode_model_pick_item,
-                        m.label?.takeIf { it.isNotBlank() } ?: m.id,
-                    )
-                    TextButton(
-                        onClick = { onPick(m.id) },
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .oassistTouchTarget()
-                            .semantics { contentDescription = itemLabel },
-                    ) {
-                        Column(modifier = Modifier.fillMaxWidth()) {
-                            Text(
-                                text = m.id,
-                                style = MaterialTheme.typography.bodyLarge,
-                                modifier = Modifier.fillMaxWidth(),
-                            )
-                            val protocolOverride = m.protocol
-                            if (protocolOverride != null) {
+                val listItems: @Composable () -> Unit = {
+                    filtered.forEach { m ->
+                        val itemLabel = m.label?.takeIf { it.isNotBlank() } ?: m.id
+                        TextButton(
+                            onClick = { onPick(m.id) },
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .oassistTouchTarget()
+                                .semantics { contentDescription = itemLabel },
+                        ) {
+                            Column(modifier = Modifier.fillMaxWidth()) {
                                 Text(
-                                    text = stringResource(R.string.mode_protocol_badge, protocolName(protocolOverride)),
-                                    style = MaterialTheme.typography.bodySmall,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    text = m.id,
+                                    style = MaterialTheme.typography.bodyLarge,
                                     modifier = Modifier.fillMaxWidth(),
                                 )
+                                val protocolOverride = m.protocol
+                                if (protocolOverride != null) {
+                                    Text(
+                                        text = stringResource(R.string.mode_protocol_badge, protocolName(protocolOverride)),
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                        modifier = Modifier.fillMaxWidth(),
+                                    )
+                                }
                             }
+                        }
+                    }
+                }
+                if (maxHeight < modelPickerCompactHeight * LocalDensity.current.fontScale) {
+                    Column(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .verticalScroll(rememberScrollState()),
+                        verticalArrangement = Arrangement.spacedBy(OAssistDimens.DenseSpacing),
+                    ) {
+                        header()
+                        listItems()
+                    }
+                } else {
+                    Column(
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalArrangement = Arrangement.spacedBy(OAssistDimens.DenseSpacing),
+                    ) {
+                        header()
+                        Column(
+                            modifier = Modifier
+                                .weight(1f, fill = false)
+                                .verticalScroll(rememberScrollState()),
+                            verticalArrangement = Arrangement.spacedBy(OAssistDimens.DenseSpacing),
+                        ) {
+                            listItems()
                         }
                     }
                 }

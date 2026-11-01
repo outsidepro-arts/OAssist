@@ -154,9 +154,10 @@
     <string name="mode_model">Модель</string>
     <string name="mode_model_pick">Выбрать модель</string>
     <string name="mode_model_picker_title">Выбор модели</string>
-    <string name="mode_model_pick_item">Модель %1$s</string>
+    <string name="mode_model_search_hint">Поиск по моделям</string>
     <string name="mode_model_refresh">Обновить список моделей</string>
     <string name="mode_model_empty">Список пуст — нажмите «Обновить список моделей»</string>
+    <string name="mode_model_no_matches">Ничего не найдено</string>
     <string name="mode_model_manual">Или введите ID вручную</string>
     <string name="mode_caps_title">Возможности модели</string>
     <string name="mode_probe">Проверить</string>

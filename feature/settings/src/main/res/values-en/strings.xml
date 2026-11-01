@@ -155,9 +155,10 @@
     <string name="mode_model">Model</string>
     <string name="mode_model_pick">Pick model</string>
     <string name="mode_model_picker_title">Pick a model</string>
-    <string name="mode_model_pick_item">Model %1$s</string>
+    <string name="mode_model_search_hint">Search models</string>
     <string name="mode_model_refresh">Refresh model list</string>
     <string name="mode_model_empty">List is empty — tap “Refresh model list”</string>
+    <string name="mode_model_no_matches">Nothing found</string>
     <string name="mode_model_manual">Or enter ID manually</string>
     <string name="mode_caps_title">Model capabilities</string>
     <string name="mode_probe">Probe</string>
