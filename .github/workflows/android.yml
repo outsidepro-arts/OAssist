@@ -2,7 +2,7 @@ name: Android builds
 
 on:
   push:
-    branches: [master]
+    branches: ['**']
     tags: ['v*']
 
 permissions:
@@ -187,7 +187,7 @@ jobs:
     # Release APKs require every check to succeed. Manual cancellation stops both.
     if: >-
       ${{ !cancelled() && needs.metadata.result == 'success' &&
-          (github.ref == 'refs/heads/master' ||
+          (github.ref_type == 'branch' ||
            (needs.ci_tools.result == 'success' && needs.unit.result == 'success' &&
             needs.lint_tests.result == 'success' && needs.checks.result == 'success' &&
             needs.instrumentation.result == 'success')) }}

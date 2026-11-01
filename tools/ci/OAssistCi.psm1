@@ -12,7 +12,7 @@ function Get-OAssistCiMetadata {
         throw 'Version code is outside the supported range.'
     }
     $variant = 'Debug'; $name = ''; $prerelease = $false
-    if ($Ref -cne 'refs/heads/master') {
+    if ($Ref -cnotmatch '\Arefs/heads/\S+\z') {
         if ($Ref -cnotmatch '\Arefs/tags/v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-(beta|rc)(\.?[1-9][0-9]*)?)?\z') { throw 'Unsupported Git ref.' }
         $variant = 'Release'; $name = $Ref.Substring('refs/tags/v'.Length)
         $prerelease = $name.Contains('-')

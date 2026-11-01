@@ -11,15 +11,20 @@ function Assert-Throws([scriptblock]$Action, [string]$Message) {
 
 $debug = Get-OAssistCiMetadata 'refs/heads/master' '1' '1000'
 Assert-True ($debug.VersionCode -eq 1001 -and $debug.Variant -ceq 'Debug' -and $debug.VersionName -ceq '' -and -not $debug.Prerelease) 'Debug metadata'
+foreach ($branch in @('main', 'feature/new-model', 'fix/github-runner-setup', 'v1.2.3')) {
+    $result = Get-OAssistCiMetadata "refs/heads/$branch" '2' '1000'
+    Assert-True ($result.VersionCode -eq 1002 -and $result.Variant -ceq 'Debug' -and $result.VersionName -ceq '' -and -not $result.Prerelease) "Nightly metadata for $branch"
+}
 foreach ($tag in @('v1.2.3', 'v0.0.0-beta', 'v1.2.3-beta.1', 'v1.2.3-beta2', 'v1.2.3-rc', 'v1.2.3-rc.4', 'v1.2.3-rc5')) {
     $result = Get-OAssistCiMetadata "refs/tags/$tag" '1' '1000'
     Assert-True ($result.VersionName -ceq $tag.Substring(1) -and $result.Variant -ceq 'Release' -and $result.Prerelease -eq $tag.Contains('-')) "Tag $tag"
     Assert-True ($result.VersionCode -eq $debug.VersionCode) 'Shared run number produces shared version code'
 }
-foreach ($ref in @('refs/heads/main', 'refs/tags/v01.2.3', 'refs/tags/v1.02.3', 'refs/tags/v1.2.03', 'refs/tags/v1.2.3-alpha', 'refs/tags/v1.2.3-beta0', 'refs/tags/v1.2.3-rc.01', 'refs/tags/v1.2.3-rc.', 'refs/tags/v1.2.3/x', 'refs/tags/v1.2.3;echo')) {
+foreach ($ref in @('refs/heads/', 'refs/pull/1/merge', 'refs/tags/v01.2.3', 'refs/tags/v1.02.3', 'refs/tags/v1.2.03', 'refs/tags/v1.2.3-alpha', 'refs/tags/v1.2.3-beta0', 'refs/tags/v1.2.3-rc.01', 'refs/tags/v1.2.3-rc.', 'refs/tags/v1.2.3/x', 'refs/tags/v1.2.3;echo')) {
     Assert-Throws { Get-OAssistCiMetadata $ref '1' '1000' } $ref
 }
 Assert-Throws { Get-OAssistCiMetadata "refs/tags/v1.2.3`n" '1' '1000' } 'Trailing newline in ref'
+Assert-Throws { Get-OAssistCiMetadata "refs/heads/main`n" '1' '1000' } 'Trailing newline in branch ref'
 Assert-True ((Get-OAssistCiMetadata 'refs/heads/master' '1' '2099999999').VersionCode -eq 2100000000) 'Maximum version code'
 foreach ($pair in @(@('0','0'), @('0','1000'), @('1','2100000000'), @('-1','1000'), @('01','1000'), @('x','1000'), @('99999999999999999999999','1'))) {
     Assert-Throws { Get-OAssistCiMetadata 'refs/heads/master' $pair[0] $pair[1] } "Invalid counter $pair"
