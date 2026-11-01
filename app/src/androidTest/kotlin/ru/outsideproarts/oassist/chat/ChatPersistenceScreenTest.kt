@@ -255,25 +255,35 @@ class ChatPersistenceScreenTest {
 
     @Test fun deletingPublishedChatBeforeFirstAppendResetsItsUnsavedScreen() = runBlocking {
         GatedExecutor().use { gate ->
-            ChatPersistenceFixture(transactionExecutor = gate).use { fixture ->
-                val blocked = AtomicReference<GatedExecutor.Gate?>()
-                fixture.repository.onDiagnosticBind = { _, _ ->
-                    if (blocked.get() == null) blocked.set(gate.pauseNext())
-                }
-                withScreen(fixture, null, "Source", gate::releaseAll) { vm, _ ->
-                    compose.runOnIdle { vm.autoSaveChats = true }
-                    send("first")
-                    compose.waitUntil(10_000) { blocked.get() != null }
-                    assertTrue(blocked.get()!!.entered.await(10, TimeUnit.SECONDS))
-                    assertEquals(null, vm.chatId)
-                    compose.onNodeWithContentDescription(context.getString(ChatR.string.chat_open_list)).performClick()
-                    deleteFromDrawer("Source")
-                    blocked.get()!!.release.countDown()
-                    compose.waitUntil(10_000) { runBlocking { fixture.repository.observeChats().first().isEmpty() } }
-                    compose.runOnIdle {
-                        assertEquals(null, vm.chatId)
-                        assertTrue(vm.turnStore.isEmpty())
-                        assertTrue(vm.messages.isEmpty())
+            // Room otherwise reuses the transaction executor for queries: holding the
+            // first append could also prevent the published chat from reaching the UI.
+            GatedExecutor().use { queries ->
+                ChatPersistenceFixture(transactionExecutor = gate, queryExecutor = queries).use { fixture ->
+                    val blocked = AtomicReference<GatedExecutor.Gate?>()
+                    fixture.repository.onDiagnosticBind = { _, _ ->
+                        if (blocked.get() == null) blocked.set(gate.pauseNext())
+                    }
+                    withScreen(fixture, null, "Source", gate::releaseAll) { vm, _ ->
+                        compose.runOnIdle { vm.autoSaveChats = true }
+                        send("first")
+                        compose.waitUntil(10_000) { blocked.get() != null }
+                        val pendingAppend = checkNotNull(blocked.get())
+                        assertTrue(pendingAppend.entered.await(10, TimeUnit.SECONDS))
+                        compose.runOnIdle {
+                            assertEquals(null, vm.chatId)
+                            assertEquals(listOf("first"), vm.turnStore.map { it.userText })
+                            assertTrue(vm.messages.isNotEmpty())
+                        }
+                        compose.onNodeWithContentDescription(context.getString(ChatR.string.chat_open_list)).performClick()
+                        deleteFromDrawer("Source")
+                        assertEquals("First append must remain blocked until deletion is confirmed", 1L, pendingAppend.release.count)
+                        pendingAppend.release.countDown()
+                        compose.waitUntil(10_000) { runBlocking { fixture.repository.observeChats().first().isEmpty() } }
+                        compose.runOnIdle {
+                            assertEquals(null, vm.chatId)
+                            assertTrue(vm.turnStore.isEmpty())
+                            assertTrue(vm.messages.isEmpty())
+                        }
                     }
                 }
             }
@@ -370,7 +380,10 @@ class ChatPersistenceScreenTest {
             }
 
     private fun deleteFromDrawer(title: String) {
-        val titleY = chatRow(title).fetchSemanticsNode().boundsInRoot.center.y
+        val row = chatRowMatcher(title)
+        compose.waitUntil(10_000) { compose.onAllNodes(row).fetchSemanticsNodes().size == 1 }
+        val titleY = compose.onNode(row).fetchSemanticsNode().boundsInRoot.center.y
+        // Chat items share a semantics parent, so sibling matching also finds other menus.
         compose.onNode(hasContentDescription(context.getString(UiR.string.chats_menu)) and SemanticsMatcher("beside the chat title") {
             it.boundsInRoot.top <= titleY && it.boundsInRoot.bottom >= titleY
         }).performClick()
@@ -435,9 +448,11 @@ class ChatPersistenceScreenTest {
         chatRow(title).performClick()
     }
 
-    private fun chatRow(title: String) = compose.onNode(hasText(title) and SemanticsMatcher("chat summary with its date") {
+    private fun chatRow(title: String) = compose.onNode(chatRowMatcher(title))
+
+    private fun chatRowMatcher(title: String) = hasText(title) and SemanticsMatcher("chat summary with its date") {
         (it.config.getOrNull(SemanticsProperties.Text)?.size ?: 0) > 1
-    })
+    }
 
     private fun send(text: String) {
         compose.onNodeWithText(context.getString(ChatR.string.chat_input_hint)).performTextInput(text)

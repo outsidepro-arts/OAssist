@@ -10,6 +10,12 @@ import androidx.activity.result.ActivityResultRegistryOwner
 import androidx.activity.result.contract.ActivityResultContract
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.SemanticsProperties
+import androidx.compose.ui.test.SemanticsMatcher
+import androidx.compose.ui.test.assertIsOff
+import androidx.compose.ui.test.assertIsOn
+import androidx.compose.ui.test.hasText
 import androidx.compose.ui.test.junit4.StateRestorationTester
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onAllNodesWithText
@@ -83,17 +89,37 @@ class DiagnosticExportRecreationTest {
 
     @Test fun selectedSessionsSurviveRestorationWhileDocumentIsPending() {
         val restoration = showScreen()
+        val selectedSession = sessionSwitch("selected")
+        val excludedSession = sessionSwitch("excluded")
         compose.onNodeWithText(base.getString(R.string.diagnostics_select_sessions)).performScrollTo().performClick()
-        compose.waitUntil(5_000) { compose.onAllNodesWithText("excluded", substring = true).fetchSemanticsNodes().isNotEmpty() }
-        compose.onNodeWithText("excluded", substring = true).performScrollTo().performClick()
+        compose.waitUntil(5_000) {
+            compose.onAllNodes(selectedSession).fetchSemanticsNodes().size == 1 &&
+                compose.onAllNodes(excludedSession).fetchSemanticsNodes().size == 1
+        }
+        if (base.getString(R.string.diagnostics_explanation).contains("excluded")) {
+            compose.onNodeWithText(base.getString(R.string.diagnostics_explanation)).assertExists()
+        }
+        compose.onNode(selectedSession).assertIsOn()
+        compose.onNode(excludedSession).assertIsOn().performScrollTo().performClick()
+        compose.onNode(excludedSession).assertIsOff()
         launchSave()
         restoration.emulateSavedInstanceStateRestore()
+        compose.waitUntil(5_000) {
+            compose.onAllNodes(selectedSession).fetchSemanticsNodes().size == 1 &&
+                compose.onAllNodes(excludedSession).fetchSemanticsNodes().size == 1
+        }
+        compose.onNode(selectedSession).assertIsOn()
+        compose.onNode(excludedSession).assertIsOff()
         deliverResult()
         compose.waitUntil(10_000) { output.isFile && output.length() > 0 && savedStatusVisible() }
         val events = ZipFile(output).use { zip -> zip.getInputStream(zip.getEntry("events.jsonl")).bufferedReader().readText() }
         assertTrue(events.contains("selected-private"))
         assertFalse(events.contains("excluded-private"))
     }
+
+    private fun sessionSwitch(operationIdPrefix: String) =
+        hasText(operationIdPrefix, substring = true) and
+            SemanticsMatcher.expectValue(SemanticsProperties.Role, Role.Switch)
 
     @Test fun changedGenerationRejectsPendingDocumentAfterRestoration() {
         val restoration = showScreen()
