@@ -38,20 +38,20 @@ try {
     }
     Assert-Throws { Test-OAssistTestReports @() } 'No reports'
 
-    & (Get-Module OAssistCi) {
-        $digest = 'a' * 64
-        $signer = "Signer #1 certificate SHA-256 digest: $digest`nSigner #1 public key SHA-256 digest: $('b' * 64)`n"
-        $manifest = "package: name='ru.outsideproarts.oassist' versionCode='42' versionName='1.2'`n"
-        Test-OAssistApkDetails $signer $manifest 42 '1.2' Release $digest
-        Test-OAssistApkDetails $signer ($manifest + "application-debuggable`n") 42 '' Debug $digest.ToUpperInvariant()
-        Assert-Throws { Test-OAssistApkDetails ($signer + "Signer #2 certificate SHA-256 digest: $digest`n") $manifest 42 '1.2' Release $digest } 'Multiple signers'
-        Assert-Throws { Test-OAssistApkDetails $signer $manifest 42 '1.2' Release ('b' * 64) } 'Public key is not certificate'
-        Assert-Throws { Test-OAssistApkDetails $signer $manifest 43 '1.2' Release $digest } 'Wrong version code'
-        Assert-Throws { Test-OAssistApkDetails $signer $manifest 42 'wrong' Release $digest } 'Wrong version name'
-        Assert-Throws { Test-OAssistApkDetails $signer ($manifest + "application-debuggable`n") 42 '' Release $digest } 'Unexpected debuggable'
-        Assert-Throws { Test-OAssistApkDetails $signer $manifest 42 '' Debug $digest } 'Missing debuggable'
-        Assert-Throws { Test-OAssistApkDetails $signer $manifest 42 '' Release 'bad' } 'Malformed digest'
-    }
+    # Obtain the private command in its module, but keep assertions in this script's scope.
+    $checkApkDetails = & (Get-Module OAssistCi) { Get-Command Test-OAssistApkDetails }
+    $digest = 'a' * 64
+    $signer = "Signer #1 certificate SHA-256 digest: $digest`nSigner #1 public key SHA-256 digest: $('b' * 64)`n"
+    $manifest = "package: name='ru.outsideproarts.oassist' versionCode='42' versionName='1.2'`n"
+    & $checkApkDetails $signer $manifest 42 '1.2' Release $digest
+    & $checkApkDetails $signer ($manifest + "application-debuggable`n") 42 '' Debug $digest.ToUpperInvariant()
+    Assert-Throws { & $checkApkDetails ($signer + "Signer #2 certificate SHA-256 digest: $digest`n") $manifest 42 '1.2' Release $digest } 'Multiple signers'
+    Assert-Throws { & $checkApkDetails $signer $manifest 42 '1.2' Release ('b' * 64) } 'Public key is not certificate'
+    Assert-Throws { & $checkApkDetails $signer $manifest 43 '1.2' Release $digest } 'Wrong version code'
+    Assert-Throws { & $checkApkDetails $signer $manifest 42 'wrong' Release $digest } 'Wrong version name'
+    Assert-Throws { & $checkApkDetails $signer ($manifest + "application-debuggable`n") 42 '' Release $digest } 'Unexpected debuggable'
+    Assert-Throws { & $checkApkDetails $signer $manifest 42 '' Debug $digest } 'Missing debuggable'
+    Assert-Throws { & $checkApkDetails $signer $manifest 42 '' Release 'bad' } 'Malformed digest'
     if ($ReferenceApk) {
         if (-not $BuildToolsDirectory) { throw 'BuildToolsDirectory is required with ReferenceApk.' }
         $originalEnvironment = @{}

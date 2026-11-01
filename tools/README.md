@@ -12,8 +12,9 @@ OpenCode ниже применима только при подтверждён�
 Исключение — `tools/ci/`: эти скрипты используют PowerShell 7 и на Windows, и на
 Linux runners. Настройка автоматического выпуска описана в
 [README](../README.md#автоматические-сборки-github). Проверки CI-скриптов запускаются
-командами `pwsh -File tools/ci/Test-OAssistCi.ps1` и
-`pwsh -File tools/ci/Test-PublishOAssistRelease.ps1` из корня репозитория. Для
+командами `pwsh -NoProfile -Command './tools/ci/Test-OAssistCi.ps1'` и
+`pwsh -NoProfile -Command './tools/ci/Test-PublishOAssistRelease.ps1'` из корня
+репозитория, с вызовом скриптов из командного сеанса, как в Actions. Для
 сквозной проверки подписи временным тестовым ключом первая команда принимает
 `-ReferenceApk <release.apk>` и `-BuildToolsDirectory <SDK/build-tools/36.0.0>`.
 
