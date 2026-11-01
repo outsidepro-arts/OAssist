@@ -17,7 +17,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.res.stringResource
@@ -41,11 +41,17 @@ fun MemoryScreen(
     modifier: Modifier = Modifier,
 ) {
     val title = stringResource(R.string.memory_title)
-    var draft by remember { mutableStateOf<String?>(null) }
-    var confirmingClear by remember { mutableStateOf(false) }
+    // Черновик переживает пересоздание Activity; draftLoaded — «текст загружен»:
+    // пустая строка — легитимное содержимое, а не «ещё не загружено».
+    var draft by rememberSaveable { mutableStateOf("") }
+    var draftLoaded by rememberSaveable { mutableStateOf(false) }
+    var confirmingClear by rememberSaveable { mutableStateOf(false) }
 
     LaunchedEffect(text) {
-        if (draft == null && text != null) draft = text
+        if (!draftLoaded && text != null) {
+            draft = text
+            draftLoaded = true
+        }
     }
 
     Column(
@@ -73,19 +79,19 @@ fun MemoryScreen(
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
                 OutlinedTextField(
-                    value = draft.orEmpty(),
+                    value = draft,
                     onValueChange = { draft = it },
                     label = { Text(title) },
                     minLines = 8,
-                    enabled = draft != null,
+                    enabled = draftLoaded,
                     modifier = Modifier.fillMaxWidth(),
                 )
             }
         }
 
         OutlinedButton(
-            onClick = { draft?.let { onSave(it) } },
-            enabled = draft != null,
+            onClick = { if (draftLoaded) onSave(draft) },
+            enabled = draftLoaded,
             modifier = Modifier
                 .fillMaxWidth()
                 .oassistTouchTarget(),

@@ -21,7 +21,7 @@ import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -64,8 +64,9 @@ internal fun ChatInfoScreen(
     val toolsEmpty = stringResource(R.string.chat_info_tools_empty)
 
     // Поле живёт локально (снимок при открытии): правки модели-имени посреди
-    // ввода не должны затирать текст пользователя.
-    var name by remember { mutableStateOf(initialTitle) }
+    // ввода не должны затирать текст пользователя. rememberSaveable — черновик
+    // переживает пересоздание Activity (поворот, смерть процесса).
+    var name by rememberSaveable { mutableStateOf(initialTitle) }
     val canSave = kind != ChatKind.ASSISTANT &&
         name.isNotBlank() &&
         name.trim() != initialTitle

@@ -92,10 +92,14 @@
         android:supportsRtl="true"
         android:theme="@style/Theme.OAssist">
 
+        <!-- configChanges: поворот/смена темы не пересоздают Activity — ввод форм,
+             секреты и идущие стримы остаются в памяти (rememberSaveable не пишет
+             секреты в savedInstanceState). -->
         <activity
             android:name=".MainActivity"
             android:exported="true"
             android:launchMode="singleTask"
+            android:configChanges="orientation|screenSize|screenLayout|smallestScreenSize|keyboardHidden|uiMode"
             android:theme="@style/Theme.OAssist"
             android:windowSoftInputMode="adjustResize">
             <intent-filter>

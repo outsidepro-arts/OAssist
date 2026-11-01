@@ -2,10 +2,13 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
 
     <application>
+        <!-- configChanges: поворот/смена темы не пересоздают Activity — идущий
+             диалог и стрим ShareFlow не прерываются (см. app-манифест). -->
         <activity
             android:name=".ShareActivity"
             android:exported="true"
             android:label="@string/share_activity_label"
+            android:configChanges="orientation|screenSize|screenLayout|smallestScreenSize|keyboardHidden|uiMode"
             android:theme="@style/Theme.OAssist.Share">
             <intent-filter>
                 <action android:name="android.intent.action.SEND" />

@@ -1,6 +1,5 @@
 package ru.outsideproarts.oassist.feature.share
 
-import ru.outsideproarts.oassist.core.model.diagnostics.launchDiagnostic
 import android.content.Intent
 import android.net.Uri
 import android.os.Bundle
@@ -31,10 +30,9 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -43,36 +41,21 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.input.KeyboardCapitalization
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.TextFieldValue
-import kotlinx.coroutines.CancellationException
+import androidx.lifecycle.viewmodel.compose.viewModel
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import ru.outsideproarts.oassist.core.a11y.oassistHeading
 import ru.outsideproarts.oassist.core.a11y.oassistTouchTarget
 import ru.outsideproarts.oassist.core.agent.AgentFactory
-import ru.outsideproarts.oassist.core.agent.AgentSession
-import ru.outsideproarts.oassist.core.agent.ChatTitler
 import ru.outsideproarts.oassist.core.data.chat.ChatHandle
-import ru.outsideproarts.oassist.core.model.ApprovalDecision
-import ru.outsideproarts.oassist.core.model.AssistMode
-import ru.outsideproarts.oassist.core.model.ChatMessage
-import ru.outsideproarts.oassist.core.model.ChatRole
 import ru.outsideproarts.oassist.core.model.ChatSummary
 import ru.outsideproarts.oassist.core.model.ContextData
 import ru.outsideproarts.oassist.core.model.ContextSource
-import ru.outsideproarts.oassist.core.model.ImagePart
 import ru.outsideproarts.oassist.core.model.ModelUserInput
 import ru.outsideproarts.oassist.core.model.StoredTurn
-import ru.outsideproarts.oassist.core.provider.ChatChunk
 import ru.outsideproarts.oassist.core.provider.ImageCodec
-import ru.outsideproarts.oassist.core.provider.ProviderError
-import ru.outsideproarts.oassist.core.provider.collectSafe
-import ru.outsideproarts.oassist.core.provider.isEarlyRetryable
-import ru.outsideproarts.oassist.core.speech.AgentSound
 import ru.outsideproarts.oassist.core.speech.SentenceSplitter
-import ru.outsideproarts.oassist.core.speech.SoundHandle
 import ru.outsideproarts.oassist.core.speech.SpeechHandle
-import ru.outsideproarts.oassist.core.speech.StreamSpeaker
 import ru.outsideproarts.oassist.core.ui.OAssistDimens
 import ru.outsideproarts.oassist.core.ui.components.ChatDeleteDialog
 import ru.outsideproarts.oassist.core.ui.components.ChatMessageBubble
@@ -134,6 +117,54 @@ data class SharePayload(
     }
 }
 
+/** Локализованные шаблоны описания общего контента; собираются в UI. */
+private data class SharePromptTemplates(
+    val text: String,
+    val image: String,
+    val file: String,
+    val question: String,
+)
+
+/**
+ * Одноразовый тост из обработчика события. Строка резолвится через
+ * [android.content.Context.getString] в момент события (а не при композиции),
+ * поэтому хелпер — вне @Composable: так не срабатывает
+ * `LocalContextGetResourceValueCall` и текст всегда в актуальной локали.
+ */
+private fun showShareToast(context: android.content.Context, toast: ShareToast) {
+    val text = when (toast) {
+        is ShareToast.Error -> toast.error.userMessage(context)
+        is ShareToast.Res -> context.getString(toast.resId)
+    }
+    val duration = if (toast is ShareToast.Res && !toast.long) {
+        Toast.LENGTH_SHORT
+    } else {
+        Toast.LENGTH_LONG
+    }
+    Toast.makeText(context, text, duration).show()
+}
+
+/** Сборка хода из полученного контента и вопроса; строки уже локализованы. */
+private fun buildShareAsk(
+    payload: SharePayload,
+    query: String,
+    templates: SharePromptTemplates,
+): ShareAskRequest {
+    val contentDesc = buildString {
+        payload.text?.let { append(String.format(templates.text, it)) }
+        payload.imageUris.forEach { append(String.format(templates.image, it)) }
+        payload.otherUris.forEach { append(String.format(templates.file, it)) }
+    }
+    val userMsg = String.format(templates.question, contentDesc, query)
+    val modelInput = ModelUserInput(
+        requestText = query,
+        context = if (contentDesc.isBlank()) emptyList() else {
+            listOf(ContextData(ContextSource.SHARED_CONTENT, contentDesc))
+        },
+    )
+    return ShareAskRequest(query = query, userMsg = userMsg, modelInput = modelInput, contentDesc = contentDesc)
+}
+
 /**
  * Шаринг в два экрана: список диалогов («Новый чат» + сохранённые, без записи
  * ассистента) → выбранный диалог с полной историей, прикреплённым файлом и
@@ -142,45 +173,42 @@ data class SharePayload(
 @Composable
 private fun ShareFlow(payload: SharePayload) {
     val context = LocalContext.current
-    val scope = rememberCoroutineScope()
+    // Сессионное состояние — в ViewModel: переживает пересоздание Activity
+    // (поворот, смена языка/темы), идущий стрим не прерывается.
+    val vm: ShareSessionViewModel = viewModel()
     val chatsFlow = remember {
         ChatHandle.get()?.observeChats()
             ?: kotlinx.coroutines.flow.flowOf(emptyList())
     }
     val chats by chatsFlow.collectAsState(initial = emptyList())
-
-    var inConversation by remember { mutableStateOf(false) }
-    var chatId by remember { mutableStateOf<String?>(null) }
-    var chatTitle by remember { mutableStateOf("") }
-    var titleLocked by remember { mutableStateOf(false) }
-    val turns = remember { mutableStateListOf<StoredTurn>() }
-    var diagnosticOperations by remember { mutableStateOf(mutableListOf<String>()) }
-    var autoSave by remember { mutableStateOf(true) }
-    var images by remember { mutableStateOf<List<ImagePart>>(emptyList()) }
+    // UI-локальные состояния диалогов: живут в композиции, при повороте/смене
+    // темы Activity не пересоздаётся, при смерти процесса диалоги закрываются.
     var pendingSwitch by remember { mutableStateOf<(() -> Unit)?>(null) }
     var deleteAsk by remember { mutableStateOf(false) }
 
-    var question by remember { mutableStateOf(TextFieldValue("")) }
-    var activeUserMsg by remember { mutableStateOf<String?>(null) }
-    var workEvents by remember { mutableStateOf<List<ru.outsideproarts.oassist.core.model.WorkEvent>>(emptyList()) }
-    var response by remember { mutableStateOf("") }
-    var turnUsage by remember { mutableStateOf<ru.outsideproarts.oassist.core.model.ProviderUsage?>(null) }
-    var isStreaming by remember { mutableStateOf(false) }
-    var pendingShareRetry by remember { mutableStateOf<String?>(null) }
-
     val offlineRetryText = stringResource(ru.outsideproarts.oassist.core.ui.R.string.net_offline_retry)
-    val repeatingText = stringResource(ru.outsideproarts.oassist.core.ui.R.string.net_repeating)
     // Шаблоны промпта — через stringResource (ленивая локаль), не context.getString.
-    val promptTextTemplate = stringResource(R.string.share_prompt_text)
-    val promptImageTemplate = stringResource(R.string.share_prompt_image)
-    val promptFileTemplate = stringResource(R.string.share_prompt_file)
-    val promptQuestionTemplate = stringResource(R.string.share_prompt_question)
+    val templates = SharePromptTemplates(
+        text = stringResource(R.string.share_prompt_text),
+        image = stringResource(R.string.share_prompt_image),
+        file = stringResource(R.string.share_prompt_file),
+        question = stringResource(R.string.share_prompt_question),
+    )
+
+    // Смерть процесса: VM с историей погибает, но id открытого разговора
+    // переживает в saved state — восстановление выполняется один раз на VM.
+    var savedChatId by rememberSaveable { mutableStateOf("") }
+    var savedInConversation by rememberSaveable { mutableStateOf(false) }
+    LaunchedEffect(Unit) {
+        vm.restoreAfterProcessDeath(savedInConversation, savedChatId)
+    }
+    LaunchedEffect(vm.chatId, vm.inConversation) {
+        savedChatId = vm.chatId.orEmpty()
+        savedInConversation = vm.inConversation
+    }
 
     LaunchedEffect(Unit) {
-        autoSave = runCatching {
-            AgentFactory.get().modeConfig(AssistMode.SHARE).effectiveAutoSaveChats()
-        }.getOrDefault(true)
-        images = withContext(Dispatchers.IO) {
+        vm.images = withContext(Dispatchers.IO) {
             payload.imageUris.take(SHARE_MAX_IMAGES).mapNotNull { uri ->
                 runCatching {
                     context.contentResolver.openInputStream(uri)?.use { it.readBytes() }
@@ -189,313 +217,20 @@ private fun ShareFlow(payload: SharePayload) {
         }
     }
 
-    // Текстовый порядок: локальные fun объявляются до UI, которые их вызывают.
-    fun generateTitle(nameSeed: String, expectedFirstTurn: StoredTurn) {
-        if (titleLocked || turns.firstOrNull() !== expectedFirstTurn) return
-        scope.launch(ru.outsideproarts.oassist.core.model.diagnostics.DiagnosticContext(expectedFirstTurn.diagnosticOperationId ?: ru.outsideproarts.oassist.core.model.diagnostics.Diagnostics.newOperationId())) {
-            if (titleLocked || turns.firstOrNull() !== expectedFirstTurn) return@launch
-            val generated = runCatching {
-                ChatTitler.generateTitle(AssistMode.SHARE, nameSeed, AgentFactory.get())
-            }.getOrNull() ?: return@launch
-            if (!titleLocked && turns.firstOrNull() === expectedFirstTurn) {
-                chatTitle = generated
-                val id = chatId
-                if (id != null) ChatHandle.get()?.renameChat(id, generated)
-            }
-        }
+    // Тосты VM: строка резолвится в момент события в хелпере вне @Composable
+    // (см. showToast в MainActivity) — иначе срабатывает LocalContextGetResourceValueCall.
+    LaunchedEffect(Unit) {
+        vm.toasts.collect { toast -> showShareToast(context, toast) }
     }
 
-    /** Ход в БД: в сохранённый диалог, при autoSave — создать новый, иначе в память. */
-    fun persistTurn(stored: StoredTurn, nameSeed: String) {
-        val repo = ChatHandle.get()
-        val currentId = chatId
-        val isFirstTurn = turns.size == 1
-        when {
-            currentId != null -> {
-                if (repo != null) {
-                    scope.launch { repo.appendTurn(currentId, stored) }
-                }
-            }
-            autoSave -> {
-                val placeholder = ChatTitler.placeholder(nameSeed)
-                if (isFirstTurn && chatTitle.isBlank()) chatTitle = placeholder
-                if (repo != null) {
-                    val diagnosticOwner = diagnosticOperations
-                    val diagnosticSnapshot = diagnosticOwner.toList()
-                    val savedTitle = chatTitle.ifBlank { placeholder }
-                    scope.launch {
-                        val id = repo.createChat(AssistMode.SHARE, savedTitle)
-                        diagnosticSnapshot.forEach { repo.bindDiagnosticOperation(id, it) }
-                        repo.appendTurn(id, stored)
-                        if (chatId == null && turns.any { it === stored }) {
-                            chatId = id
-                        }
-                        diagnosticOwner.toList().forEach { repo.bindDiagnosticOperation(id, it) }
-                        if (isFirstTurn && chatId == id) generateTitle(nameSeed, stored)
-                    }
-                }
-            }
-            isFirstTurn -> {
-                if (chatTitle.isBlank()) chatTitle = ChatTitler.placeholder(nameSeed)
-                generateTitle(nameSeed, stored)
-            }
-        }
-    }
-
-    fun ask(q: String) {
-        val query = q.trim()
-        if (query.isBlank() || isStreaming) return
-        isStreaming = true
-        SpeechHandle.get()?.stop()
-        val contentDesc = buildString {
-            payload.text?.let { append(String.format(promptTextTemplate, it)) }
-            payload.imageUris.forEach { append(String.format(promptImageTemplate, it)) }
-            payload.otherUris.forEach { append(String.format(promptFileTemplate, it)) }
-        }
-        val userMsg = String.format(promptQuestionTemplate, contentDesc, query)
-        val modelInput = ModelUserInput(
-            requestText = query,
-            context = if (contentDesc.isBlank()) emptyList() else {
-                listOf(ContextData(ContextSource.SHARED_CONTENT, contentDesc))
-            },
-        )
-        activeUserMsg = userMsg
-        val history = turns.flatMap { it.modelMessages() }
-        val timeline = ru.outsideproarts.oassist.core.agent.WorkTimelineBuilder()
-        workEvents = emptyList()
-        response = ""
-        turnUsage = null
-        var turnTranscript: List<ChatMessage> = emptyList()
-        val diagnosticId = ru.outsideproarts.oassist.core.model.diagnostics.Diagnostics.newOperationId()
-        diagnosticOperations.add(diagnosticId)
-        val diagnosticChatId = chatId
-        val diagnosticRepo = ChatHandle.get()
-        val diagnosticGeneration = diagnosticChatId?.let { diagnosticRepo?.diagnosticGeneration(it) }
-        var turnRecorded = false
-        fun recordTurn() {
-            if (turnRecorded) return
-            turnRecorded = true
-            if (timeline.isEmpty) return
-            val stored = StoredTurn(
-                diagnosticOperationId = diagnosticId,
-                userText = userMsg,
-                modelUserInput = modelInput,
-                userImages = images,
-                work = timeline.work,
-                answer = timeline.answerText,
-                usage = timeline.usage,
-                turn = turnTranscript.ifEmpty {
-                    if (timeline.answerText.isNotBlank()) {
-                        listOf(ChatMessage(ChatRole.ASSISTANT, timeline.answerText))
-                    } else {
-                        emptyList()
-                    }
-                },
-            )
-            turns.add(stored)
-            activeUserMsg = null
-            persistTurn(stored, nameSeed = query)
-        }
-        scope.launchDiagnostic("SHARE", diagnosticId) launch@ {
-            if (diagnosticChatId != null && diagnosticRepo != null && diagnosticGeneration != null) {
-                diagnosticRepo.bindDiagnosticOperation(diagnosticChatId, diagnosticId, diagnosticGeneration)
-            }
-            val tts = runCatching {
-                AgentFactory.get().modeConfig(AssistMode.SHARE).effectiveTts()
-            }.getOrElse { ru.outsideproarts.oassist.core.model.TtsConfig.DEFAULT }
-            val soundsOn = runCatching {
-                AgentFactory.get().modeConfig(AssistMode.SHARE).effectiveSoundEnabled()
-            }.getOrDefault(true)
-            val sounds = SoundHandle.get()
-            sounds?.playIfEnabled(AgentSound.MSG_SEND, soundsOn)
-            val speech = SpeechHandle.get()
-            speech?.applyTts(tts)
-            speech?.setNarrativeEnabled(tts.narrative)
-            val thoughtSpeaker = StreamSpeaker(
-                speak = { speech?.speak(it) },
-                speakToolCalls = tts.speakToolCalls,
-            )
-            val answerSpeaker = StreamSpeaker(
-                speak = { speech?.speak(it) },
-            )
-            val session = try {
-                val factory = AgentFactory.get()
-                val config = factory.modeConfig(AssistMode.SHARE)
-                val profile = factory.providerForMode(AssistMode.SHARE)
-                    ?: throw ProviderError.NotConfigured(ProviderError.NotConfigured.Reason.PROVIDER_MISSING)
-                val modelId = config.modelId?.takeIf { it.isNotBlank() }
-                    ?: throw ProviderError.NotConfigured(ProviderError.NotConfigured.Reason.MODEL_MISSING)
-                val agent = factory.agentFor(profile, AssistMode.SHARE)
-                val prompt = factory.systemPromptFor(
-                    AssistMode.SHARE,
-                    sharedContent = contentDesc.ifBlank { null },
-                )
-                AgentSession(
-                    chunks = agent.stream(
-                        modelId = modelId,
-                        systemPrompt = prompt.instructions,
-                        promptContext = prompt.context,
-                        modelUserInput = modelInput,
-                        history = history,
-                        userMessage = userMsg,
-                        images = images.ifEmpty { null },
-                        onTurnMessages = { turn -> turnTranscript = turn },
-                    ),
-                    agent = agent,
-                )
-            } catch (e: CancellationException) {
-                isStreaming = false
-                throw e
-            } catch (e: Throwable) {
-                // Нет провайдера/модели — честный тост вместо падения.
-                isStreaming = false
-                activeUserMsg = null
-                val failure = ProviderError.from(e)
-                sounds?.playIfEnabled(AgentSound.ERROR, soundsOn)
-                Toast.makeText(context, failure.userMessage(context), Toast.LENGTH_LONG).show()
-                return@launch
-            }
-            val error = try {
-                session.chunks.collectSafe { chunk ->
-                    when (chunk) {
-                        is ChatChunk.Reasoning -> {
-                            // Мысли модели: в полотно, без озвучки (дельты частые).
-                            if (timeline.onChunk(chunk)) workEvents = timeline.work
-                        }
-                        is ChatChunk.Content -> {
-                            if (chunk.isToolComment) {
-                                timeline.onChunk(chunk)
-                                workEvents = timeline.work
-                                thoughtSpeaker.onText(timeline.commentText, true)
-                                sounds?.playIfEnabled(AgentSound.THINKING, soundsOn)
-                            } else {
-                                timeline.onChunk(chunk)
-                                response = timeline.answerText
-                                answerSpeaker.onText(timeline.answerText, false)
-                            }
-                        }
-                        is ChatChunk.ToolCall -> {
-                            timeline.onChunk(chunk)
-                            workEvents = timeline.work
-                            sounds?.playToolCallIfEnabled(chunk.name, soundsOn)
-                        }
-                        is ChatChunk.ToolResult -> {
-                            timeline.onChunk(chunk)
-                            workEvents = timeline.work
-                        }
-                        // В Share нет диалога подтверждений: опасные действия отклоняем сразу.
-                        is ChatChunk.ApprovalNeeded -> {
-                            sounds?.playIfEnabled(AgentSound.PERMISSION_DENIED, soundsOn)
-                            session.agent.resolveApproval(chunk.request.callId, ApprovalDecision.DENY)
-                        }
-                        is ChatChunk.Finish -> {
-                            timeline.onChunk(chunk)
-                            thoughtSpeaker.onFinish(timeline.commentText)
-                            answerSpeaker.onFinish(timeline.answerText)
-                            turnUsage = timeline.usage
-                            workEvents = timeline.work
-                            response = timeline.answerText
-                            sounds?.playIfEnabled(AgentSound.ANSWER_READY, soundsOn)
-                            recordTurn()
-                            if (chunk.abrupt) {
-                                // Поток закрылся без терминатора: ответ мог быть усечён.
-                                Toast.makeText(
-                                    context,
-                                    ru.outsideproarts.oassist.core.provider.R.string.provider_stream_truncated,
-                                    Toast.LENGTH_LONG,
-                                ).show()
-                            }
-                        }
-                    }
-                }
-            } catch (e: CancellationException) {
-                throw e
-            } finally {
-                isStreaming = false
-                recordTurn()
-            }
-            if (error != null) {
-                val net = ru.outsideproarts.oassist.core.net.NetworkHandle.get()
-                if (net != null && !net.isOnline.value && error.isEarlyRetryable() &&
-                    timeline.isEmpty
-                ) {
-                    // Упали до первого чанка без сети: ждём фронт online.
-                    pendingShareRetry = query
-                    activeUserMsg = null
-                    Toast.makeText(context, offlineRetryText, Toast.LENGTH_LONG).show()
-                } else {
-                    sounds?.playIfEnabled(AgentSound.ERROR, soundsOn)
-                    Toast.makeText(context, error.userMessage(context), Toast.LENGTH_LONG).show()
-                }
-            }
-        }
-    }
-
-    val netHandle = remember { ru.outsideproarts.oassist.core.net.NetworkHandle.get() }
-    LaunchedEffect(netHandle) {
-        var wasOnline = netHandle?.isOnline?.value ?: true
-        netHandle?.isOnline?.collect { online ->
-            if (online && !wasOnline) {
-                val retry = pendingShareRetry
-                if (retry != null && !isStreaming) {
-                    pendingShareRetry = null
-                    Toast.makeText(context, repeatingText, Toast.LENGTH_SHORT).show()
-                    ask(retry)
-                }
-            }
-            wasOnline = online
-        }
-    }
-
-    fun backToList() {
-        if (turns.isNotEmpty() && chatId == null) {
-            pendingSwitch = {
-                activeUserMsg = null
-                inConversation = false
-            }
-        } else {
-            activeUserMsg = null
-            inConversation = false
-        }
-    }
-
-    if (!inConversation) {
+    if (!vm.inConversation) {
         ShareChatList(
             payload = payload,
             chats = chats,
-            onOpenChat = { summary ->
-                diagnosticOperations = mutableListOf()
-                chatId = summary.id
-                chatTitle = summary.title
-                titleLocked = true
-                turns.clear()
-                activeUserMsg = null
-                inConversation = true
-                scope.launch {
-                    val loaded = ChatHandle.get()?.loadTurns(summary.id).orEmpty()
-                    turns.addAll(loaded)
-                }
-            },
-            onNewChat = {
-                diagnosticOperations = mutableListOf()
-                chatId = null
-                chatTitle = ""
-                titleLocked = false
-                turns.clear()
-                activeUserMsg = null
-                inConversation = true
-            },
-            onRenameChat = { summary, name ->
-                ChatHandle.get()?.let { repo -> scope.launch { repo.renameChat(summary.id, name) } }
-                if (summary.id == chatId) {
-                    chatTitle = name
-                    titleLocked = true
-                }
-            },
-            onDeleteChat = { summary ->
-                ChatHandle.get()?.let { repo -> scope.launch { repo.deleteChat(summary.id) } }
-                if (summary.id == chatId) chatId = null
-            },
+            onOpenChat = vm::openChat,
+            onNewChat = vm::newChat,
+            onRenameChat = vm::renameChat,
+            onDeleteChat = vm::deleteChatFromList,
             onClose = {
                 SpeechHandle.get()?.stop()
                 (context as? android.app.Activity)?.finish()
@@ -513,46 +248,38 @@ private fun ShareFlow(payload: SharePayload) {
     } else {
         ShareConversation(
             payload = payload,
-            chatTitle = chatTitle,
-            isSaved = chatId != null,
-            turns = turns,
-            activeUserMsg = activeUserMsg,
-            workEvents = workEvents,
-            response = response,
-            usage = turnUsage,
-            isStreaming = isStreaming,
-            question = question,
-            onQuestionChange = { question = it },
+            chatTitle = vm.chatTitle,
+            isSaved = vm.chatId != null,
+            turns = vm.turns,
+            activeUserMsg = vm.activeUserMsg,
+            workEvents = vm.workEvents,
+            response = vm.response,
+            usage = vm.turnUsage,
+            isStreaming = vm.isStreaming,
+            question = vm.question,
+            onQuestionChange = { vm.question = it },
             onSend = {
-                if (question.text.isNotBlank() && !isStreaming) {
+                if (vm.question.text.isNotBlank() && !vm.isStreaming) {
                     val net = ru.outsideproarts.oassist.core.net.NetworkHandle.get()
+                    val request = buildShareAsk(payload, vm.question.text.trim(), templates)
                     if (net != null && !net.isOnline.value) {
-                        pendingShareRetry = question.text.trim()
+                        // Сеть пропала: запрос встанет в очередь на повтор.
+                        vm.deferAsk(request)
                         Toast.makeText(context, offlineRetryText, Toast.LENGTH_LONG).show()
                     } else {
-                        pendingShareRetry = null
-                        ask(question.text.trim())
-                        question = TextFieldValue("")
+                        vm.ask(request)
+                        vm.question = TextFieldValue("")
                     }
                 }
             },
-            onBack = ::backToList,
-            onSaveChat = {
-                val repo = ChatHandle.get()
-                if (chatId == null && repo != null && turns.isNotEmpty()) {
-                    val snapshot = turns.toList()
-                    val diagnosticSnapshot = diagnosticOperations.toList()
-                    val fallback = ChatTitler.placeholder(snapshot.firstOrNull()?.userText.orEmpty())
-                    if (chatTitle.isBlank()) chatTitle = fallback
-                    val title = chatTitle
-                    scope.launch {
-                        val id = repo.createChat(AssistMode.SHARE, title)
-                        diagnosticSnapshot.forEach { repo.bindDiagnosticOperation(id, it) }
-                        snapshot.forEach { repo.appendTurn(id, it) }
-                        chatId = id
-                    }
+            onBack = {
+                if (vm.turns.isNotEmpty() && vm.chatId == null) {
+                    pendingSwitch = { vm.leaveConversation() }
+                } else {
+                    vm.leaveConversation()
                 }
             },
+            onSaveChat = vm::saveChat,
             onDeleteChat = { deleteAsk = true },
         )
     }
@@ -560,20 +287,7 @@ private fun ShareFlow(payload: SharePayload) {
     pendingSwitch?.let { action ->
         ChatUnsavedDialog(
             onSaveAndContinue = {
-                val repo = ChatHandle.get()
-                if (chatId == null && repo != null && turns.isNotEmpty()) {
-                    val snapshot = turns.toList()
-                    val diagnosticSnapshot = diagnosticOperations.toList()
-                    val fallback = ChatTitler.placeholder(snapshot.firstOrNull()?.userText.orEmpty())
-                    if (chatTitle.isBlank()) chatTitle = fallback
-                    val title = chatTitle
-                    scope.launch {
-                        val id = repo.createChat(AssistMode.SHARE, title)
-                        diagnosticSnapshot.forEach { repo.bindDiagnosticOperation(id, it) }
-                        snapshot.forEach { repo.appendTurn(id, it) }
-                        chatId = id
-                    }
-                }
+                vm.saveChat()
                 action()
                 pendingSwitch = null
             },
@@ -587,29 +301,12 @@ private fun ShareFlow(payload: SharePayload) {
 
     if (deleteAsk) {
         ChatDeleteDialog(
-            chatTitle = chatTitle.ifBlank {
+            chatTitle = vm.chatTitle.ifBlank {
                 stringResource(ru.outsideproarts.oassist.core.ui.R.string.chats_new)
             },
             onConfirm = {
                 deleteAsk = false
-                val id = chatId
-                // Удалённый разговор не должен остаться открытым: состояние
-                // чистится до «Нового чата», панель вложенной части остаётся.
-                chatId = null
-                chatTitle = ""
-                titleLocked = false
-                turns.clear()
-                activeUserMsg = null
-                workEvents = emptyList()
-                response = ""
-                turnUsage = null
-                pendingShareRetry = null
-                if (id != null) {
-                    val repo = ChatHandle.get()
-                    if (repo != null) {
-                        scope.launch { repo.deleteChat(id) }
-                    }
-                }
+                vm.deleteCurrentChat()
             },
             onDismiss = { deleteAsk = false },
         )

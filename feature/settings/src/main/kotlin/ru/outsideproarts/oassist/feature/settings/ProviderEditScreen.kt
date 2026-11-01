@@ -31,6 +31,8 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.Saver
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -89,40 +91,46 @@ fun ProviderEditScreen(
     modifier: Modifier = Modifier,
 ) {
     val isNew = profile == null
-    var name by remember { mutableStateOf(profile?.name ?: "") }
-    var preset by remember { mutableStateOf(profile?.preset ?: ProviderPreset.OPENAI) }
-    var baseUrl by remember { mutableStateOf(profile?.baseUrl ?: "") }
-    var protocol by remember { mutableStateOf(profile?.protocol) }
-    var fetchScheme by remember { mutableStateOf(profile?.fetchScheme ?: ModelFetchScheme.MODELS) }
-    var authScheme by remember { mutableStateOf(profile?.authScheme ?: AuthScheme.NATIVE) }
-    var apiKeyHeaderName by remember { mutableStateOf(profile?.apiKeyHeaderName ?: "") }
-    var catalogPath by remember { mutableStateOf(profile?.catalogPath ?: "") }
-    var extraBody by remember { mutableStateOf(profile?.extraBody ?: "") }
-    var extraBodyInvalid by remember { mutableStateOf(false) }
-    var enabled by remember { mutableStateOf(profile?.enabled ?: true) }
+    // Пользовательский ввод переживает пересоздание Activity (поворот, смерть
+    // процесса): rememberSaveable. Секреты ввода намеренно остаются в remember —
+    // открытые значения не пишутся в savedInstanceState.
+    var name by rememberSaveable { mutableStateOf(profile?.name ?: "") }
+    var preset by rememberSaveable { mutableStateOf(profile?.preset ?: ProviderPreset.OPENAI) }
+    var baseUrl by rememberSaveable { mutableStateOf(profile?.baseUrl ?: "") }
+    var protocol by rememberSaveable(stateSaver = modelProtocolSaver) { mutableStateOf(profile?.protocol) }
+    var fetchScheme by rememberSaveable { mutableStateOf(profile?.fetchScheme ?: ModelFetchScheme.MODELS) }
+    var authScheme by rememberSaveable { mutableStateOf(profile?.authScheme ?: AuthScheme.NATIVE) }
+    var apiKeyHeaderName by rememberSaveable { mutableStateOf(profile?.apiKeyHeaderName ?: "") }
+    var catalogPath by rememberSaveable { mutableStateOf(profile?.catalogPath ?: "") }
+    var extraBody by rememberSaveable { mutableStateOf(profile?.extraBody ?: "") }
+    var extraBodyInvalid by rememberSaveable { mutableStateOf(false) }
+    var enabled by rememberSaveable { mutableStateOf(profile?.enabled ?: true) }
+    // Секреты ввода: только в памяти, при смерти процесса поле пустеет.
     var apiKeyInput by remember { mutableStateOf("") }
-    var hasSavedKey by remember { mutableStateOf(profile?.apiKeyRef != null) }
-    var clearApiKey by remember { mutableStateOf(false) }
+    var hasSavedKey by rememberSaveable { mutableStateOf(profile?.apiKeyRef != null) }
+    var clearApiKey by rememberSaveable { mutableStateOf(false) }
     var basicUserInput by remember { mutableStateOf("") }
     var basicPasswordInput by remember { mutableStateOf("") }
-    var hasSavedBasicUser by remember { mutableStateOf(profile?.basicUserRef != null) }
-    var hasSavedBasicPassword by remember { mutableStateOf(profile?.basicPasswordRef != null) }
-    var clearBasic by remember { mutableStateOf(false) }
+    var hasSavedBasicUser by rememberSaveable { mutableStateOf(profile?.basicUserRef != null) }
+    var hasSavedBasicPassword by rememberSaveable { mutableStateOf(profile?.basicPasswordRef != null) }
+    var clearBasic by rememberSaveable { mutableStateOf(false) }
     // Показ секретов ввода: по умолчанию маскирован.
     var apiKeyVisible by remember { mutableStateOf(false) }
     var basicPasswordVisible by remember { mutableStateOf(false) }
     var newHeaderValueVisible by remember { mutableStateOf(false) }
     // Сохранённые и новые дополнительные заголовки («Своя настройка»).
-    var savedHeaders by remember { mutableStateOf(profile?.extraHeaders.orEmpty()) }
-    var clearedHeaders by remember { mutableStateOf(listOf<String>()) }
+    // savedHeaders: имя заголовка → alias в SecretStore (не секрет) — сохраняем;
+    // pendingHeaders: имя → открытое значение (секрет) — только в памяти.
+    var savedHeaders by rememberSaveable { mutableStateOf(profile?.extraHeaders.orEmpty()) }
+    var clearedHeaders by rememberSaveable { mutableStateOf(listOf<String>()) }
     var pendingHeaders by remember { mutableStateOf(mapOf<String, String>()) }
-    var newHeaderName by remember { mutableStateOf("") }
+    var newHeaderName by rememberSaveable { mutableStateOf("") }
     var newHeaderValue by remember { mutableStateOf("") }
     // Выборы пресетов: под капотом задают скрытый baseUrl.
-    var googleVersion by remember {
+    var googleVersion by rememberSaveable {
         mutableStateOf(GoogleApiVersion.fromBaseUrl(profile?.baseUrl ?: ProviderPreset.GOOGLE.defaultBaseUrl().orEmpty()))
     }
-    var openCodeEndpoint by remember {
+    var openCodeEndpoint by rememberSaveable {
         mutableStateOf(OpenCodeEndpoint.fromBaseUrl(profile?.baseUrl ?: ProviderPreset.OPENCODE.defaultBaseUrl().orEmpty()))
     }
     // Dropdown-селекторы — чистые dropdown (без ввода): значение только из списка.
@@ -133,32 +141,38 @@ fun ProviderEditScreen(
     var googleVersionExpanded by remember { mutableStateOf(false) }
     var openCodeEndpointExpanded by remember { mutableStateOf(false) }
 
+    // Заполнение формы из профиля — только при реальной смене источника.
+    // syncedProfileId переживает пересоздание: повторный вход в композицию
+    // (поворот, смерть процесса) не затирает восстановленный ввод. Пустая
+    // строка — «из профиля ещё не заполнялись» (новый провайдер — никогда).
+    var syncedProfileId by rememberSaveable { mutableStateOf("") }
     LaunchedEffect(profile?.id) {
-        if (profile != null) {
-            name = profile.name
-            preset = profile.preset
-            baseUrl = profile.baseUrl
-            protocol = profile.protocol
-            fetchScheme = profile.fetchScheme
-            authScheme = profile.authScheme
-            apiKeyHeaderName = profile.apiKeyHeaderName ?: ""
-            catalogPath = profile.catalogPath ?: ""
-            extraBody = profile.extraBody ?: ""
-            enabled = profile.enabled
-            hasSavedKey = profile.apiKeyRef != null
-            hasSavedBasicUser = profile.basicUserRef != null
-            hasSavedBasicPassword = profile.basicPasswordRef != null
-            savedHeaders = profile.extraHeaders
-            clearedHeaders = emptyList()
-            pendingHeaders = emptyMap()
-            clearApiKey = false
-            clearBasic = false
-            apiKeyInput = ""
-            basicUserInput = ""
-            basicPasswordInput = ""
-            googleVersion = GoogleApiVersion.fromBaseUrl(profile.baseUrl)
-            openCodeEndpoint = OpenCodeEndpoint.fromBaseUrl(profile.baseUrl)
-        }
+        val current = profile ?: return@LaunchedEffect
+        if (current.id == syncedProfileId) return@LaunchedEffect
+        syncedProfileId = current.id
+        name = current.name
+        preset = current.preset
+        baseUrl = current.baseUrl
+        protocol = current.protocol
+        fetchScheme = current.fetchScheme
+        authScheme = current.authScheme
+        apiKeyHeaderName = current.apiKeyHeaderName ?: ""
+        catalogPath = current.catalogPath ?: ""
+        extraBody = current.extraBody ?: ""
+        enabled = current.enabled
+        hasSavedKey = current.apiKeyRef != null
+        hasSavedBasicUser = current.basicUserRef != null
+        hasSavedBasicPassword = current.basicPasswordRef != null
+        savedHeaders = current.extraHeaders
+        clearedHeaders = emptyList()
+        pendingHeaders = emptyMap()
+        clearApiKey = false
+        clearBasic = false
+        apiKeyInput = ""
+        basicUserInput = ""
+        basicPasswordInput = ""
+        googleVersion = GoogleApiVersion.fromBaseUrl(current.baseUrl)
+        openCodeEndpoint = OpenCodeEndpoint.fromBaseUrl(current.baseUrl)
     }
 
     fun applyPreset(newPreset: ProviderPreset) {
@@ -945,3 +959,12 @@ private fun authSchemeLabel(scheme: AuthScheme): String = when (scheme) {
 }
 
 private fun generateId(): String = "p${System.currentTimeMillis()}"
+
+/**
+ * Nullable-enum не принимается авто-Saver'ом rememberSaveable: кодируем имя
+ * константы строкой ("" — null), чтобы выбор протокола пережил пересоздание.
+ */
+private val modelProtocolSaver = Saver<ModelProtocol?, String>(
+    save = { it?.name.orEmpty() },
+    restore = { name -> ModelProtocol.entries.firstOrNull { it.name == name } },
+)

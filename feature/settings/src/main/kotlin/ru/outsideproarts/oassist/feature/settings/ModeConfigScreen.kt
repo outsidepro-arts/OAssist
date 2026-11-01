@@ -36,6 +36,8 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.saveable.Saver
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -88,7 +90,8 @@ import ru.outsideproarts.oassist.core.ui.components.OAssistSwitchRow
 @Composable
 fun ModeConfigScreen(
     mode: AssistMode,
-    config: ModeConfig,
+    /** Сохранённый конфиг; null — ещё догружается из Flow (ресинка полей не будет). */
+    config: ModeConfig?,
     providers: List<ProviderProfile>,
     models: List<ModelInfo>,
     isLoadingModels: Boolean,
@@ -110,9 +113,11 @@ fun ModeConfigScreen(
     /** Дефолтный промпт режима из assets в языке приложения; пусто — недоступен. */
     loadDefaultPrompt: suspend () -> String = { "" },
 ) {
-    var providerId by remember { mutableStateOf(config.providerId ?: "") }
-    var modelId by remember { mutableStateOf(config.modelId ?: "") }
-    var initialPrompt by remember { mutableStateOf(config.initialPrompt ?: "") }
+    // Пользовательский ввод переживает пересоздание Activity (поворот, смерть
+    // процесса): rememberSaveable. config == null — конфиг ещё догружается.
+    var providerId by rememberSaveable { mutableStateOf(config?.providerId ?: "") }
+    var modelId by rememberSaveable { mutableStateOf(config?.modelId ?: "") }
+    var initialPrompt by rememberSaveable { mutableStateOf(config?.initialPrompt ?: "") }
     // Дефолтный текст для предзаполнения поля, кнопки «Восстановить»
     // и подстановки при сохранении пустого поля. null — ещё не загружен.
     var defaultPromptText by remember(mode) { mutableStateOf<String?>(null) }
@@ -120,24 +125,24 @@ fun ModeConfigScreen(
     var providerExpanded by remember { mutableStateOf(false) }
     // ID модели — обычное поле ввода (ручной ввод); выбор из списка —
     // отдельной кнопкой «Выбрать модель» с диалогом-пикером ниже.
-    var modelPickerOpen by remember { mutableStateOf(false) }
-    var autoSpeak by remember { mutableStateOf(config.assistant?.autoSpeak ?: true) }
-    var autoClose by remember { mutableStateOf(config.assistant?.autoClose ?: true) }
-    var attachScreenshot by remember { mutableStateOf(config.assistant?.attachScreenshot ?: true) }
-    var continueDialog by remember { mutableStateOf(config.assistant?.continueDialog ?: false) }
-    var showOverlay by remember { mutableStateOf(config.assistant?.showOverlay ?: true) }
-    var sharedAction by remember { mutableStateOf(config.share?.sharedContentAction ?: "") }
-    var showInChat by remember { mutableStateOf(config.share?.showInChat ?: true) }
-    val baseTts = config.effectiveTts()
-    var ttsChannel by remember { mutableStateOf(baseTts.channel) }
-    var ttsRate by remember { mutableStateOf(baseTts.rate) }
-    var ttsPitch by remember { mutableStateOf(baseTts.pitch) }
-    var ttsVolume by remember { mutableStateOf(baseTts.volume) }
-    var ttsVoice by remember { mutableStateOf(baseTts.voiceName ?: "") }
-    var ttsEngine by remember { mutableStateOf(baseTts.enginePackage ?: "") }
-    var ttsVoiceLocale by remember { mutableStateOf(baseTts.voiceLocale ?: "") }
-    var ttsToolCalls by remember { mutableStateOf(baseTts.speakToolCalls) }
-    var ttsNarrative by remember { mutableStateOf(baseTts.narrative) }
+    var modelPickerOpen by rememberSaveable { mutableStateOf(false) }
+    var autoSpeak by rememberSaveable { mutableStateOf(config?.assistant?.autoSpeak ?: true) }
+    var autoClose by rememberSaveable { mutableStateOf(config?.assistant?.autoClose ?: true) }
+    var attachScreenshot by rememberSaveable { mutableStateOf(config?.assistant?.attachScreenshot ?: true) }
+    var continueDialog by rememberSaveable { mutableStateOf(config?.assistant?.continueDialog ?: false) }
+    var showOverlay by rememberSaveable { mutableStateOf(config?.assistant?.showOverlay ?: true) }
+    var sharedAction by rememberSaveable { mutableStateOf(config?.share?.sharedContentAction ?: "") }
+    var showInChat by rememberSaveable { mutableStateOf(config?.share?.showInChat ?: true) }
+    val baseTts = config?.effectiveTts() ?: TtsConfig.DEFAULT
+    var ttsChannel by rememberSaveable { mutableStateOf(baseTts.channel) }
+    var ttsRate by rememberSaveable { mutableStateOf(baseTts.rate) }
+    var ttsPitch by rememberSaveable { mutableStateOf(baseTts.pitch) }
+    var ttsVolume by rememberSaveable { mutableStateOf(baseTts.volume) }
+    var ttsVoice by rememberSaveable { mutableStateOf(baseTts.voiceName ?: "") }
+    var ttsEngine by rememberSaveable { mutableStateOf(baseTts.enginePackage ?: "") }
+    var ttsVoiceLocale by rememberSaveable { mutableStateOf(baseTts.voiceLocale ?: "") }
+    var ttsToolCalls by rememberSaveable { mutableStateOf(baseTts.speakToolCalls) }
+    var ttsNarrative by rememberSaveable { mutableStateOf(baseTts.narrative) }
     var engines by remember { mutableStateOf(emptyList<TtsEngineInfo>()) }
     var voices by remember { mutableStateOf(emptyList<VoiceInfo>()) }
     // Отображаемый язык — производное, а не отдельное состояние: локаль
@@ -157,56 +162,70 @@ fun ModeConfigScreen(
         speakToolCalls = ttsToolCalls,
         narrative = ttsNarrative,
     )
-    var soundEnabled by remember { mutableStateOf(config.effectiveSoundEnabled()) }
-    var autoSaveChats by remember { mutableStateOf(config.effectiveAutoSaveChats()) }
-    val baseStt = config.effectiveStt()
-    var sttEngine by remember { mutableStateOf(baseStt.engine) }
-    var sttLanguage by remember { mutableStateOf(baseStt.language) }
-    var sttRecognizerComponent by remember { mutableStateOf(baseStt.recognizerComponent) }
-    var sttBluetoothInput by remember { mutableStateOf(baseStt.bluetoothInput) }
+    var soundEnabled by rememberSaveable { mutableStateOf(config?.effectiveSoundEnabled() ?: true) }
+    var autoSaveChats by rememberSaveable { mutableStateOf(config?.effectiveAutoSaveChats() ?: true) }
+    val baseStt = config?.effectiveStt() ?: SttConfig.DEFAULT
+    var sttEngine by rememberSaveable { mutableStateOf(baseStt.engine) }
+    var sttLanguage by rememberSaveable { mutableStateOf(baseStt.language) }
+    var sttRecognizerComponent by rememberSaveable(stateSaver = nullableStringSaver) {
+        mutableStateOf(baseStt.recognizerComponent)
+    }
+    var sttBluetoothInput by rememberSaveable { mutableStateOf(baseStt.bluetoothInput) }
     var recognitionServices by remember { mutableStateOf(emptyList<RecognitionServiceInfo>()) }
     var engineExpanded by remember { mutableStateOf(false) }
     var localeExpanded by remember { mutableStateOf(false) }
     var voiceExpanded by remember { mutableStateOf(false) }
 
     // Синхронизация с сохранённым конфигом: modeConfigs прилетает асинхронно
-    // (сначала default с пустыми id, потом реальный), поэтому ключ — весь config,
-    // а не только mode. Локальные правки config не меняют и ресинк не триггерят.
-    // defaultPromptText в ключе — чтобы legacy-null (пустое поле) заполнился
-    // дефолтом, когда тот догрузится; набранный пользователем текст не затираем.
+    // (null — ещё не загружен), ресинк — только по приходу реального источника.
+    // syncedConfigKey переживает пересоздание: повторный вход в композицию
+    // (поворот, смерть процесса) не затирает восстановленный ввод. Локальные
+    // правки полей config не меняют и ресинк не триггерят. Ключ — контентный
+    // toString() конфига: требование — стабильный toString у ModeConfig
+    // (data class без полей с identity-toString), иначе guard потеряет смысл.
+    var syncedConfigKey by rememberSaveable { mutableStateOf("") }
     LaunchedEffect(config, defaultPromptText) {
-        providerId = config.providerId ?: ""
-        modelId = config.modelId ?: ""
-        val stored = config.initialPrompt
-        initialPrompt = when {
-            stored != null -> stored
-            initialPrompt.isBlank() -> defaultPromptText ?: ""
-            else -> initialPrompt
+        val configKey = config?.toString()
+        if (config != null && configKey != syncedConfigKey) {
+            syncedConfigKey = configKey ?: ""
+            providerId = config.providerId ?: ""
+            modelId = config.modelId ?: ""
+            val stored = config.initialPrompt
+            initialPrompt = when {
+                stored != null -> stored
+                initialPrompt.isBlank() -> defaultPromptText ?: ""
+                else -> initialPrompt
+            }
+            autoSpeak = config.assistant?.autoSpeak ?: true
+            autoClose = config.assistant?.autoClose ?: true
+            attachScreenshot = config.assistant?.attachScreenshot ?: true
+            continueDialog = config.assistant?.continueDialog ?: false
+            showOverlay = config.assistant?.showOverlay ?: true
+            sharedAction = config.share?.sharedContentAction ?: ""
+            showInChat = config.share?.showInChat ?: true
+            val tts = config.effectiveTts()
+            ttsChannel = tts.channel
+            ttsRate = tts.rate
+            ttsPitch = tts.pitch
+            ttsVolume = tts.volume
+            ttsVoice = tts.voiceName ?: ""
+            ttsVoiceLocale = tts.voiceLocale ?: ""
+            ttsEngine = tts.enginePackage ?: ""
+            ttsToolCalls = tts.speakToolCalls
+            ttsNarrative = tts.narrative
+            soundEnabled = config.effectiveSoundEnabled()
+            autoSaveChats = config.effectiveAutoSaveChats()
+            val stt = config.effectiveStt()
+            sttEngine = stt.engine
+            sttLanguage = stt.language
+            sttRecognizerComponent = stt.recognizerComponent
+            sttBluetoothInput = stt.bluetoothInput
         }
-        autoSpeak = config.assistant?.autoSpeak ?: true
-        autoClose = config.assistant?.autoClose ?: true
-        attachScreenshot = config.assistant?.attachScreenshot ?: true
-        continueDialog = config.assistant?.continueDialog ?: false
-        showOverlay = config.assistant?.showOverlay ?: true
-        sharedAction = config.share?.sharedContentAction ?: ""
-        showInChat = config.share?.showInChat ?: true
-        val tts = config.effectiveTts()
-        ttsChannel = tts.channel
-        ttsRate = tts.rate
-        ttsPitch = tts.pitch
-        ttsVolume = tts.volume
-        ttsVoice = tts.voiceName ?: ""
-        ttsVoiceLocale = tts.voiceLocale ?: ""
-        ttsEngine = tts.enginePackage ?: ""
-        ttsToolCalls = tts.speakToolCalls
-        ttsNarrative = tts.narrative
-        soundEnabled = config.effectiveSoundEnabled()
-        autoSaveChats = config.effectiveAutoSaveChats()
-        val stt = config.effectiveStt()
-        sttEngine = stt.engine
-        sttLanguage = stt.language
-        sttRecognizerComponent = stt.recognizerComponent
-        sttBluetoothInput = stt.bluetoothInput
+        // defaultPromptText в ключе — чтобы legacy-null (пустое поле) заполнился
+        // дефолтом, когда тот догрузится; набранный пользователем текст не затираем.
+        if (config?.initialPrompt == null && initialPrompt.isBlank()) {
+            defaultPromptText?.let { initialPrompt = it }
+        }
     }
     LaunchedEffect(Unit) {
         engines = try {
@@ -636,8 +655,12 @@ fun ModeConfigScreen(
         ) {
             Button(
                 onClick = {
+                    // База save: конфиг мог не догрузиться — сохраняем от дефолта.
+                    // Риск (как и на master при пустом списке): сохранение до
+                    // догрузки перезапишет несекретные extras конфига формой.
+                    val base = config ?: ModeConfig.default(mode)
                     onSave(
-                        config.copy(
+                        base.copy(
                             providerId = providerId.ifBlank { null },
                             modelId = modelId.ifBlank { null },
                             // Пустое поле при сохранении заполняется промптом
@@ -645,7 +668,7 @@ fun ModeConfigScreen(
                             initialPrompt = initialPrompt.ifBlank { defaultPromptText.orEmpty() }
                                 .ifBlank { null },
                             assistant = if (mode == AssistMode.ASSISTANT) {
-                                (config.assistant ?: AssistantExtras()).copy(
+                                (base.assistant ?: AssistantExtras()).copy(
                                     autoSpeak = autoSpeak,
                                     autoClose = autoClose,
                                     attachScreenshot = attachScreenshot,
@@ -653,15 +676,15 @@ fun ModeConfigScreen(
                                     showOverlay = showOverlay,
                                 )
                             } else {
-                                config.assistant
+                                base.assistant
                             },
                             share = if (mode == AssistMode.SHARE) {
-                                (config.share ?: ShareExtras()).copy(
+                                (base.share ?: ShareExtras()).copy(
                                     sharedContentAction = sharedAction.ifBlank { null },
                                     showInChat = showInChat,
                                 )
                             } else {
-                                config.share
+                                base.share
                             },
                             tts = currentTts,
                             stt = SttConfig(
@@ -1410,3 +1433,12 @@ private fun ModelPickerDialog(
         },
     )
 }
+
+/**
+ * Nullable String не принимается авто-Saver'ом rememberSaveable: пустая строка —
+ * «нет значения» (null), чтобы выбор распознавателя пережил пересоздание.
+ */
+private val nullableStringSaver = Saver<String?, String>(
+    save = { it.orEmpty() },
+    restore = { it.ifEmpty { null } },
+)

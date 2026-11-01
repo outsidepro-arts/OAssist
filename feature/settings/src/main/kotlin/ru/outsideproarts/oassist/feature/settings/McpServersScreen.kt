@@ -27,6 +27,8 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.Saver
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -69,8 +71,12 @@ fun McpServersScreen(
     onBack: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
-    var editorFor by remember { mutableStateOf<McpServerConfig?>(null) }
-    var editorIsNew by remember { mutableStateOf(false) }
+    // Открытый редактор переживает пересоздание Activity: в конфиге только
+    // alias'ы SecretStore (секретов нет), полям нужен свой Saver.
+    var editorFor by rememberSaveable(stateSaver = mcpServerConfigSaver) {
+        mutableStateOf<McpServerConfig?>(null)
+    }
+    var editorIsNew by rememberSaveable { mutableStateOf(false) }
 
     if (editorFor != null || editorIsNew) {
         McpServerEditor(
@@ -197,24 +203,30 @@ private fun McpServerEditor(
     modifier: Modifier = Modifier,
 ) {
     val isNew = config == null
-    var name by remember { mutableStateOf(config?.name ?: "") }
-    var url by remember { mutableStateOf(config?.url ?: "") }
-    var enabled by remember { mutableStateOf(config?.enabled ?: true) }
+    // Пользовательский ввод переживает пересоздание Activity: rememberSaveable.
+    // bearerInput — секрет ввода, намеренно только в памяти (не в Bundle).
+    var name by rememberSaveable { mutableStateOf(config?.name ?: "") }
+    var url by rememberSaveable { mutableStateOf(config?.url ?: "") }
+    var enabled by rememberSaveable { mutableStateOf(config?.enabled ?: true) }
     var bearerInput by remember { mutableStateOf("") }
-    var hasSavedBearer by remember { mutableStateOf(config?.bearerRef != null) }
-    var clearBearer by remember { mutableStateOf(false) }
+    var hasSavedBearer by rememberSaveable { mutableStateOf(config?.bearerRef != null) }
+    var clearBearer by rememberSaveable { mutableStateOf(false) }
     // Показ токена ввода: по умолчанию маскирован.
     var bearerVisible by remember { mutableStateOf(false) }
 
+    // Заполнение из конфига — один раз при открытии редактора: повторный вход в
+    // композицию (поворот, смерть процесса) не затирает восстановленный ввод.
+    var syncedConfigId by rememberSaveable { mutableStateOf("") }
     LaunchedEffect(config?.id) {
-        if (config != null) {
-            name = config.name
-            url = config.url
-            enabled = config.enabled
-            hasSavedBearer = config.bearerRef != null
-            clearBearer = false
-            bearerInput = ""
-        }
+        val source = config ?: return@LaunchedEffect
+        if (source.id == syncedConfigId) return@LaunchedEffect
+        syncedConfigId = source.id
+        name = source.name
+        url = source.url
+        enabled = source.enabled
+        hasSavedBearer = source.bearerRef != null
+        clearBearer = false
+        bearerInput = ""
     }
 
     val title = if (isNew) {
@@ -428,3 +440,42 @@ private fun McpServerEditor(
 }
 
 private fun generateMcpId(): String = "m${System.currentTimeMillis()}"
+
+/**
+ * [McpServerConfig] не Parcelable: сохраняем поля плоской картой, чтобы открытый
+ * редактор пережил пересоздание. Секретов в модели нет — только alias'ы; пустая
+ * строка bearerRef — «нет значения» (null). При добавлении полей в конфиг их
+ * нужно переносить и сюда — restore собирает конструктор явно, незнакомые поля
+ * молча потеряются.
+ */
+private val mcpServerConfigSaver = Saver<McpServerConfig?, Map<String, Any>>(
+    save = { config ->
+        if (config == null) {
+            emptyMap()
+        } else {
+            mapOf(
+                "id" to config.id,
+                "name" to config.name,
+                "url" to config.url,
+                "bearer" to (config.bearerRef ?: ""),
+                "headers" to config.extraHeaders,
+                "enabled" to config.enabled,
+            )
+        }
+    },
+    restore = { saved ->
+        if (saved.isEmpty()) {
+            null
+        } else {
+            @Suppress("UNCHECKED_CAST")
+            McpServerConfig(
+                id = saved["id"] as String,
+                name = saved["name"] as String,
+                url = saved["url"] as String,
+                bearerRef = (saved["bearer"] as String).ifEmpty { null },
+                extraHeaders = saved["headers"] as Map<String, String>,
+                enabled = saved["enabled"] as Boolean,
+            )
+        }
+    },
+)

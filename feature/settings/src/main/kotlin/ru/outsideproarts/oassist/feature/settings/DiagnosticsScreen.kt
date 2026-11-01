@@ -25,6 +25,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.saveable.Saver
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
@@ -65,6 +66,16 @@ private fun exportStoreId(store: DiagnosticStore): String = synchronized(exportS
 
 private enum class ExportAction { SAVE, SHARE }
 
+/**
+ * Nullable-enum не принимается авто-Saver'ом rememberSaveable: кодируем имя
+ * константы строкой ("" — null), чтобы открытый диалог подтверждения пережил
+ * пересоздание Activity вместе с запрошенным действием.
+ */
+private val exportActionSaver = Saver<ExportAction?, String>(
+    save = { it?.name.orEmpty() },
+    restore = { name -> ExportAction.entries.firstOrNull { it.name == name } },
+)
+
 private data class ExportRequest(
     val since: Long,
     val includeMedia: Boolean,
@@ -98,16 +109,19 @@ fun DiagnosticsScreen(store: DiagnosticStore, onBack: () -> Unit) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     var health by remember(store) { mutableStateOf(DiagnosticHealth(false, false, 0, 0)) }
-    var includeWeek by remember { mutableStateOf(false) }
-    var includeMedia by remember { mutableStateOf(false) }
-    var selectSessions by remember { mutableStateOf(false) }
+    // Настройки экспорта и выбор сессий переживают пересоздание Activity.
+    var includeWeek by rememberSaveable { mutableStateOf(false) }
+    var includeMedia by rememberSaveable { mutableStateOf(false) }
+    var selectSessions by rememberSaveable { mutableStateOf(false) }
     var sessions by remember { mutableStateOf(emptyList<DiagnosticStore.OperationSummary>()) }
-    var selectedSessions by remember { mutableStateOf(emptySet<String>()) }
+    var selectedSessions by rememberSaveable { mutableStateOf(emptySet<String>()) }
     var loadingSessions by remember { mutableStateOf(true) }
     var busy by remember { mutableStateOf(false) }
-    var pendingAction by remember { mutableStateOf<ExportAction?>(null) }
+    var pendingAction by rememberSaveable(stateSaver = exportActionSaver) {
+        mutableStateOf<ExportAction?>(null)
+    }
     var pendingSave by rememberSaveable { mutableStateOf<Bundle?>(null) }
-    var confirmClear by remember { mutableStateOf(false) }
+    var confirmClear by rememberSaveable { mutableStateOf(false) }
     var status by remember { mutableStateOf("") }
     var statusError by remember { mutableStateOf(false) }
     val savedMessage = stringResource(R.string.diagnostics_saved)
@@ -137,12 +151,23 @@ fun DiagnosticsScreen(store: DiagnosticStore, onBack: () -> Unit) {
         }
     }
 
+    // Автовыделение всех сессий — только при первом показе окна и при смене
+    // окна (день/неделя): восстановленный после пересоздания выбор пользователя
+    // не затирается, из него лишь выпадают исчезнувшие сессии.
+    var syncedWindow by rememberSaveable { mutableStateOf("") }
     LaunchedEffect(store, includeWeek) {
         loadingSessions = true
         try {
             val found = withContext(Dispatchers.IO) { store.listOperations(since()) }
             sessions = found
-            selectedSessions = found.mapTo(mutableSetOf()) { it.operationId }
+            val window = if (includeWeek) "W" else "D"
+            if (window != syncedWindow) {
+                syncedWindow = window
+                selectedSessions = found.mapTo(mutableSetOf()) { it.operationId }
+            } else {
+                val ids = found.mapTo(mutableSetOf()) { it.operationId }
+                selectedSessions = selectedSessions.filterTo(mutableSetOf()) { it in ids }
+            }
         } catch (e: CancellationException) {
             throw e
         } catch (_: Exception) {

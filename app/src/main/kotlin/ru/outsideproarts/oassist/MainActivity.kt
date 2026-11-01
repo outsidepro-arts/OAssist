@@ -660,18 +660,22 @@ private fun OAssistApp(
             ) { backStackEntry ->
                 val modeName = backStackEntry.arguments?.getString("mode") ?: "CHAT"
                 val mode = AssistMode.valueOf(modeName)
+                // null — конфиги ещё грузятся: экран не синхронизирует поля формы
+                // и не затирает ввод при догрузке/восстановлении.
                 val modeConfigs by graph.providers.observeModeConfigs()
-                    .collectAsStateWithLifecycle(initialValue = emptyList())
+                    .collectAsStateWithLifecycle(initialValue = null as List<ModeConfig>?)
                 val providers by graph.providers.observeProviders()
                     .collectAsStateWithLifecycle(initialValue = emptyList())
-                val config = modeConfigs.find { it.mode == mode } ?: ModeConfig.default(mode)
+                val config = modeConfigs?.let { configs ->
+                    configs.find { it.mode == mode } ?: ModeConfig.default(mode)
+                }
                 val context = LocalContext.current
                 var models by remember { mutableStateOf(emptyList<ru.outsideproarts.oassist.core.model.ModelInfo>()) }
                 var isLoadingModels by remember { mutableStateOf(false) }
                 var isProbing by remember { mutableStateOf(false) }
 
-                LaunchedEffect(config.providerId) {
-                    val providerId = config.providerId
+                LaunchedEffect(config?.providerId) {
+                    val providerId = config?.providerId
                     models = if (providerId == null) {
                         emptyList()
                     } else {

@@ -29,6 +29,7 @@
                 android:value="assistant_overlay" />
         </service>
 
+        <!-- configChanges: диалог согласия не закрывается поворотом/сменой темы. -->
         <activity
             android:name=".ConsentActivity"
             android:exported="false"
@@ -37,6 +38,7 @@
             android:excludeFromRecents="true"
             android:noHistory="true"
             android:showWhenLocked="true"
+            android:configChanges="orientation|screenSize|screenLayout|smallestScreenSize|keyboardHidden|uiMode"
             android:theme="@style/Theme.OAssist.Consent" />
     </application>
 </manifest>

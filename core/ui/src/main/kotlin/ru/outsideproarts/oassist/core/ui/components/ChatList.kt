@@ -32,6 +32,8 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.Saver
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -43,6 +45,7 @@ import androidx.compose.ui.unit.dp
 import ru.outsideproarts.oassist.core.a11y.oassistCustomAction
 import ru.outsideproarts.oassist.core.a11y.oassistMergedContent
 import ru.outsideproarts.oassist.core.a11y.oassistTouchTarget
+import ru.outsideproarts.oassist.core.model.AssistMode
 import ru.outsideproarts.oassist.core.model.ChatKind
 import ru.outsideproarts.oassist.core.model.ChatSummary
 import ru.outsideproarts.oassist.core.model.FuzzyMatcher
@@ -196,9 +199,15 @@ fun ChatPickerList(
     modifier: Modifier = Modifier,
     includeAssistant: Boolean = true,
 ) {
-    var query by remember { mutableStateOf("") }
-    var renameTarget by remember { mutableStateOf<ChatSummary?>(null) }
-    var deleteTarget by remember { mutableStateOf<ChatSummary?>(null) }
+    // Поиск и открытые диалоги переживают пересоздание Activity: ChatSummary
+    // не Parcelable — поля сохраняются своим Saver'ом (секретов в модели нет).
+    var query by rememberSaveable { mutableStateOf("") }
+    var renameTarget by rememberSaveable(stateSaver = chatSummarySaver) {
+        mutableStateOf<ChatSummary?>(null)
+    }
+    var deleteTarget by rememberSaveable(stateSaver = chatSummarySaver) {
+        mutableStateOf<ChatSummary?>(null)
+    }
     val assistantTitle = stringResource(R.string.chats_assistant_title)
     val newChatLabel = stringResource(R.string.chats_new)
     val emptyLabel = stringResource(R.string.chats_empty)
@@ -283,6 +292,43 @@ fun ChatPickerList(
 private fun formatDate(timestamp: Long): String =
     DateUtils.getRelativeTimeSpanString(timestamp).toString()
 
+/**
+ * [ChatSummary] не Parcelable: сохраняем поля плоской картой, чтобы открытые
+ * диалоги переименования/удаления пережили пересоздание. При добавлении полей
+ * в ChatSummary их нужно переносить и сюда — restore собирает конструктор явно,
+ * незнакомые поля молча потеряются.
+ */
+private val chatSummarySaver = Saver<ChatSummary?, Map<String, Any>>(
+    save = { chat ->
+        if (chat == null) {
+            emptyMap()
+        } else {
+            mapOf(
+                "id" to chat.id,
+                "title" to chat.title,
+                "kind" to chat.kind.name,
+                "mode" to chat.mode.name,
+                "createdAt" to chat.createdAt,
+                "updatedAt" to chat.updatedAt,
+            )
+        }
+    },
+    restore = { saved ->
+        if (saved.isEmpty()) {
+            null
+        } else {
+            ChatSummary(
+                id = saved["id"] as String,
+                title = saved["title"] as String,
+                kind = ChatKind.valueOf(saved["kind"] as String),
+                mode = AssistMode.valueOf(saved["mode"] as String),
+                createdAt = saved["createdAt"] as Long,
+                updatedAt = saved["updatedAt"] as Long,
+            )
+        }
+    },
+)
+
 /** Диалог переименования чата. Пустое имя не сохраняется. */
 @Composable
 fun ChatRenameDialog(
@@ -290,7 +336,8 @@ fun ChatRenameDialog(
     onConfirm: (String) -> Unit,
     onDismiss: () -> Unit,
 ) {
-    var name by remember { mutableStateOf(initialName) }
+    // Черновик имени переживает пересоздание Activity (поворот, смерть процесса).
+    var name by rememberSaveable { mutableStateOf(initialName) }
     AlertDialog(
         onDismissRequest = onDismiss,
         title = { Text(stringResource(R.string.chats_rename_title)) },

@@ -21,9 +21,10 @@ import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -58,9 +59,22 @@ fun SkillsScreen(
 ) {
     val title = stringResource(R.string.skills_title)
     val backLabel = stringResource(R.string.action_back)
-    var editing by remember { mutableStateOf<SkillInfo?>(null) }
-    var creating by remember { mutableStateOf(false) }
-    var deleting by remember { mutableStateOf<SkillInfo?>(null) }
+    // Открытый редактор/диалог переживает пересоздание Activity: хранится имя
+    // навыка (идентификатор), поля формы восстанавливает сам SkillEditor.
+    var editingName by rememberSaveable { mutableStateOf("") }
+    var creating by rememberSaveable { mutableStateOf(false) }
+    var deletingName by rememberSaveable { mutableStateOf("") }
+
+    // Навык исчез из списка (удалён/переименован снаружи) — редактор с read-only
+    // именем тупиковый: закрываем его. Пустой список не трогаем — он может быть
+    // ещё не догружен после пересоздания.
+    LaunchedEffect(skills, editingName) {
+        if (editingName.isNotEmpty() && skills.isNotEmpty() &&
+            skills.none { it.name == editingName }
+        ) {
+            editingName = ""
+        }
+    }
 
     Column(
         modifier = modifier
@@ -91,8 +105,8 @@ fun SkillsScreen(
                 SkillRow(
                     skill = skill,
                     onSetEnabled = { onSetEnabled(skill.name, it) },
-                    onEdit = { editing = skill },
-                    onDelete = { deleting = skill },
+                    onEdit = { editingName = skill.name },
+                    onDelete = { deletingName = skill.name },
                 )
             }
         }
@@ -120,6 +134,7 @@ fun SkillsScreen(
     if (creating) {
         SkillEditor(
             initial = null,
+            nameReadOnly = false,
             onDismiss = { creating = false },
             onSave = { name, title, body ->
                 onSave(name, title, body)
@@ -127,30 +142,31 @@ fun SkillsScreen(
             },
         )
     }
-    editing?.let { skill ->
+    if (editingName.isNotEmpty()) {
         SkillEditor(
-            initial = skill,
-            onDismiss = { editing = null },
+            initial = skills.find { it.name == editingName },
+            nameReadOnly = true,
+            onDismiss = { editingName = "" },
             onSave = { name, title, body ->
                 onSave(name, title, body)
-                editing = null
+                editingName = ""
             },
         )
     }
-    deleting?.let { skill ->
+    if (deletingName.isNotEmpty()) {
         AlertDialog(
-            onDismissRequest = { deleting = null },
-            title = { Text(stringResource(R.string.skills_delete_title, skill.name)) },
+            onDismissRequest = { deletingName = "" },
+            title = { Text(stringResource(R.string.skills_delete_title, deletingName)) },
             confirmButton = {
                 TextButton(onClick = {
-                    onDelete(skill.name)
-                    deleting = null
+                    onDelete(deletingName)
+                    deletingName = ""
                 }) {
                     Text(stringResource(R.string.action_delete))
                 }
             },
             dismissButton = {
-                TextButton(onClick = { deleting = null }) {
+                TextButton(onClick = { deletingName = "" }) {
                     Text(stringResource(R.string.action_cancel))
                 }
             },
@@ -214,18 +230,20 @@ private fun SkillRow(
 @Composable
 private fun SkillEditor(
     initial: SkillInfo?,
+    nameReadOnly: Boolean,
     onDismiss: () -> Unit,
     onSave: (name: String, title: String, body: String) -> Unit,
 ) {
-    var name by remember { mutableStateOf(initial?.name ?: "") }
-    var title by remember { mutableStateOf(initial?.title ?: "") }
-    var body by remember { mutableStateOf(initial?.body ?: "") }
+    // Поля формы переживают пересоздание Activity (поворот, смерть процесса).
+    var name by rememberSaveable { mutableStateOf(initial?.name ?: "") }
+    var title by rememberSaveable { mutableStateOf(initial?.title ?: "") }
+    var body by rememberSaveable { mutableStateOf(initial?.body ?: "") }
     val nameBad = name.isNotBlank() && !SkillInfo.NAME_PATTERN.matches(name.trim())
     val canSave = !nameBad && name.isNotBlank() && body.isNotBlank()
 
     AlertDialog(
         onDismissRequest = onDismiss,
-        title = { Text(stringResource(if (initial == null) R.string.skills_add else R.string.skills_edit_title)) },
+        title = { Text(stringResource(if (nameReadOnly) R.string.skills_edit_title else R.string.skills_add)) },
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(OAssistDimens.DenseSpacing)) {
                 val skillNameLabel = stringResource(R.string.field_skill_name)
@@ -246,7 +264,7 @@ private fun SkillEditor(
                         autoCorrectEnabled = false,
                         capitalization = KeyboardCapitalization.None,
                     ),
-                    readOnly = initial != null,
+                    readOnly = nameReadOnly,
                     isError = nameBad,
                     supportingText = if (nameBad) {
                         { Text(stringResource(R.string.skills_name_bad)) }
