@@ -195,7 +195,6 @@ jobs:
     timeout-minutes: 45
     outputs:
       artifact_id: ${{ steps.upload.outputs.artifact-id }}
-      apk_name: ${{ steps.build.outputs.apk_name }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -281,7 +280,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           RELEASE_TAG: ${{ github.ref_name }}
           PRERELEASE: ${{ needs.metadata.outputs.prerelease }}
-          APK_NAME: ${{ needs.apk.outputs.apk_name }}
           BUILD_VERSION_CODE: ${{ needs.metadata.outputs.version_code }}
         run: |
-          ./tools/ci/Publish-OAssistRelease.ps1 -ApkPath (Join-Path dist $env:APK_NAME) -Tag $env:RELEASE_TAG -Prerelease ($env:PRERELEASE -eq 'true') -ExpectedVersionCode ([int]$env:BUILD_VERSION_CODE)
+          # Filename job outputs can be suppressed by GitHub's secret masking.
+          ./tools/ci/Publish-OAssistRelease.ps1 -ApkDirectory dist -Tag $env:RELEASE_TAG -Prerelease ($env:PRERELEASE -eq 'true') -ExpectedVersionCode ([int]$env:BUILD_VERSION_CODE)

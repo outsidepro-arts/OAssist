@@ -1,6 +1,7 @@
-[CmdletBinding()]
+[CmdletBinding(DefaultParameterSetName = 'Path')]
 param(
-    [Parameter(Mandatory)][string]$ApkPath,
+    [Parameter(Mandatory, ParameterSetName = 'Path')][string]$ApkPath,
+    [Parameter(Mandatory, ParameterSetName = 'Directory')][string]$ApkDirectory,
     [Parameter(Mandatory)][string]$Tag,
     [Parameter(Mandatory)][bool]$Prerelease,
     [Parameter(Mandatory)][int]$ExpectedVersionCode
@@ -16,6 +17,11 @@ $repository = $env:GITHUB_REPOSITORY
 if ($repository -cnotmatch '\A[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+\z') { throw 'Invalid GITHUB_REPOSITORY.' }
 $expectedCommit = $env:GITHUB_SHA
 if ($expectedCommit -cnotmatch '\A[0-9a-fA-F]{40}\z') { throw 'Invalid GITHUB_SHA.' }
+if ($PSCmdlet.ParameterSetName -eq 'Directory') {
+    $apks = @(Get-ChildItem -LiteralPath $ApkDirectory -Filter '*.apk' -File)
+    if ($apks.Count -ne 1) { throw 'Expected exactly one downloaded APK.' }
+    $ApkPath = $apks[0].FullName
+}
 $apk = [IO.Path]::GetFullPath($ApkPath)
 $checksum = $apk + '.sha256'
 if (-not (Test-Path -LiteralPath $apk -PathType Leaf) -or -not (Test-Path -LiteralPath $checksum -PathType Leaf)) { throw 'APK or checksum file is missing.' }

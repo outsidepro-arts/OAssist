@@ -42,6 +42,27 @@ try {
     [IO.File]::WriteAllText($checksum, "$digest  sample.apk`n")
     $helper = Join-Path $PSScriptRoot 'Publish-OAssistRelease.ps1'
     $params = @{ ApkPath = $apk; Tag = 'v1.2.3'; Prerelease = $false; ExpectedVersionCode = 3 }
+    $directoryParams = @{ ApkDirectory = $temp; Tag = 'v1.2.3-rc.1'; Prerelease = $true; ExpectedVersionCode = 3 }
+    $global:oassistTestScenario = 'new'; $global:oassistTestCommands.Clear()
+    & $helper @directoryParams | Out-Null
+    $writes = @($global:oassistTestCommands | Where-Object { $_[0] -eq 'release' })
+    Assert-True ($writes.Count -eq 2 -and $writes[0][1] -eq 'create' -and $writes[0] -contains $apk -and $writes[0] -contains $checksum -and $writes[0] -contains '--prerelease' -and $writes[1][1] -eq 'edit') 'Publish downloaded APK without a filename job output'
+    $empty = Join-Path $temp 'empty'; New-Item -ItemType Directory -Path $empty | Out-Null
+    $global:oassistTestCommands.Clear(); $directoryParams.ApkDirectory = $empty
+    Assert-Throws { & $helper @directoryParams } 'No downloaded APK'
+    Assert-True ($global:oassistTestCommands.Count -eq 0) 'Missing APK rejected before remote calls'
+    $directoryParams.ApkDirectory = $temp
+    $extra = Join-Path $temp 'extra.apk'; [IO.File]::WriteAllText($extra, 'extra')
+    Assert-Throws { & $helper @directoryParams } 'Multiple downloaded APKs'
+    Assert-True ($global:oassistTestCommands.Count -eq 0) 'Ambiguous APKs rejected before remote calls'
+    Remove-Item -LiteralPath $extra
+    Remove-Item -LiteralPath $checksum
+    Assert-Throws { & $helper @directoryParams } 'Downloaded APK without checksum'
+    Assert-True ($global:oassistTestCommands.Count -eq 0) 'Missing checksum rejected before remote calls'
+    [IO.File]::WriteAllText($checksum, ('0' * 64) + "  sample.apk`n")
+    Assert-Throws { & $helper @directoryParams } 'Downloaded APK checksum mismatch'
+    Assert-True ($global:oassistTestCommands.Count -eq 0) 'Downloaded APK checksum checked before remote calls'
+    [IO.File]::WriteAllText($checksum, "$digest  sample.apk`n")
     foreach ($scenario in @('mismatch', 'published', 'api-failure', 'upload-failure', 'create-failure')) {
         $global:oassistTestScenario = $scenario; $global:oassistTestCommands.Clear()
         Assert-Throws { & $helper @params } $scenario
