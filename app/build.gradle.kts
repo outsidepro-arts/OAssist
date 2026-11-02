@@ -27,8 +27,8 @@ android {
         targetSdk = 36
         versionCode = providers.gradleProperty("ciVersionCode").map {
             it.toInt().also { code -> require(code in 1..2100000000) { "Invalid CI version code" } }
-        }.getOrElse(3)
-        versionName = providers.gradleProperty("ciVersionName").getOrElse("1.1")
+        }.getOrElse(4)
+        versionName = providers.gradleProperty("ciVersionName").getOrElse("1.2")
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
 
