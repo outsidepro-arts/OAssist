@@ -52,6 +52,7 @@ jobs:
         run: |
           ./tools/ci/Test-OAssistCi.ps1
           ./tools/ci/Test-PublishOAssistRelease.ps1
+          ./tools/ci/Test-OAssistUpdates.ps1
 
   unit:
     needs: metadata
@@ -221,7 +222,7 @@ jobs:
           $variant = $env:BUILD_VARIANT
           # The complete checks already ran as separate jobs. Do not repeat them
           # through assemble's local diagnostic dependency, especially for nightly.
-          $arguments = @((':app:assemble' + $variant), '-x', (':diagnosticArchitectureCheck' + $variant), ('-PciVersionCode=' + $env:BUILD_VERSION_CODE))
+          $arguments = @((':app:assemble' + $variant), '-x', (':diagnosticArchitectureCheck' + $variant), ('-PciVersionCode=' + $env:BUILD_VERSION_CODE), ('-PciCommitSha=' + $env:GITHUB_SHA))
           if ($env:BUILD_VERSION_NAME) { $arguments += '-PciVersionName=' + $env:BUILD_VERSION_NAME }
           & ./gradlew @arguments
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
@@ -247,6 +248,15 @@ jobs:
         run: |
           Import-Module ./tools/ci/OAssistCi.psm1
           New-OAssistSignedApk -UnsignedApk $env:UNSIGNED_APK -SignedApk (Join-Path (Resolve-Path dist) $env:APK_NAME) -BuildToolsDirectory (Join-Path $env:ANDROID_HOME 'build-tools/36.0.0') -ExpectedVersionCode ([int]$env:BUILD_VERSION_CODE) -ExpectedVersionName $env:BUILD_VERSION_NAME -Variant $env:BUILD_VARIANT -ExpectedCertificateSha256 $env:SIGNING_CERTIFICATE_SHA256
+      - name: Create update manifest from the verified APK
+        if: ${{ github.ref_type == 'tag' || github.ref == 'refs/heads/master' }}
+        shell: pwsh
+        env:
+          APK_NAME: ${{ steps.build.outputs.apk_name }}
+          PRERELEASE: ${{ needs.metadata.outputs.prerelease }}
+        run: |
+          $channel = if ($env:GITHUB_REF -eq 'refs/heads/master') { 'development' } elseif ($env:PRERELEASE -eq 'true') { 'prerelease' } else { 'stable' }
+          ./tools/ci/New-OAssistUpdateManifest.ps1 -ApkPath (Join-Path dist $env:APK_NAME) -BuildToolsDirectory (Join-Path $env:ANDROID_HOME 'build-tools/36.0.0') -CommitSha $env:GITHUB_SHA -SourceRef $env:GITHUB_REF -Channel $channel -CertificateSha256 $env:SIGNING_CERTIFICATE_SHA256
       - name: Upload verified APK and checksum
         id: upload
         if: ${{ !cancelled() && steps.signed.outcome == 'success' }}
@@ -256,6 +266,7 @@ jobs:
           path: |
             dist/*.apk
             dist/*.apk.sha256
+            dist/update-*.json
           if-no-files-found: error
 
   release:
@@ -283,4 +294,30 @@ jobs:
           BUILD_VERSION_CODE: ${{ needs.metadata.outputs.version_code }}
         run: |
           # Filename job outputs can be suppressed by GitHub's secret masking.
-          ./tools/ci/Publish-OAssistRelease.ps1 -ApkDirectory dist -Tag $env:RELEASE_TAG -Prerelease ($env:PRERELEASE -eq 'true') -ExpectedVersionCode ([int]$env:BUILD_VERSION_CODE)
+          ./tools/ci/Publish-OAssistRelease.ps1 -ApkDirectory dist -Tag $env:RELEASE_TAG -Prerelease ($env:PRERELEASE -eq 'true') -ExpectedVersionCode ([int]$env:BUILD_VERSION_CODE) -ManifestPath (Join-Path dist "update-$env:BUILD_VERSION_CODE.json")
+
+  development_update:
+    needs: [metadata, apk]
+    if: ${{ github.ref == 'refs/heads/master' && needs.apk.result == 'success' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    concurrency:
+      group: development-update-publication
+      cancel-in-progress: false
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          artifact-ids: ${{ needs.apk.outputs.artifact_id }}
+          path: dist
+          merge-multiple: true
+      - name: Publish development update
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+          BUILD_VERSION_CODE: ${{ needs.metadata.outputs.version_code }}
+        run: ./tools/ci/Publish-OAssistDevelopment.ps1 -ApkDirectory dist -ExpectedVersionCode ([long]$env:BUILD_VERSION_CODE)

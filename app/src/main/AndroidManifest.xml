@@ -3,6 +3,8 @@
 
     <!-- INTERNET — явное объявление (раньше приходил только транзитивно из okhttp) -->
     <uses-permission android:name="android.permission.INTERNET" />
+    <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
+    <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
 
     <!-- NetworkMonitor: опрос состояния сети (normal-разрешение, выдачи не требует) -->
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
@@ -191,6 +193,18 @@
                 android:name="android.support.FILE_PROVIDER_PATHS"
                 android:resource="@xml/diagnostic_file_paths" />
         </provider>
+
+        <provider
+            android:name=".update.UpdateFileProvider"
+            android:authorities="${applicationId}.updates"
+            android:exported="false"
+            android:grantUriPermissions="true">
+            <meta-data android:name="android.support.FILE_PROVIDER_PATHS" android:resource="@xml/update_file_paths" />
+        </provider>
+        <service android:name=".update.UpdateJobService" android:permission="android.permission.BIND_JOB_SERVICE" android:exported="true" />
+        <receiver android:name=".update.UpdateReplacedReceiver" android:exported="false">
+            <intent-filter><action android:name="android.intent.action.MY_PACKAGE_REPLACED" /></intent-filter>
+        </receiver>
 
         <!-- M5.1: Shizuku — получение Binder от Shizuku/Sui -->
         <provider

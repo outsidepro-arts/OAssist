@@ -78,6 +78,16 @@ try {
     Assert-True ($writes.Count -eq 2 -and $writes[0][1] -eq 'create' -and $writes[1][1] -eq 'edit') 'Create draft then publish'
     Assert-True ($writes[0] -contains '--draft' -and $writes[0] -contains '--verify-tag' -and $writes[1] -contains '--draft=false' -and $writes[0] -notcontains '--prerelease') 'Stable draft options'
     Assert-True (@($global:oassistTestCommands | Where-Object { $_[0] -eq 'api' -and $_[-1] -match '/git/tags/' }).Count -eq 1) 'Annotated tag peeled'
+    $manifestPath = Join-Path $temp 'update-3.json'
+    @{ versionCode = 3; apkName = 'sample.apk'; apkSha256 = $digest; apkSize = 6; commitSha = $env:GITHUB_SHA; sourceRef = 'refs/tags/v1.2.3'; channel = 'stable' } | ConvertTo-Json | Set-Content -LiteralPath $manifestPath
+    $global:oassistTestScenario = 'new'; $global:oassistTestCommands.Clear()
+    & $helper @params -ManifestPath $manifestPath | Out-Null
+    $createWithManifest = @($global:oassistTestCommands | Where-Object { $_[0] -eq 'release' -and $_[1] -eq 'create' })[0]
+    Assert-True ($createWithManifest -contains $manifestPath) 'Manifest included in release draft'
+    (Get-Content -LiteralPath $manifestPath -Raw).Replace($digest, ('0' * 64)) | Set-Content -LiteralPath $manifestPath
+    $global:oassistTestCommands.Clear()
+    Assert-Throws { & $helper @params -ManifestPath $manifestPath } 'Mismatched manifest'
+    Assert-True ($global:oassistTestCommands.Count -eq 0) 'Manifest checked before remote calls'
     $global:oassistTestScenario = 'draft'; $global:oassistTestCommands.Clear(); & $helper @params | Out-Null
     $writes = @($global:oassistTestCommands | Where-Object { $_[0] -eq 'release' })
     Assert-True ($writes.Count -eq 2 -and $writes[0][1] -eq 'upload' -and $writes[0] -contains '--clobber' -and $writes[1][1] -eq 'edit') 'Resume draft then publish'

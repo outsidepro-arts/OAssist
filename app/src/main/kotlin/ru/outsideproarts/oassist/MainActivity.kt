@@ -99,6 +99,11 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
+    override fun onNewIntent(intent: android.content.Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+    }
+
     override fun onDestroy() {
         runCatching { AppGraph.get().speechOutput.setScreenReaderView(null) }
         super.onDestroy()
@@ -134,6 +139,16 @@ private fun OAssistApp(
     val scope = rememberCoroutineScope()
     val backStack by navController.currentBackStackEntryAsState()
     val currentRoute = backStack?.destination?.route
+    var openUpdatesRequested by remember { mutableStateOf(false) }
+    ru.outsideproarts.oassist.update.UpdateHost(graph.updates) {
+        openUpdatesRequested = true
+    }
+    LaunchedEffect(openUpdatesRequested, backStack) {
+        if (openUpdatesRequested && backStack != null) {
+            navController.navigate("updates") { launchSingleTop = true }
+            openUpdatesRequested = false
+        }
+    }
 
     val selectedState = stringResource(R.string.state_selected)
     val unselectedState = stringResource(R.string.state_unselected)
@@ -381,6 +396,7 @@ private fun OAssistApp(
                     onNavigateToMemory = { navController.navigate("memory") },
                     onNavigateToAssistant = { navController.navigate("assistant_access") },
                     onNavigateToDiagnostics = { navController.navigate("diagnostics") },
+                    onNavigateToUpdates = { navController.navigate("updates") },
                     onExport = { exportLauncher.launch("oassist-backup.json") },
                     onImport = { importLauncher.launch(arrayOf("application/json")) },
                     onWipe = { showWipeDialog = true },
@@ -415,6 +431,9 @@ private fun OAssistApp(
                         },
                     )
                 }
+            }
+            composable("updates") {
+                ru.outsideproarts.oassist.update.UpdatesRoute(graph.updates) { navController.popBackStack() }
             }
             composable("skills") {
                 var version by remember { mutableStateOf(0) }

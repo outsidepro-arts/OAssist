@@ -72,6 +72,10 @@ class AppGraph private constructor(context: Context) {
         get() = data.providers
 
     val httpClient by lazy { HttpClientFactory.create(ru.outsideproarts.oassist.core.model.diagnostics.Diagnostics) }
+    val updates by lazy {
+        ru.outsideproarts.oassist.update.UpdateManager(appContext,
+            ru.outsideproarts.oassist.core.net.update.GitHubUpdateTransport(httpClient))
+    }
 
     /** Каталог models.dev: маршрутизация протокола моделей агрегаторов (OpenCode). */
     val modelsDevCatalog by lazy {
@@ -635,6 +639,7 @@ class AppGraph private constructor(context: Context) {
     }
 
     fun close() {
+        updates.close()
         data.close()
     }
 

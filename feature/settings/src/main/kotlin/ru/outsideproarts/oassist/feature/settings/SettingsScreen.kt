@@ -55,6 +55,7 @@ fun SettingsScreen(
     onNavigateToMemory: () -> Unit = {},
     onNavigateToAssistant: () -> Unit = {},
     onNavigateToDiagnostics: () -> Unit = {},
+    onNavigateToUpdates: () -> Unit = {},
     onExport: () -> Unit = {},
     onImport: () -> Unit = {},
     onWipe: () -> Unit = {},
@@ -123,6 +124,11 @@ fun SettingsScreen(
                 title = stringResource(R.string.providers_title),
                 icon = Icons.Default.ChevronRight,
                 onClick = onNavigateToProviders,
+            )
+            OAssistSettingRow(
+                title = stringResource(R.string.update_title),
+                icon = Icons.Default.ChevronRight,
+                onClick = onNavigateToUpdates,
             )
             OAssistSettingRow(
                 title = stringResource(R.string.mode_chat),

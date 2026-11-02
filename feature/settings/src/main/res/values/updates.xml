@@ -1,0 +1,45 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="update_title">Обновление</string>
+    <string name="update_back">Назад</string>
+    <string name="update_automatic">Автоматически проверять обновления</string>
+    <string name="update_notifications">Присылать уведомления об обновлениях</string>
+    <string name="update_enabled">Включено</string>
+    <string name="update_disabled">Выключено</string>
+    <string name="update_channel">Канал обновлений</string>
+    <string name="update_channel_stable_title">Стабильные выпуски</string>
+    <string name="update_channel_prerelease_title">Предварительные выпуски</string>
+    <string name="update_channel_development_title">Выпуски для разработчиков</string>
+    <string name="update_channel_manual">Канал выбран вручную.</string>
+    <string name="update_channel_debug">Канал выбран автоматически: установлена debug-сборка.</string>
+    <string name="update_channel_prerelease">Канал выбран автоматически: имя версии содержит суффикс beta или rc.</string>
+    <string name="update_channel_stable">Канал выбран автоматически: установлена стабильная версия.</string>
+    <string name="update_interval_stable">Проверка примерно раз в сутки. Android может отложить её для экономии заряда.</string>
+    <string name="update_interval_prerelease">Проверка примерно раз в 4 часа. Android может отложить её для экономии заряда.</string>
+    <string name="update_interval_development">Проверка примерно каждые 15 минут. Android может отложить её для экономии заряда.</string>
+    <string name="update_check_now">Проверить сейчас</string>
+    <string name="update_available">Доступно обновление</string>
+    <string name="update_installed">Установлено: %1$s, сборка %2$d</string>
+    <string name="update_candidate">Версия %1$s, сборка %2$d. Размер: %3$.1f МБ.</string>
+    <string name="update_download_install">Загрузить и установить</string>
+    <string name="update_later">Позже</string>
+    <string name="update_checking">Проверяю обновления…</string>
+    <string name="update_current">Подходящих обновлений нет.</string>
+    <string name="update_downloading">Загружаю обновление…</string>
+    <string name="update_ready">Обновление загружено. Можно продолжить установку.</string>
+    <string name="update_progress">Загружено: %1$d%%</string>
+    <string name="update_cancel_download">Отменить загрузку</string>
+    <string name="update_check_error">Не удалось проверить обновления. Проверьте подключение к интернету и повторите позже. Установленная версия продолжит работать.</string>
+    <string name="update_download_error">Не удалось загрузить или проверить обновление. Проверьте подключение и свободное место, затем повторите загрузку.</string>
+    <string name="update_install_error">Установка не завершена. Можно повторить её с этого экрана.</string>
+    <string name="update_settings_error">Не удалось прочитать или сохранить настройки обновлений. Повторите действие.</string>
+    <string name="update_retry">Повторить</string>
+    <string name="update_notification_channel">Обновления приложения</string>
+    <string name="update_notification_body">Доступна версия %1$s. Нажмите, чтобы открыть обновление.</string>
+    <string name="update_notifications_blocked">Android запретил уведомления приложения. Обновления остаются доступны на этом экране.</string>
+    <string name="update_notification_settings">Разрешить уведомления</string>
+    <string name="update_install_explanation">Загрузка начинается только по вашей команде. Android попросит подтвердить установку и при необходимости разрешить OAssist устанавливать приложения. Данные сохраняются при установке поверх текущей версии.</string>
+    <string name="update_install_permission_title">Разрешение на установку</string>
+    <string name="update_install_permission_body">В системных настройках разрешите OAssist устанавливать приложения. После возврата установка продолжится. Загружать APK повторно не потребуется.</string>
+    <string name="update_open_settings">Открыть настройки</string>
+</resources>

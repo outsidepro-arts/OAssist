@@ -29,6 +29,9 @@ android {
             it.toInt().also { code -> require(code in 1..2100000000) { "Invalid CI version code" } }
         }.getOrElse(4)
         versionName = providers.gradleProperty("ciVersionName").getOrElse("1.2")
+        val ciCommitSha = providers.gradleProperty("ciCommitSha").getOrElse("")
+        require(ciCommitSha.isEmpty() || ciCommitSha.matches(Regex("[0-9a-f]{40}"))) { "Invalid CI commit SHA" }
+        buildConfigField("String", "UPDATE_COMMIT_SHA", "\"$ciCommitSha\"")
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
 
@@ -108,6 +111,7 @@ dependencies {
     implementation(libs.shizuku.provider) { exclude(group = "androidx.annotation") }
 
     testImplementation(libs.junit)
+    testImplementation(libs.kotlinx.coroutines.test)
     androidTestImplementation(platform(libs.androidx.compose.bom))
     androidTestImplementation(libs.androidx.compose.ui.test.junit4)
     androidTestImplementation(libs.androidx.test.ext.junit)

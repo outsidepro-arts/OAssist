@@ -1,0 +1,45 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="update_title">Updates</string>
+    <string name="update_back">Back</string>
+    <string name="update_automatic">Check for updates automatically</string>
+    <string name="update_notifications">Send update notifications</string>
+    <string name="update_enabled">On</string>
+    <string name="update_disabled">Off</string>
+    <string name="update_channel">Update channel</string>
+    <string name="update_channel_stable_title">Stable releases</string>
+    <string name="update_channel_prerelease_title">Preview releases</string>
+    <string name="update_channel_development_title">Developer builds</string>
+    <string name="update_channel_manual">Channel selected manually.</string>
+    <string name="update_channel_debug">Channel selected automatically because this is a debug build.</string>
+    <string name="update_channel_prerelease">Channel selected automatically because the version has a beta or rc suffix.</string>
+    <string name="update_channel_stable">Channel selected automatically because this is a stable version.</string>
+    <string name="update_interval_stable">Checks about once a day. Android may delay them to save battery.</string>
+    <string name="update_interval_prerelease">Checks about every 4 hours. Android may delay them to save battery.</string>
+    <string name="update_interval_development">Checks about every 15 minutes. Android may delay them to save battery.</string>
+    <string name="update_check_now">Check now</string>
+    <string name="update_available">Update available</string>
+    <string name="update_installed">Installed: %1$s, build %2$d</string>
+    <string name="update_candidate">Version %1$s, build %2$d. Size: %3$.1f MB.</string>
+    <string name="update_download_install">Download and install</string>
+    <string name="update_later">Later</string>
+    <string name="update_checking">Checking for updates…</string>
+    <string name="update_current">No compatible updates are available.</string>
+    <string name="update_downloading">Downloading the update…</string>
+    <string name="update_ready">The update is downloaded. You can continue installation.</string>
+    <string name="update_progress">Downloaded: %1$d%%</string>
+    <string name="update_cancel_download">Cancel download</string>
+    <string name="update_check_error">Could not check for updates. Check your internet connection and try again later. The installed version will keep working.</string>
+    <string name="update_download_error">Could not download or verify the update. Check your connection and free storage, then try again.</string>
+    <string name="update_install_error">Installation did not complete. You can try again from this screen.</string>
+    <string name="update_settings_error">Could not read or save update settings. Try again.</string>
+    <string name="update_retry">Try again</string>
+    <string name="update_notification_channel">App updates</string>
+    <string name="update_notification_body">Version %1$s is available. Tap to open updates.</string>
+    <string name="update_notifications_blocked">Android has blocked app notifications. Updates are still available on this screen.</string>
+    <string name="update_notification_settings">Allow notifications</string>
+    <string name="update_install_explanation">Downloads start when you choose to download. Android will ask you to confirm installation and, if needed, allow OAssist to install apps. Installing over the current version preserves app data.</string>
+    <string name="update_install_permission_title">Installation permission</string>
+    <string name="update_install_permission_body">In system settings, allow OAssist to install apps. Installation will continue when you return. You will not need to download the APK again.</string>
+    <string name="update_open_settings">Open settings</string>
+</resources>

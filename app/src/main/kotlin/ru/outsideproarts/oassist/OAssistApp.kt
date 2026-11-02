@@ -11,6 +11,7 @@ class OAssistApp : Application() {
     override fun onCreate() {
         super.onCreate()
         AppGraph.init(this)
+        AppGraph.get().updates.start()
         registerActivityLifecycleCallbacks(object : ActivityLifecycleCallbacks {
             override fun onActivityResumed(activity: Activity) = AppVisibility.onActivityResumed()
             override fun onActivityPaused(activity: Activity) = AppVisibility.onActivityPaused()

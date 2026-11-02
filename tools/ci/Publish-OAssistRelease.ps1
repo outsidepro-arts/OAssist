@@ -4,6 +4,7 @@ param(
     [Parameter(Mandatory, ParameterSetName = 'Directory')][string]$ApkDirectory,
     [Parameter(Mandatory)][string]$Tag,
     [Parameter(Mandatory)][bool]$Prerelease,
+    [string]$ManifestPath,
     [Parameter(Mandatory)][int]$ExpectedVersionCode
 )
 
@@ -32,6 +33,14 @@ $checksumMatch = [regex]::Match($checksumText, '\A([0-9a-fA-F]{64})  ([^\r\n]+)\
 if (-not $checksumMatch.Success -or $checksumMatch.Groups[2].Value -cne $filename -or
     $checksumMatch.Groups[1].Value -ine (Get-FileHash -LiteralPath $apk -Algorithm SHA256).Hash) { throw 'APK checksum does not match.' }
 
+$extraAssets = @()
+if ($ManifestPath) {
+    $manifestPath = [IO.Path]::GetFullPath($ManifestPath)
+    $manifest = Get-Content -LiteralPath $manifestPath -Raw | ConvertFrom-Json
+    $expectedChannel = if ($Prerelease) { 'prerelease' } else { 'stable' }
+    if ([IO.Path]::GetFileName($manifestPath) -cne "update-$ExpectedVersionCode.json" -or $manifest.versionCode -ne $ExpectedVersionCode -or $manifest.apkName -cne $filename -or $manifest.apkSha256 -cne $checksumMatch.Groups[1].Value.ToLowerInvariant() -or $manifest.apkSize -ne (Get-Item -LiteralPath $apk).Length -or $manifest.commitSha -cne $expectedCommit.ToLowerInvariant() -or $manifest.sourceRef -cne "refs/tags/$Tag" -or $manifest.channel -cne $expectedChannel) { throw 'Update manifest does not match APK or release.' }
+    $extraAssets = @($manifestPath)
+}
 function Invoke-GhChecked {
     param([string[]]$Arguments)
     $output = (& gh @Arguments 2>&1 | Out-String)
@@ -62,14 +71,14 @@ if ($matchingReleases.Count -eq 1) {
     $release = $matchingReleases[0]
     if ($release.draft -cne $true) { throw 'Release is already published; refusing to overwrite assets.' }
     if ($release.prerelease -cne $Prerelease) { throw 'Existing draft prerelease flag does not match the tag.' }
-    Invoke-GhChecked -Arguments @('release', 'upload', $Tag, $apk, $checksum, '--clobber', '--repo', $repository) | Out-Null
+    Invoke-GhChecked -Arguments (@('release', 'upload', $Tag, $apk, $checksum) + $extraAssets + @('--clobber', '--repo', $repository)) | Out-Null
 } else {
     $tempRoot = if ($env:RUNNER_TEMP) { [IO.Path]::GetFullPath($env:RUNNER_TEMP) } else { [IO.Path]::GetTempPath() }
     if (-not (Test-Path -LiteralPath $tempRoot -PathType Container)) { throw 'Temporary directory does not exist.' }
     $notes = Join-Path $tempRoot ('oassist-release-notes-' + [guid]::NewGuid().ToString('N') + '.txt')
     try {
         [IO.File]::WriteAllText($notes, "Release $Tag`n", [Text.UTF8Encoding]::new($false))
-        $arguments = @('release', 'create', $Tag, $apk, $checksum, '--verify-tag', '--draft', '--notes-file', $notes, '--title', $Tag, '--repo', $repository)
+        $arguments = (@('release', 'create', $Tag, $apk, $checksum) + $extraAssets + @('--verify-tag', '--draft', '--notes-file', $notes, '--title', $Tag, '--repo', $repository))
         if ($Prerelease) { $arguments += '--prerelease' }
         Invoke-GhChecked -Arguments $arguments | Out-Null
     } finally {
