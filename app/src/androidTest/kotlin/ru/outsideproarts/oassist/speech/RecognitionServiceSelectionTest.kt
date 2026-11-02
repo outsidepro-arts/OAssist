@@ -315,6 +315,7 @@ class RecognitionServiceSelectionTest {
     @Test
     fun lateResultFromCancelledCaptureDoesNotReachNextListener() {
         val listener = sharedVoiceListener()
+        val fixtureOwner = VoiceListener(targetContext, catalog())
         val cancelledFinals = java.util.ArrayList<String>()
         val nextFinals = java.util.ArrayList<String>()
         val errors = java.util.ArrayList<SttError>()
@@ -325,6 +326,10 @@ class RecognitionServiceSelectionTest {
         grantMicrophonePermissions()
 
         try {
+            // Keep a completed client bound while the subject destroys and recreates its
+            // recognizer. Otherwise Android can unbind the shared service during the next
+            // start, so this scenario depends on a framework disconnect/retry race.
+            assertEquals("fixture:keep-alive", recognize(fixtureOwner, "keep-alive", fixtureComponent.flattenToString()))
             recognize(listener, "warmup", fixtureComponent.flattenToString())
             instrumentation.runOnMainSync {
                 assertNull(listener.startStt("late:cancelled", object : SttListener {
@@ -363,7 +368,10 @@ class RecognitionServiceSelectionTest {
             assertEquals(listOf("fixture:delay:cancelled"), nextFinals)
             assertEquals(CaptureState.Idle, listener.state.value)
         } finally {
-            instrumentation.runOnMainSync { listener.cancelStt() }
+            instrumentation.runOnMainSync {
+                listener.cancelStt()
+                fixtureOwner.close()
+            }
         }
     }
 
