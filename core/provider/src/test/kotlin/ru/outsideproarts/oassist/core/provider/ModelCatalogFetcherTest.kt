@@ -23,8 +23,11 @@ import ru.outsideproarts.oassist.core.model.ProviderPreset
  */
 class ModelCatalogFetcherTest {
 
-    private fun endpoint(baseUrl: String): EndpointConfig = EndpointConfig(ru.outsideproarts.oassist.core.model.diagnostics.Diagnostics,
-        protocol = ModelProtocol.OPENAI_COMPLETIONS,
+    private fun endpoint(
+        baseUrl: String,
+        protocol: ModelProtocol = ModelProtocol.OPENAI_COMPLETIONS,
+    ): EndpointConfig = EndpointConfig(ru.outsideproarts.oassist.core.model.diagnostics.Diagnostics,
+        protocol = protocol,
         baseUrl = baseUrl,
         auth = ProviderAuth(),
     )
@@ -121,6 +124,29 @@ class ModelCatalogFetcherTest {
             assertEquals("2023-06-01", version)
             assertTrue("query: $query", query.contains("pageSize=100"))
             assertTrue("query: $query", query.contains("limit=1000"))
+        } finally {
+            engine.close()
+        }
+    }
+
+    @Test
+    fun fetch_geminiCatalog_sendsOnlySupportedPaginationParams() = runTest {
+        val engine = http { request ->
+            assertEquals("/v1beta/models", request.url.encodedPath)
+            assertEquals(setOf("pageSize"), request.url.parameters.names())
+            assertEquals(listOf("100"), request.url.parameters.getAll("pageSize"))
+            respond(
+                """{"models":[{"name":"models/gemini-test"}]}""",
+                status = HttpStatusCode.OK,
+                headers = headersOf("Content-Type", "application/json"),
+            )
+        }
+        try {
+            val models = fetchModelCatalog(
+                endpoint("https://h.test/v1beta", ModelProtocol.GEMINI_GENERATE),
+                engine,
+            )
+            assertEquals(listOf("gemini-test"), models.map { it.id })
         } finally {
             engine.close()
         }

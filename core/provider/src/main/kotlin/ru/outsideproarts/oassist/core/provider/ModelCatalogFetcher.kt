@@ -9,6 +9,7 @@ import io.ktor.http.HttpMethod
 import io.ktor.http.takeFrom
 import kotlinx.serialization.json.JsonObject
 import ru.outsideproarts.oassist.core.model.ModelInfo
+import ru.outsideproarts.oassist.core.model.ModelProtocol
 import ru.outsideproarts.oassist.core.provider.anthropic.AnthropicClient
 import ru.outsideproarts.oassist.core.provider.anthropic.AnthropicModelsResponseDto
 import ru.outsideproarts.oassist.core.provider.gemini.GeminiModelsResponseDto
@@ -60,10 +61,12 @@ internal suspend fun fetchModelCatalog(endpoint: EndpointConfig, http: HttpClien
             // для остальных провайдеров заголовок безвреден.
             headers.append(AnthropicClient.VERSION_HEADER, AnthropicClient.ANTHROPIC_VERSION)
         }
-        // Параметры пагинации обоих форматов (лишние игнорируются): дефолты
-        // Anthropic (20) и Gemini (50) слишком малы для пикеров моделей.
+        // Дефолты Anthropic (20) и Gemini (50) малы для пикеров моделей.
+        // Gemini отклоняет неизвестный параметр limit с HTTP 400.
         parameter("pageSize", MODELS_PAGE_SIZE)
-        parameter("limit", MODELS_LIMIT)
+        if (endpoint.protocol != ModelProtocol.GEMINI_GENERATE) {
+            parameter("limit", MODELS_LIMIT)
+        }
         endpoint.decorateHeaders(this, endpoint.baseUrl)
     }
     val body = response.bodyAsText()

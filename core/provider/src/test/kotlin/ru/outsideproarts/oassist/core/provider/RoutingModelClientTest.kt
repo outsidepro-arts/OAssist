@@ -151,6 +151,8 @@ class RoutingModelClientTest {
         }
         val engine = http { request ->
             assertEquals("https://generativelanguage.googleapis.com/v1beta/models", request.url.toString().substringBefore('?'))
+            assertEquals(setOf("pageSize"), request.url.parameters.names())
+            assertEquals("100", request.url.parameters["pageSize"])
             assertEquals("test-google-key", request.headers["x-goog-api-key"])
             assertNull(request.headers["Authorization"])
             respond(
