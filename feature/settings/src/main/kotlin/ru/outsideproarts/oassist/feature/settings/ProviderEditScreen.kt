@@ -178,7 +178,7 @@ fun ProviderEditScreen(
     fun applyPreset(newPreset: ProviderPreset) {
         if (newPreset != ProviderPreset.CUSTOM) {
             // Рецепт пресета: учётные данные и имя не трогаем.
-            protocol = null
+            protocol = newPreset.defaultProtocol()
             fetchScheme = newPreset.defaultFetchScheme()
             authScheme = newPreset.defaultAuthScheme()
             apiKeyHeaderName = ""

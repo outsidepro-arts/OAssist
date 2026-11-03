@@ -11,6 +11,7 @@ import io.ktor.http.headersOf
 import io.ktor.serialization.kotlinx.json.json
 import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import ru.outsideproarts.oassist.core.data.secret.SecretStore
@@ -139,6 +140,105 @@ class RoutingModelClientTest {
             assertEquals(listOf("/chat/completions"), paths)
         } finally {
             engine.close()
+        }
+    }
+
+    @Test
+    fun googlePreset_withoutProtocol_fetchesCatalogWithNativeAuth() = runTest {
+        val secrets = object : SecretStore by emptySecrets {
+            override suspend fun get(alias: String): CharArray? =
+                if (alias == "google-key") "test-google-key".toCharArray() else null
+        }
+        val engine = http { request ->
+            assertEquals("https://generativelanguage.googleapis.com/v1beta/models", request.url.toString().substringBefore('?'))
+            assertEquals("test-google-key", request.headers["x-goog-api-key"])
+            assertNull(request.headers["Authorization"])
+            respond(
+                """{"models":[{"name":"models/gemini-test","displayName":"Gemini Test"}]}""",
+                status = HttpStatusCode.OK,
+                headers = headersOf("Content-Type", "application/json"),
+            )
+        }
+        try {
+            val client = ModelClient.create(ru.outsideproarts.oassist.core.model.diagnostics.Diagnostics,
+                profile(null, ProviderPreset.GOOGLE.defaultBaseUrl()!!).copy(
+                    preset = ProviderPreset.GOOGLE,
+                    apiKeyRef = "google-key",
+                ),
+                secrets,
+                engine,
+            )
+            assertEquals(listOf("gemini-test"), client.fetchModels().map { it.id })
+        } finally {
+            engine.close()
+        }
+    }
+
+    @Test
+    fun googlePreset_withoutProtocol_usesGeminiForUnrecognizedModelId() = runTest {
+        val paths = mutableListOf<String>()
+        val engine = http { request ->
+            paths += request.url.encodedPath
+            assertEquals("test-google-key", request.headers["x-goog-api-key"])
+            assertNull(request.headers["Authorization"])
+            respond("tools not accepted", status = HttpStatusCode.BadRequest)
+        }
+        try {
+            val client = ModelClient.create(ru.outsideproarts.oassist.core.model.diagnostics.Diagnostics,
+                profile(null, ProviderPreset.GOOGLE.defaultBaseUrl()!!).copy(preset = ProviderPreset.GOOGLE),
+                emptySecrets,
+                engine,
+                overrides = ProviderAuth(apiKey = "test-google-key".toCharArray()),
+            )
+            assertEquals(emptySet<ModelCapability>(), client.probeCapabilities("opaque-model"))
+            assertEquals(listOf("/v1beta/models/opaque-model:generateContent"), paths)
+        } finally {
+            engine.close()
+        }
+    }
+
+    @Test
+    fun googlePreset_explicitProtocol_takesPrecedence() = runTest {
+        val engine = http { request ->
+            assertEquals("/v1beta/openai/models", request.url.encodedPath)
+            assertEquals("Bearer test-google-key", request.headers["Authorization"])
+            assertNull(request.headers["x-goog-api-key"])
+            respond("""{"data":[]}""", status = HttpStatusCode.OK, headers = headersOf("Content-Type", "application/json"))
+        }
+        try {
+            val client = ModelClient.create(ru.outsideproarts.oassist.core.model.diagnostics.Diagnostics,
+                profile(ModelProtocol.OPENAI_COMPLETIONS, "https://generativelanguage.googleapis.com/v1beta/openai")
+                    .copy(preset = ProviderPreset.GOOGLE),
+                emptySecrets,
+                engine,
+                overrides = ProviderAuth(apiKey = "test-google-key".toCharArray()),
+            )
+            assertTrue(client.fetchModels().isEmpty())
+        } finally {
+            engine.close()
+        }
+    }
+
+    @Test
+    fun autoPresets_fetchCatalogWithBearerAuth() = runTest {
+        for (preset in listOf(ProviderPreset.CUSTOM, ProviderPreset.OPENCODE)) {
+            val engine = http { request ->
+                assertEquals("/v1/models", request.url.encodedPath)
+                assertEquals("Bearer test-key", request.headers["Authorization"])
+                assertNull(request.headers["x-goog-api-key"])
+                respond("""{"data":[]}""", status = HttpStatusCode.OK, headers = headersOf("Content-Type", "application/json"))
+            }
+            try {
+                val client = ModelClient.create(ru.outsideproarts.oassist.core.model.diagnostics.Diagnostics,
+                    profile(null, "https://h.test/v1").copy(preset = preset),
+                    emptySecrets,
+                    engine,
+                    overrides = ProviderAuth(apiKey = "test-key".toCharArray()),
+                )
+                assertTrue(client.fetchModels().isEmpty())
+            } finally {
+                engine.close()
+            }
         }
     }
 

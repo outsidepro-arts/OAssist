@@ -144,10 +144,12 @@ interface ModelClient {
             modelsDev: ru.outsideproarts.oassist.core.provider.modelsdev.ModelsDevCatalog? = null,
         ): ModelClient {
             val auth = resolveProviderAuth(profile, secretStore, overrides)
+            // Старые Google-профили могли сохранить null вместо нативного протокола.
+            val protocol = profile.protocol ?: profile.preset.defaultProtocol()
             return RoutingModelClient(
                 template = endpointTemplate(profile, auth, diagnostics),
                 http = httpClient,
-                fixedProtocol = profile.protocol,
+                fixedProtocol = protocol,
                 fetchScheme = profile.fetchScheme,
                 protocolOverride = protocolOverride,
                 modelsDev = modelsDev,

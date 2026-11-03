@@ -61,6 +61,12 @@ enum class ProviderPreset {
         CUSTOM -> null
     }
 
+    /** Нативный протокол Google-пресета; остальные пресеты сохраняют подбор по модели. */
+    fun defaultProtocol(): ModelProtocol? = when (this) {
+        GOOGLE -> ModelProtocol.GEMINI_GENERATE
+        else -> null
+    }
+
     /** Каталог нового профиля: у пресетов он известен и всегда `{base}/models`. */
     fun defaultFetchScheme(): ModelFetchScheme = when (this) {
         CUSTOM -> ModelFetchScheme.MODELS
