@@ -21,12 +21,18 @@ import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import org.junit.Rule
+import org.junit.rules.TemporaryFolder
 import com.sun.net.httpserver.HttpServer
 import java.net.InetAddress
 import java.net.InetSocketAddress
 import java.util.concurrent.CopyOnWriteArrayList
 import java.util.concurrent.atomic.AtomicInteger
 import ru.outsideproarts.oassist.core.data.secret.SecretStore
+import ru.outsideproarts.oassist.core.data.chat.ChatMediaStore
+import ru.outsideproarts.oassist.core.data.chat.TurnCodec
+import ru.outsideproarts.oassist.core.model.ChatMessage
+import ru.outsideproarts.oassist.core.model.StoredTurn
 import ru.outsideproarts.oassist.core.model.ContextData
 import ru.outsideproarts.oassist.core.model.ContextSource
 import ru.outsideproarts.oassist.core.model.ImagePart
@@ -41,6 +47,64 @@ import ru.outsideproarts.oassist.core.provider.ModelClient
  * A loopback JDK server records actual HTTP JSON bodies and returns SSE frames.
  */
 class RuntimeContextWireTest {
+
+    @get:Rule val temporaryFolder = TemporaryFolder()
+
+    @Test
+    fun geminiToolSignaturesSurviveToolErrorsSequentialRoundsAndHistoryReload() = runBlocking {
+        withTimeout(30_000) {
+            // Only the first call in a parallel batch has a signature. The next
+            // model round has its own signature, which must not replace the first.
+            val parallel = """{"candidates":[{"content":{"role":"model","parts":[{"functionCall":{"name":"ping","args":{}},"thoughtSignature":"c2lnLzE="},{"functionCall":{"name":"ping","args":{}}}]},"finishReason":"STOP"}]}"""
+            val sequential = """{"candidates":[{"content":{"role":"model","parts":[{"functionCall":{"name":"ping","args":{}},"thoughtSignature":"c2lnKzI="}]},"finishReason":"STOP"}]}"""
+            val final = """{"candidates":[{"content":{"role":"model","parts":[{"text":"done"}]},"finishReason":"STOP"}]}"""
+            LoopbackSseServer(listOf(parallel, sequential, final, final).map { "data: $it\n\n" }).use { server ->
+                httpClient().use { http ->
+                    val profile = ProviderProfile(
+                        id = "gemini-signatures", name = "Gemini", preset = ProviderPreset.CUSTOM,
+                        protocol = ModelProtocol.GEMINI_GENERATE, baseUrl = server.baseUrl + "/v1beta",
+                    )
+                    val agent = AgentLoop(
+                        ModelClient.create(ru.outsideproarts.oassist.core.model.diagnostics.Diagnostics, profile, secrets, http),
+                        ToolRegistry(listOf(PingTool())),
+                    )
+                    var transcript = emptyList<ChatMessage>()
+                    agent.stream("model-under-test", null, emptyList(), "ping",
+                        onTurnMessages = { transcript = it }).toList()
+
+                    assertEquals(3, server.requestBodies.size)
+                    val second = server.requestBodies[1].parseJsonObject()
+                    val third = server.requestBodies[2].parseJsonObject()
+                    assertEquals(listOf("c2lnLzE=", null), second.geminiCallSignatures())
+                    assertEquals(listOf("c2lnLzE=", null, "c2lnKzI="), third.geminiCallSignatures())
+                    val outcomes = second["contents"]!!.jsonArray.flatMap { it.jsonObject["parts"]!!.jsonArray }
+                        .mapNotNull { it.jsonObject["functionResponse"]?.jsonObject }
+                    assertEquals(2, outcomes.size)
+                    val results = outcomes.map { it["response"]!!.jsonObject["result"]!!.jsonPrimitive.content.parseJsonObject() }
+                    assertEquals("success", results[0]["status"]!!.jsonPrimitive.content)
+                    assertEquals("error", results[1]["status"]!!.jsonPrimitive.content)
+
+                    // Exercise the actual persisted turn format, then a new agent.
+                    val media = ChatMediaStore(temporaryFolder.newFolder())
+                    val payload = TurnCodec.encode(StoredTurn(userText = "ping", turn = transcript), "chat", "turn", media)
+                    val restored = requireNotNull(TurnCodec.decode(payload, media))
+                    val reopened = AgentLoop(
+                        ModelClient.create(ru.outsideproarts.oassist.core.model.diagnostics.Diagnostics, profile, secrets, http),
+                        ToolRegistry(listOf(PingTool())),
+                    )
+                    reopened.stream("model-under-test", null, restored.modelMessages(), "continue").toList()
+                    assertEquals(4, server.requestBodies.size)
+                    assertEquals(listOf("c2lnLzE=", null, "c2lnKzI="),
+                        server.requestBodies[3].parseJsonObject().geminiCallSignatures())
+                }
+            }
+        }
+    }
+
+    private fun JsonObject.geminiCallSignatures(): List<String?> =
+        getValue("contents").jsonArray.flatMap { it.jsonObject.getValue("parts").jsonArray }
+            .map { it.jsonObject }.filter { "functionCall" in it }
+            .map { it["thoughtSignature"]?.jsonPrimitive?.content }
 
     private val secrets = object : SecretStore {
         override suspend fun put(alias: String, plaintext: CharArray) = Unit

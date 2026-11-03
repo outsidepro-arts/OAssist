@@ -63,6 +63,8 @@ sealed interface ChatChunk {
         val name: String,
         val argumentsJson: String,
         val index: Int = 0,
+        /** Подпись Gemini для повторной передачи этого functionCall. */
+        val thoughtSignature: String? = null,
     ) : ChatChunk
     /**
      * Результат выполнения инструмента — отдельная сущность, а не текст ответа.

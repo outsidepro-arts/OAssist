@@ -57,10 +57,13 @@ internal fun mapGeminiContents(messages: List<ChatMessage>): Pair<GeminiContentD
                 val parts = buildList {
                     if (msg.content.isNotEmpty()) add(GeminiPartDto(text = msg.content))
                     msg.toolCalls.orEmpty().forEach { call ->
-                        add(GeminiPartDto(functionCall = GeminiFunctionCallDto(
-                            name = call.name,
-                            args = parseGeminiArgs(call.argumentsJson),
-                        )))
+                        add(GeminiPartDto(
+                            functionCall = GeminiFunctionCallDto(
+                                name = call.name,
+                                args = parseGeminiArgs(call.argumentsJson),
+                            ),
+                            thoughtSignature = call.thoughtSignature,
+                        ))
                     }
                 }
                 if (parts.isEmpty()) emptyList() else listOf(GeminiContentDto(role = "model", parts = parts))
@@ -133,6 +136,7 @@ internal fun extractGeminiChunk(
                     call.args ?: JsonObject(emptyMap()),
                 ),
                 index = counter - 1 - nextId,
+                thoughtSignature = part.thoughtSignature,
             )
         }
     }

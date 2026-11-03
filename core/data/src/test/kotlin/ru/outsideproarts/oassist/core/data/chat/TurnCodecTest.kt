@@ -69,7 +69,8 @@ class TurnCodecTest {
             ChatMessage(
                 role = ChatRole.ASSISTANT,
                 content = "Смотрю…",
-                toolCalls = listOf(ToolCallRef(id = "call_1", name = "device_state", argumentsJson = "{}")),
+                toolCalls = listOf(ToolCallRef(id = "call_1", name = "device_state", argumentsJson = "{}",
+                    thoughtSignature = "gemini-signature")),
                 reasoning = ReasoningBlock(text = "сперва проверю фонарик", signature = "sig_abc"),
             ),
             ChatMessage(role = ChatRole.TOOL, content = "torch=off", toolCallId = "call_1"),
@@ -99,11 +100,22 @@ class TurnCodecTest {
         assertEquals(0.001, restored.usage?.costUsd)
         assertEquals(3, restored.turn.size)
         assertEquals("call_1", restored.turn[0].toolCalls?.single()?.id)
+        assertEquals("gemini-signature", restored.turn[0].toolCalls?.single()?.thoughtSignature)
         assertEquals("call_1", restored.turn[1].toolCallId)
         // Мысли ассистента переживают перезапись (replay Anthropic/Responses).
         assertEquals("сперва проверю фонарик", restored.turn[0].reasoning?.text)
         assertEquals("sig_abc", restored.turn[0].reasoning?.signature)
         assertNull(restored.turn[2].reasoning)
+    }
+
+    @Test
+    fun decode_toolCallWithoutThoughtSignature_remainsReadable() {
+        val payload = """{"userText":"q","turn":[{"role":"ASSISTANT","content":"","toolCalls":[{"id":"call_1","name":"device_state","argumentsJson":"{}"}]},{"role":"TOOL","content":"ok","toolCallId":"call_1"}]}"""
+        val restored = requireNotNull(TurnCodec.decode(payload, media))
+        val call = requireNotNull(restored.turn[0].toolCalls).single()
+        assertEquals("call_1", call.id)
+        assertNull(call.thoughtSignature)
+        assertEquals("call_1", restored.turn[1].toolCallId)
     }
 
     @Test

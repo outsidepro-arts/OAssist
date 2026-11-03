@@ -68,6 +68,8 @@ data class ToolCallRef(
     val id: String,
     val name: String,
     val argumentsJson: String,
+    /** Непрозрачная подпись Gemini: возвращается с тем же вызовом без изменений. */
+    val thoughtSignature: String? = null,
 )
 
 @Serializable

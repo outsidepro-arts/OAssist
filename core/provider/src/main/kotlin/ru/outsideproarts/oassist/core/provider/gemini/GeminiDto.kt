@@ -40,6 +40,7 @@ data class GeminiPartDto(
     @SerialName("inlineData") val inlineData: GeminiBlobDto? = null,
     /** Часть «мышлений» (thinking-режим Gemini): в текст ответа не идёт. */
     val thought: Boolean = false,
+    val thoughtSignature: String? = null,
 )
 
 /** Бинарный парт (аудио PTT): base64 + MIME. */
