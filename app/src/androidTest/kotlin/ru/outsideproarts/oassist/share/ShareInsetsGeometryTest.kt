@@ -1,6 +1,9 @@
 package ru.outsideproarts.oassist.share
 
 import android.content.Intent
+import android.os.ParcelFileDescriptor
+import android.os.SystemClock
+import android.provider.Settings
 import android.util.Log
 import android.view.WindowInsets
 import androidx.compose.ui.geometry.Rect
@@ -26,8 +29,27 @@ import java.io.File
 class ShareInsetsGeometryTest {
     @get:Rule val compose = createComposeRule()
     private val context get() = InstrumentationRegistry.getInstrumentation().targetContext
+    private val keyboardSetting = "show_ime_with_hard_keyboard"
+
+    private fun setHardwareKeyboardIme(value: String?) {
+        val command = if (value == null) "settings delete secure $keyboardSetting"
+            else "settings put secure $keyboardSetting $value"
+        val output = ParcelFileDescriptor.AutoCloseInputStream(
+            InstrumentationRegistry.getInstrumentation().uiAutomation.executeShellCommand(command)
+        ).bufferedReader().use { it.readText() }
+        val deadline = SystemClock.uptimeMillis() + 5_000
+        do {
+            if (Settings.Secure.getString(context.contentResolver, keyboardSetting) == value) return
+            SystemClock.sleep(50)
+        } while (SystemClock.uptimeMillis() < deadline)
+        throw AssertionError("Failed to set $keyboardSetting to $value; command output: $output")
+    }
 
     @Test fun rootsAndKeyboardStayInsideWindowInsets() {
+        val originalKeyboardSetting = Settings.Secure.getString(context.contentResolver, keyboardSetting)
+        require(originalKeyboardSetting == null || originalKeyboardSetting == "0" || originalKeyboardSetting == "1") {
+            "Unexpected $keyboardSetting value: $originalKeyboardSetting"
+        }
         val oldFactory = AgentFactory.get()
         val oldRepository = checkNotNull(ChatHandle.get())
         val oldNetwork = checkNotNull(NetworkHandle.get())
@@ -42,6 +64,7 @@ class ShareInsetsGeometryTest {
             override suspend fun recordModelUsage(usage: ProviderUsage) = Unit
         }
         try {
+            setHardwareKeyboardIme("1")
             AgentFactory.register(factory)
             ChatHandle.register(ChatRepository(db, ChatMediaStore(media)))
             NetworkHandle.register(object : NetworkHandle { override val isOnline = MutableStateFlow(false) })
@@ -73,10 +96,22 @@ class ShareInsetsGeometryTest {
                 val open = context.getString(ShareR.string.share_open_chat)
                 val close = context.getString(ShareR.string.share_close)
                 val newChat = context.getString(UiR.string.chats_new)
+                fun scrollTo(label: String) {
+                    compose.onNode(hasScrollToNodeAction()).performScrollToNode(hasText(label))
+                    compose.onNodeWithText(label).assertIsDisplayed()
+                }
+                fun scrollToClose() {
+                    compose.onNode(hasScrollToIndexAction()).performScrollToIndex(0)
+                    scrollTo(close)
+                }
                 checkBounds("list title", rect(title))
+                scrollTo(open)
                 checkBounds("list open", rect(open))
+                scrollToClose()
                 val initialClose = rect(close)
                 checkBounds("list close", initialClose)
+                scrollTo(newChat)
+                checkBounds("list new chat", rect(newChat))
                 compose.onNodeWithText(newChat).performClick()
                 val back = context.getString(ShareR.string.share_back)
                 val question = context.getString(ShareR.string.share_ask_label)
@@ -111,13 +146,17 @@ class ShareInsetsGeometryTest {
                 assertTrue("IME clipped question: $imeQuestion vs $initialQuestion", imeQuestion.height >= initialQuestion.height - 1)
                 assertTrue("IME clipped send: $imeSend vs $initialSend", imeSend.height >= initialSend.height - 1)
                 compose.onNodeWithContentDescription(back).performClick()
-                compose.waitUntil(10_000) { compose.onAllNodesWithText(close).fetchSemanticsNodes().isNotEmpty() }
+                compose.waitUntil(10_000) {
+                    compose.onAllNodesWithContentDescription(back).fetchSemanticsNodes().isEmpty() &&
+                        compose.onAllNodes(hasScrollToNodeAction()).fetchSemanticsNodes().isNotEmpty()
+                }
                 scenario.onActivity { it.window.insetsController?.hide(WindowInsets.Type.ime()) }
                 compose.waitUntil(10_000) {
                     var hidden = false
                     scenario.onActivity { hidden = it.window.decorView.rootWindowInsets?.isVisible(WindowInsets.Type.ime()) == false }
                     hidden
                 }
+                scrollToClose()
                 compose.waitUntil(10_000) { kotlin.math.abs(rect(close).bottom - initialClose.bottom) <= 2f }
                 val afterClose = rect(close)
                 checkBounds("returned close", afterClose)
@@ -126,6 +165,10 @@ class ShareInsetsGeometryTest {
             }
             val emptyIntent = Intent(context, ShareActivity::class.java).setAction(Intent.ACTION_SEND).setType("text/plain")
             ActivityScenario.launch<ShareActivity>(emptyIntent).use { scenario ->
+                fun scrollTo(label: String) {
+                    compose.onNode(hasScrollToNodeAction()).performScrollToNode(hasText(label))
+                    compose.onNodeWithText(label).assertIsDisplayed()
+                }
                 fun checkEmpty(name: String, description: Boolean = false) {
                     val node = if (description) compose.onNodeWithContentDescription(name) else compose.onNodeWithText(name)
                     node.assertIsDisplayed()
@@ -141,9 +184,16 @@ class ShareInsetsGeometryTest {
                             bounds.right + loc[0] <= metrics.right - safe.right + 1 && bounds.bottom + loc[1] <= metrics.bottom - safe.bottom + 1)
                     }
                 }
-                checkEmpty(context.getString(ShareR.string.share_open_chat))
-                checkEmpty(context.getString(ShareR.string.share_close))
-                compose.onNodeWithText(context.getString(UiR.string.chats_new)).performClick()
+                val emptyOpen = context.getString(ShareR.string.share_open_chat)
+                val emptyClose = context.getString(ShareR.string.share_close)
+                val emptyNewChat = context.getString(UiR.string.chats_new)
+                scrollTo(emptyOpen)
+                checkEmpty(emptyOpen)
+                scrollTo(emptyClose)
+                checkEmpty(emptyClose)
+                scrollTo(emptyNewChat)
+                checkEmpty(emptyNewChat)
+                compose.onNodeWithText(emptyNewChat).performClick()
                 val back = context.getString(ShareR.string.share_back)
                 compose.waitUntil(10_000) { compose.onAllNodesWithContentDescription(back).fetchSemanticsNodes().isNotEmpty() }
                 checkEmpty(back, true)
@@ -158,8 +208,12 @@ class ShareInsetsGeometryTest {
                 checkEmpty(context.getString(ShareR.string.share_send), true)
             }
         } finally {
-            AgentFactory.register(oldFactory); ChatHandle.register(oldRepository); NetworkHandle.register(oldNetwork)
-            db.close(); media.deleteRecursively()
+            try {
+                setHardwareKeyboardIme(originalKeyboardSetting)
+            } finally {
+                AgentFactory.register(oldFactory); ChatHandle.register(oldRepository); NetworkHandle.register(oldNetwork)
+                db.close(); media.deleteRecursively()
+            }
         }
     }
 }
