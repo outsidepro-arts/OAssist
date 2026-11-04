@@ -122,6 +122,21 @@ class OpenAiResponsesClient internal constructor(
             },
         ) {
             val pending = mutableMapOf<String, PendingCall>()
+            val refusals = mutableMapOf<Pair<Int, Int>, String>()
+            suspend fun completeRefusal(key: Pair<Int, Int>, full: String?) {
+                if (full.isNullOrEmpty()) return
+                val previous = refusals[key].orEmpty()
+                if (full.startsWith(previous)) {
+                    val remainder = full.substring(previous.length)
+                    if (remainder.isNotEmpty()) emit(ChatChunk.Content(remainder))
+                    refusals[key] = full
+                }
+            }
+            suspend fun completeItemRefusals(outputIndex: Int, item: ResponsesOutputItemDto) {
+                item.content?.forEachIndexed { contentIndex, part ->
+                    if (part.type == "refusal") completeRefusal(outputIndex to contentIndex, part.refusal)
+                }
+            }
             var lastFinish: String? = null
             var usage: ProviderUsage? = null
             // «Сколько осталось до ограничения» — из заголовков ответа.
@@ -141,6 +156,14 @@ class OpenAiResponsesClient internal constructor(
                     "response.output_text.delta" -> dto.delta
                         ?.takeIf { it.isNotEmpty() }
                         ?.let { emit(ChatChunk.Content(it)) }
+                    "response.refusal.delta" -> dto.delta?.takeIf { it.isNotEmpty() }?.let {
+                        val key = (dto.outputIndex ?: 0) to (dto.contentIndex ?: 0)
+                        refusals[key] = refusals[key].orEmpty() + it
+                        emit(ChatChunk.Content(it))
+                    }
+                    "response.refusal.done" -> completeRefusal(
+                        (dto.outputIndex ?: 0) to (dto.contentIndex ?: 0), dto.refusal,
+                    )
                     // Мысли: полный текст и сводка — отдельным потоком в UI.
                     "response.reasoning_text.delta",
                     "response.reasoning_summary_text.delta",
@@ -175,6 +198,7 @@ class OpenAiResponsesClient internal constructor(
                     "response.output_item.done" -> {
                         val item = dto.item ?: return@collect
                         when (item.type) {
+                            "message" -> completeItemRefusals(dto.outputIndex ?: 0, item)
                             "function_call" -> {
                                 val call = pending[item.id.orEmpty()]
                                 if (call == null || !call.emitted) {
@@ -204,11 +228,13 @@ class OpenAiResponsesClient internal constructor(
                         }
                     }
                     "response.completed" -> {
+                        dto.response?.output?.forEachIndexed { index, item -> completeItemRefusals(index, item) }
                         lastFinish = "stop"
                         usage = mergeUsage(usage, dto.response?.usage?.toProviderUsage())
                         emit(ChatChunk.Finish(reason = "stop"))
                     }
                     "response.incomplete" -> {
+                        dto.response?.output?.forEachIndexed { index, item -> completeItemRefusals(index, item) }
                         val reason = dto.response?.incompleteDetails?.reason ?: "length"
                         lastFinish = reason
                         usage = mergeUsage(usage, dto.response?.usage?.toProviderUsage())

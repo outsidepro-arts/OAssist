@@ -50,8 +50,11 @@ data class ResponsesToolDto(
 data class ResponsesStreamEventDto(
     val type: String? = null,
     val delta: String? = null,
+    val refusal: String? = null,
     val arguments: String? = null,
     @SerialName("item_id") val itemId: String? = null,
+    @SerialName("output_index") val outputIndex: Int? = null,
+    @SerialName("content_index") val contentIndex: Int? = null,
     val item: ResponsesOutputItemDto? = null,
     val response: ResponsesResponseDto? = null,
     val message: String? = null,
@@ -65,12 +68,20 @@ data class ResponsesOutputItemDto(
     @SerialName("call_id") val callId: String? = null,
     val name: String? = null,
     val arguments: String? = null,
+    val content: List<ResponsesOutputContentDto>? = null,
+)
+
+@Serializable
+data class ResponsesOutputContentDto(
+    val type: String? = null,
+    val refusal: String? = null,
 )
 
 @Serializable
 data class ResponsesResponseDto(
     val id: String? = null,
     val status: String? = null,
+    val output: List<ResponsesOutputItemDto>? = null,
     val usage: ResponsesUsageDto? = null,
     val error: ResponsesErrorDto? = null,
     @SerialName("incomplete_details") val incompleteDetails: ResponsesIncompleteDetailsDto? = null,

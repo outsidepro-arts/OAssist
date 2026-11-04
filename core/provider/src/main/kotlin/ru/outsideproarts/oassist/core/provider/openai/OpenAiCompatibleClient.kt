@@ -182,6 +182,7 @@ class OpenAiCompatibleClient internal constructor(
                 delta?.content?.let { content ->
                     if (content.isNotEmpty()) emit(ChatChunk.Content(content))
                 }
+                delta?.refusal?.takeIf { it.isNotEmpty() }?.let { emit(ChatChunk.Content(it)) }
                 delta?.toolCalls?.forEach { assembler.feed(it) }
                 val finish = chunk.choices.firstOrNull()?.finishReason
                 if (finish != null) {

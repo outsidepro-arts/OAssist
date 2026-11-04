@@ -57,6 +57,70 @@ class RuntimeContextWireTest {
     @get:Rule val temporaryFolder = TemporaryFolder()
 
     @Test
+    fun openAiRefusalsReachAnswerHistoryAndNextRequest() = runBlocking {
+        withTimeout(30_000) {
+            val cases = listOf(
+                ModelProtocol.OPENAI_COMPLETIONS to (
+                    "data: {\"choices\":[{\"delta\":{\"content\":\"Context: \",\"refusal\":\"Cannot \"}}]}\n\n" +
+                    "data: {\"choices\":[{\"delta\":{\"refusal\":\"help\"},\"finish_reason\":\"stop\"}]}\n\n" +
+                    "data: [DONE]\n\n"),
+                ModelProtocol.OPENAI_RESPONSES to (
+                    "data: {\"type\":\"response.output_text.delta\",\"delta\":\"Context: \"}\n\n" +
+                    "data: {\"type\":\"response.refusal.delta\",\"output_index\":0,\"content_index\":1,\"delta\":\"Cannot \"}\n\n" +
+                    "data: {\"type\":\"response.refusal.done\",\"output_index\":0,\"content_index\":1,\"refusal\":\"Cannot help\"}\n\n" +
+                    "data: {\"type\":\"response.output_item.done\",\"output_index\":0,\"item\":{\"type\":\"message\",\"content\":[{\"type\":\"output_text\"},{\"type\":\"refusal\",\"refusal\":\"Cannot help\"}]}}\n\n" +
+                    "data: {\"type\":\"response.completed\",\"response\":{\"output\":[{\"type\":\"message\",\"content\":[{\"type\":\"output_text\"},{\"type\":\"refusal\",\"refusal\":\"Cannot help\"}]}]}}\n\n")
+            )
+            for ((protocol, response) in cases) {
+                LoopbackSseServer(listOf(response, response)).use { server ->
+                    httpClient().use { http ->
+                        val profile = ProviderProfile(id = "refusal", name = "refusal", preset = ProviderPreset.CUSTOM,
+                            protocol = protocol, baseUrl = server.baseUrl + "/v1")
+                        suspend fun agent() = AgentLoop(ModelClient.create(ru.outsideproarts.oassist.core.model.diagnostics.Diagnostics,
+                            profile, secrets, http))
+                        var transcript = emptyList<ChatMessage>()
+                        val assembler = AgentMessageAssembler()
+                        agent().stream("model", null, emptyList(), "request", onTurnMessages = { transcript = it })
+                            .collect { assembler.onChunk(it) }
+                        assertEquals("Context: Cannot help", assembler.answerText())
+                        assertEquals("Context: Cannot help", transcript.single().content)
+                        val folder = temporaryFolder.newFolder()
+                        val encoded = TurnCodec.encode(StoredTurn(userText = "request", turn = transcript), "chat", "turn", ChatMediaStore(folder))
+                        val restored = requireNotNull(TurnCodec.decode(encoded, ChatMediaStore(folder)))
+                        agent().stream("model", null, restored.modelMessages(), "continue").toList()
+                        assertTrue(server.requestBodies[1].contains("Context: Cannot help"))
+                    }
+                }
+            }
+        }
+    }
+
+    @Test
+    fun openAiRefusalOnlyFinalAndTruncatedStreamsKeepTheirBoundaries() = runBlocking {
+        withTimeout(30_000) {
+            val cases = listOf(
+                Triple(ModelProtocol.OPENAI_COMPLETIONS, "data: {\"choices\":[{\"delta\":{\"refusal\":\"No\"}}]}\n\n", true),
+                Triple(ModelProtocol.OPENAI_RESPONSES, "data: {\"type\":\"response.refusal.delta\",\"output_index\":0,\"content_index\":0,\"delta\":\"No\"}\n\n", true),
+                Triple(ModelProtocol.OPENAI_RESPONSES, "data: {\"type\":\"response.completed\",\"response\":{\"output\":[{\"type\":\"message\",\"content\":[{\"type\":\"refusal\",\"refusal\":\"No\"}]}]}}\n\n", false),
+            )
+            for ((protocol, response, abrupt) in cases) {
+                LoopbackSseServer(listOf(response, response)).use { server ->
+                    httpClient().use { http ->
+                        val profile = ProviderProfile(id = "refusal", name = "refusal", preset = ProviderPreset.CUSTOM,
+                            protocol = protocol, baseUrl = server.baseUrl + "/v1")
+                        val client = ModelClient.create(ru.outsideproarts.oassist.core.model.diagnostics.Diagnostics, profile, secrets, http)
+                        val chunks = client.chatCompletionStream("model", emptyList(), emptyList(), false).toList()
+                        assertEquals("No", chunks.filterIsInstance<ru.outsideproarts.oassist.core.provider.ChatChunk.Content>().joinToString("") { it.delta })
+                        assertEquals(abrupt, chunks.filterIsInstance<ru.outsideproarts.oassist.core.provider.ChatChunk.Finish>().last().abrupt)
+                        val cancelled = client.chatCompletionStream("model", emptyList(), emptyList(), false).take(1).toList()
+                        assertEquals(listOf(ru.outsideproarts.oassist.core.provider.ChatChunk.Content("No")), cancelled)
+                    }
+                }
+            }
+        }
+    }
+
+    @Test
     fun nativeAlwaysOnThinkingContinuesThroughSkillSystemChangeAndDiskReopenWithVisibleNotice() = runBlocking {
         withTimeout(30_000) {
             val blocks = Json.parseToJsonElement("""[{"type":"thinking","thinking":"","signature":"native+/="},{"type":"tool_use","id":"read-skill","name":"skill_get","input":{"name":"report"}}]""").jsonArray
