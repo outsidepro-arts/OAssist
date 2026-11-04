@@ -49,7 +49,7 @@ class PrivUserService : Binder() {
                     reply?.writeString(err)
                 } else {
                     val result = runRaw(
-                        listOf("settings", "put", namespace, key, value),
+                        listOf("/system/bin/settings", "put", namespace, key, value),
                         ShellPolicy.DEFAULT_TIMEOUT_MS,
                     )
                     reply?.writeInt(result.exitCode)
@@ -61,7 +61,7 @@ class PrivUserService : Binder() {
                 data.enforceInterface(DESCRIPTOR)
                 val kind = data.readString().orEmpty()
                 val args = List(5) { data.readString().orEmpty() }.filter { it.isNotEmpty() }
-                val cmd = listOf("input", kind) + args
+                val cmd = listOf("/system/bin/input", kind) + args
                 val result = runRaw(cmd, ShellPolicy.DEFAULT_TIMEOUT_MS)
                 reply?.writeInt(result.exitCode)
                 reply?.writeString(result.stdout)
@@ -80,7 +80,7 @@ class PrivUserService : Binder() {
     private fun runExec(cmd: List<String>): ExecResult {
         val denied = ShellPolicy.checkShellExec(cmd)
         if (denied != null) return ExecResult(-1, "Запрещено: $denied")
-        return runRaw(cmd, ShellPolicy.DEFAULT_TIMEOUT_MS)
+        return runRaw(ShellPolicy.shellExecArgv(cmd), ShellPolicy.DEFAULT_TIMEOUT_MS)
     }
 
     private fun runRaw(cmd: List<String>, timeoutMs: Long): ExecResult = runCatching {

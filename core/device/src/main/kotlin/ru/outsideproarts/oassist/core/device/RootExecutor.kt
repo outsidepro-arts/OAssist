@@ -45,6 +45,14 @@ class RootExecutor : PrivExecutor {
     }
 
     override suspend fun exec(cmd: List<String>, timeoutMs: Long, maxBytes: Int): Result<ExecResult> =
+        ShellPolicy.checkShellExec(cmd)?.let { Result.failure(IllegalArgumentException(it)) }
+            ?: execTrusted(ShellPolicy.shellExecArgv(cmd), timeoutMs, maxBytes)
+
+    private suspend fun execTrusted(
+        cmd: List<String>,
+        timeoutMs: Long = ShellPolicy.DEFAULT_TIMEOUT_MS,
+        maxBytes: Int = ShellPolicy.DEFAULT_MAX_BYTES,
+    ): Result<ExecResult> =
         withContext(Dispatchers.IO) {
             val flat = cmd.joinToString(" ") { arg ->
                 "'" + arg.replace("'", "'\\''") + "'"
@@ -69,28 +77,28 @@ class RootExecutor : PrivExecutor {
 
     override suspend fun getSetting(namespace: String, key: String): Result<String?> {
         ShellPolicy.checkNamespace(namespace)?.let { return Result.failure(IllegalArgumentException(it)) }
-        return exec(listOf("settings", "get", namespace, key)).map { it.stdout.trim().takeIf { v -> v != "null" } }
+        return execTrusted(listOf("/system/bin/settings", "get", namespace, key)).map { it.stdout.trim().takeIf { v -> v != "null" } }
     }
 
     override suspend fun putSetting(namespace: String, key: String, value: String): Result<Unit> {
         ShellPolicy.checkNamespace(namespace)?.let { return Result.failure(IllegalArgumentException(it)) }
-        return exec(listOf("settings", "put", namespace, key, value)).map { }
+        return execTrusted(listOf("/system/bin/settings", "put", namespace, key, value)).map { }
     }
 
     override suspend fun inputTap(x: Int, y: Int): Result<Unit> =
-        exec(listOf("input", "tap", x.toString(), y.toString())).map { }
+        execTrusted(listOf("/system/bin/input", "tap", x.toString(), y.toString())).map { }
 
     override suspend fun inputSwipe(fromX: Int, fromY: Int, toX: Int, toY: Int, durationMs: Long): Result<Unit> =
-        exec(
+        execTrusted(
             listOf(
-                "input", "swipe",
+                "/system/bin/input", "swipe",
                 fromX.toString(), fromY.toString(), toX.toString(), toY.toString(),
                 durationMs.coerceIn(1, 5000).toString(),
             ),
         ).map { }
 
     override suspend fun inputKeyevent(keyCode: Int): Result<Unit> =
-        exec(listOf("input", "keyevent", keyCode.toString())).map { }
+        execTrusted(listOf("/system/bin/input", "keyevent", keyCode.toString())).map { }
 
     companion object {
         /** Быстрая эвристика без shell: наличие бинарника su в PATH. */
