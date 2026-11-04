@@ -810,13 +810,16 @@ fun ChatScreen(
         if (error != null) sttErrorToast(error)
         else sounds?.playIfEnabled(AgentSound.VOICE_START, soundEnabled)
     }
-    // mic-разрешение выдаём системным диалогом; дальше — сразу слушать.
+    // Только toggle можно продолжить после системного диалога.
+    val pendingMicToggle = remember { mutableStateOf(false) }
     val micPermissionLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.RequestPermission(),
     ) { granted ->
-        if (granted) {
+        val resumeToggle = pendingMicToggle.value
+        pendingMicToggle.value = false
+        if (granted && resumeToggle) {
             toggleSttOwner.whenActive { startToggleStt() }
-        } else {
+        } else if (!granted) {
             Toast.makeText(context, micDeniedText, Toast.LENGTH_LONG).show()
         }
     }
@@ -858,6 +861,7 @@ fun ChatScreen(
                 if (context.checkSelfPermission(Manifest.permission.RECORD_AUDIO) !=
                     PackageManager.PERMISSION_GRANTED
                 ) {
+                    pendingMicToggle.value = true
                     micPermissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
                     return
                 }
@@ -881,6 +885,7 @@ fun ChatScreen(
         if (context.checkSelfPermission(Manifest.permission.RECORD_AUDIO) !=
             PackageManager.PERMISSION_GRANTED
         ) {
+            pendingMicToggle.value = false
             micPermissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
             return false
         }

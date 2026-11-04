@@ -7,6 +7,7 @@ $PSNativeCommandUseErrorActionPreference = $false
 $package = 'ru.outsideproarts.oassist'
 $testClass = "$package.permission.SystemPermissionLifecycleTest"
 $chatTestClass = "$package.chat.ChatTogglePermissionTest"
+$holdTestClass = "$package.chat.ChatHoldPermissionTest"
 $permissions = @('android.permission.CAMERA', 'android.permission.RECORD_AUDIO')
 
 function Invoke-Adb([string[]]$Arguments) {
@@ -57,6 +58,10 @@ try {
   $output = Invoke-Adb @('shell', 'am', 'instrument', '--user', $user, '-w', '-e', 'systemPermissionFixture', 'true', '-e', 'class', "$testClass,$chatTestClass", "$package.test/androidx.test.runner.AndroidJUnitRunner")
   Write-Output $output
   if ($output -notmatch '(?m)^OK \(6 tests\)\s*$') { throw 'Instrumentation did not report six passing tests' }
+  Set-PermissionState 'android.permission.RECORD_AUDIO' $user @{ Granted = $false; UserSet = $false; UserFixed = $false }
+  $output = Invoke-Adb @('shell', 'am', 'instrument', '--user', $user, '-w', '-e', 'systemPermissionFixture', 'true', '-e', 'class', $holdTestClass, "$package.test/androidx.test.runner.AndroidJUnitRunner")
+  Write-Output $output
+  if ($output -notmatch '(?m)^OK \(1 test\)\s*$') { throw 'Hold permission instrumentation did not report one passing test' }
 } catch { $failure = $_ }
 finally {
   foreach ($permission in $permissions) {

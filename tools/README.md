@@ -20,7 +20,7 @@ Linux runners. Настройка автоматического выпуска 
 
 ## Системные разрешения
 
-`SystemPermissionLifecycleTest` и `ChatTogglePermissionTest` открывают системные окна и требуют отдельной подготовки
+`SystemPermissionLifecycleTest`, `ChatTogglePermissionTest` и `ChatHoldPermissionTest` открывают системные окна и требуют отдельной подготовки
 разрешений. Соберите и установите debug APK приложения и androidTest APK на эмулятор,
 затем запустите `pwsh -NoProfile -File tools/run-system-permission-tests.ps1 -Serial emulator-5554`
 с фактическим serial. Скрипт временно меняет CAMERA и RECORD_AUDIO, затем восстанавливает
@@ -42,7 +42,7 @@ Runner предназначен только для эмулятора API 31+: 
 Эта отдельная обязательная фаза выполняет `VoiceInteractionCaptureTest`,
 `AssistHandoffLifecycleTest`, `AssistServiceHandoffTest` и `AssistTurnSnapshotTest`
 из пакета `ru.outsideproarts.oassist.vis` (5 тестов). Только эти четыре класса,
-наряду с `SystemPermissionLifecycleTest` и `ChatTogglePermissionTest`, исключены из общего запуска через `notClass`.
+наряду с `SystemPermissionLifecycleTest`, `ChatTogglePermissionTest` и `ChatHoldPermissionTest`, исключены из общего запуска через `notClass`.
 Неподготовленный прямой запуск завершается ошибкой предусловия, а не пропуском тестов.
 
 ## Сборка и тесты
