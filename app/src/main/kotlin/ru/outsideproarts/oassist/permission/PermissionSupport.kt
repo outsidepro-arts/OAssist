@@ -38,22 +38,26 @@ class AppPermissionRequester(private val context: Context) : PermissionRequester
         val missing = permissions.filterNot(::isGranted)
         if (missing.isEmpty()) return PermissionRequestOutcome.GRANTED
         val requestId = PermissionRequestBridge.register(missing)
-        val intent = ConsentActivity.permissionIntent(context, requestId, missing)
-            .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-        val started = runCatching { context.startActivity(intent) }.isSuccess
-        if (!started) {
-            // Старт невозможен в принципе: фолбэк-тап повторил бы тот же вызов.
+        try {
+            val intent = ConsentActivity.permissionIntent(context, requestId, missing)
+                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            val started = runCatching { context.startActivity(intent) }.isSuccess
+            if (!started) {
+                // Старт невозможен в принципе: фолбэк-тап повторил бы тот же вызов.
+                return PermissionRequestOutcome.UNAVAILABLE
+            }
+            val outcome = PermissionRequestBridge.await(requestId)
+            if (outcome == PermissionRequestOutcome.UNAVAILABLE) {
+                OAssistLog.warn(
+                    TAG,
+                    "Системный диалог разрешений не показан или не завершён: ${missing.joinToString()}",
+                )
+            }
+            return outcome
+        } finally {
+            // Also covers failures before await takes ownership of the registered request.
             PermissionRequestBridge.cancel(requestId)
-            return PermissionRequestOutcome.UNAVAILABLE
         }
-        val outcome = PermissionRequestBridge.await(requestId)
-        if (outcome == PermissionRequestOutcome.UNAVAILABLE) {
-            OAssistLog.warn(
-                TAG,
-                "Системный диалог разрешений не показан или не завершён: ${missing.joinToString()}",
-            )
-        }
-        return outcome
     }
 
     private companion object {

@@ -6,7 +6,6 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.withTimeoutOrNull
 import java.util.UUID
-import java.util.concurrent.ConcurrentHashMap
 
 /** Итог запроса системных разрешений. */
 enum class PermissionRequestOutcome {
@@ -57,7 +56,9 @@ object PermissionRequestBridge {
         val started = CompletableDeferred<Unit>()
     }
 
-    private val pending = ConcurrentHashMap<String, Pending>()
+    // Pending and fallback publication form one transition, including UI callbacks.
+    private val lock = Any()
+    private val pending = mutableMapOf<String, Pending>()
     private val _blocked = MutableStateFlow<BlockedPermissionRequest?>(null)
 
     /** Активный запрос, чей системный диалог заблокирован; `null` — такого нет. */
@@ -65,25 +66,28 @@ object PermissionRequestBridge {
 
     fun register(permissions: List<String>): String {
         val id = UUID.randomUUID().toString()
-        pending[id] = Pending(permissions)
+        synchronized(lock) { pending[id] = Pending(permissions) }
         return id
     }
 
     /** `ConsentActivity` показана: окно стартовало, фолбэк-действие больше не нужно. */
     fun markStarted(id: String) {
-        clearBlocked(id)
-        pending[id]?.started?.complete(Unit)
+        synchronized(lock) {
+            clearBlocked(id)
+            pending[id]?.started?.complete(Unit)
+        }
     }
 
     fun complete(id: String, outcome: PermissionRequestOutcome) {
-        clearBlocked(id)
-        pending.remove(id)?.outcome?.complete(outcome)
+        synchronized(lock) {
+            clearBlocked(id)
+            pending.remove(id)?.outcome?.complete(outcome)
+        }
     }
 
     /** Отмена/пропажа активности: снять ожидание, чтобы не висело. */
     fun cancel(id: String) {
-        clearBlocked(id)
-        pending.remove(id)?.outcome?.complete(PermissionRequestOutcome.UNAVAILABLE)
+        complete(id, PermissionRequestOutcome.UNAVAILABLE)
     }
 
     /**
@@ -96,17 +100,19 @@ object PermissionRequestBridge {
         startTimeoutMs: Long = START_TIMEOUT_MS,
         userTimeoutMs: Long = USER_TIMEOUT_MS,
     ): PermissionRequestOutcome {
-        val p = pending[id] ?: return PermissionRequestOutcome.UNAVAILABLE
-        val started = withTimeoutOrNull(startTimeoutMs) { p.started.await() } != null
-        if (!started && !p.outcome.isCompleted) {
-            _blocked.value = BlockedPermissionRequest(id, p.permissions)
-        }
-        val outcome = withTimeoutOrNull(userTimeoutMs) { p.outcome.await() }
-        if (outcome == null) {
+        val p = synchronized(lock) { pending[id] } ?: return PermissionRequestOutcome.UNAVAILABLE
+        try {
+            val started = withTimeoutOrNull(startTimeoutMs) { p.started.await() } != null
+            synchronized(lock) {
+                if (!started && !p.started.isCompleted && pending[id] === p) {
+                    _blocked.value = BlockedPermissionRequest(id, p.permissions)
+                }
+            }
+            return withTimeoutOrNull(userTimeoutMs) { p.outcome.await() }
+                ?: PermissionRequestOutcome.UNAVAILABLE
+        } finally {
             cancel(id)
-            return PermissionRequestOutcome.UNAVAILABLE
         }
-        return outcome
     }
 
     private fun clearBlocked(id: String) {
