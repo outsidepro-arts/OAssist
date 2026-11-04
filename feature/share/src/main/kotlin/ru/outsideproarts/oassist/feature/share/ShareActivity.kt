@@ -380,56 +380,41 @@ private fun ShareChatList(
     onClose: () -> Unit,
 ) {
     val title = stringResource(R.string.share_title)
-    val receivedLabel = stringResource(R.string.share_received_label)
     val openChat = stringResource(R.string.share_open_chat)
     val close = stringResource(R.string.share_close)
 
-    Column(
-        modifier = Modifier
-            .fillMaxSize()
-            .safeDrawingPadding()
-            .padding(OAssistDimens.ScreenContentPadding),
-        verticalArrangement = Arrangement.spacedBy(OAssistDimens.SectionSpacing),
-    ) {
-        Text(
-            text = title,
-            style = MaterialTheme.typography.headlineSmall,
-            color = MaterialTheme.colorScheme.onSurface,
-            modifier = Modifier
-                .fillMaxWidth()
-                .oassistHeading(),
-        )
-        ShareReceivedPanel(payload = payload, compact = true, payloadLoadFailed = payloadLoadFailed)
-
-        ChatPickerList(
-            chats = chats,
-            sortOrder = sortOrder,
-            onSortOrderChange = onSortOrderChange,
-            onOpenChat = onOpenChat,
-            onNewChat = onNewChat,
-            onRenameChat = onRenameChat,
-            onDeleteChat = onDeleteChat,
-            includeAssistant = false,
-            modifier = Modifier.weight(1f),
-        )
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.spacedBy(OAssistDimens.ItemSpacing),
-        ) {
-            Button(
-                onClick = onOpenApp,
-                modifier = Modifier.weight(1f),
-            ) {
-                Text(openChat)
+    ChatPickerList(
+        chats = chats,
+        sortOrder = sortOrder,
+        onSortOrderChange = onSortOrderChange,
+        onOpenChat = onOpenChat,
+        onNewChat = onNewChat,
+        onRenameChat = onRenameChat,
+        onDeleteChat = onDeleteChat,
+        includeAssistant = false,
+        scrollEntireContent = true,
+        modifier = Modifier.fillMaxSize().safeDrawingPadding().padding(OAssistDimens.ScreenContentPadding),
+        leadingContent = {
+            Column(verticalArrangement = Arrangement.spacedBy(OAssistDimens.SectionSpacing)) {
+                Text(
+                    text = title,
+                    style = MaterialTheme.typography.headlineSmall,
+                    color = MaterialTheme.colorScheme.onSurface,
+                    modifier = Modifier.fillMaxWidth().oassistHeading(),
+                )
+                ShareReceivedPanel(payload = payload, compact = true, payloadLoadFailed = payloadLoadFailed)
             }
-            OutlinedButton(
-                onClick = onClose,
-                modifier = Modifier.weight(1f),
+        },
+        trailingContent = {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(OAssistDimens.ItemSpacing),
             ) {
-                Text(close)
+                Button(onClick = onOpenApp, modifier = Modifier.weight(1f)) { Text(openChat) }
+                OutlinedButton(onClick = onClose, modifier = Modifier.weight(1f)) { Text(close) }
             }
-        }
-    }
+        },
+    )
 }
 
 /** Экран диалога: история чата, прикреплённый файл и поле промпта. */
@@ -558,9 +543,10 @@ private fun ShareConversation(
                     )
                 }
             }
+            item {
+                ShareReceivedPanel(payload = payload, compact = true, payloadLoadFailed = payloadLoadFailed)
+            }
         }
-
-        ShareReceivedPanel(payload = payload, compact = true, payloadLoadFailed = payloadLoadFailed)
 
         ru.outsideproarts.oassist.core.ui.components.ThinkingContextNotice(thinkingContextReduced)
         Row(

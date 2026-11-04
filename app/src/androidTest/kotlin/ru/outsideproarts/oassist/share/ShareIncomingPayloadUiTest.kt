@@ -100,23 +100,37 @@ class ShareIncomingPayloadUiTest {
                     .putParcelableArrayListExtra(Intent.EXTRA_STREAM, ArrayList(streams))
                 return ActivityScenario.launch(intent)
             }
-            for (streams in cases) {
+            for ((caseIndex, streams) in cases.withIndex()) {
                 launch(streams).use { scenario ->
                     val label = context.getString(ru.outsideproarts.oassist.feature.share.R.string.share_unsupported_file)
                     compose.waitUntil(10_000) { compose.onAllNodesWithText(label).fetchSemanticsNodes().isNotEmpty() }
                     compose.onNodeWithText(label).assertIsDisplayed()
-                    compose.onNodeWithText(context.getString(ru.outsideproarts.oassist.core.ui.R.string.chats_new)).performClick()
+                    if (caseIndex == 3) {
+                        val close = context.getString(ru.outsideproarts.oassist.feature.share.R.string.share_close)
+                        compose.onNode(hasScrollAction()).performScrollToNode(hasText(close))
+                        compose.onNodeWithText(close).assertIsDisplayed()
+                        compose.onNode(hasScrollAction()).performScrollToNode(hasText(label))
+                        compose.onNodeWithText(label).assertIsDisplayed()
+                        val image = context.getString(ru.outsideproarts.oassist.feature.share.R.string.share_image_attached)
+                        compose.waitUntil(10_000) { compose.onAllNodesWithContentDescription(image).fetchSemanticsNodes().size == 4 }
+                    }
+                    val newChat = context.getString(ru.outsideproarts.oassist.core.ui.R.string.chats_new)
+                    compose.onNode(hasScrollAction()).performScrollToNode(hasText(newChat))
+                    compose.onNodeWithText(newChat).assertIsDisplayed().performClick()
                     val question = compose.onNodeWithText(context.getString(ru.outsideproarts.oassist.feature.share.R.string.share_ask_label))
                     question.performTextInput("editable question")
                     compose.onNodeWithText("editable question").assertExists()
                     compose.onNodeWithContentDescription(context.getString(ru.outsideproarts.oassist.feature.share.R.string.share_send)).assertIsNotEnabled()
+                    compose.onNode(hasScrollAction()).performScrollToNode(hasText(label))
                     compose.onNodeWithText(label).assertIsDisplayed()
                     scenario.onActivity { assertTrue(ViewModelProvider(it)[ShareSessionViewModel::class.java].turns.isEmpty()) }
                     assertTrue(requests.isEmpty())
                 }
             }
             launch(listOf(image)).use {
-                compose.onNodeWithText(context.getString(ru.outsideproarts.oassist.core.ui.R.string.chats_new)).performClick()
+                val newChat = context.getString(ru.outsideproarts.oassist.core.ui.R.string.chats_new)
+                compose.onNode(hasScrollAction()).performScrollToNode(hasText(newChat))
+                compose.onNodeWithText(newChat).assertIsDisplayed().performClick()
                 compose.onNodeWithText(context.getString(ru.outsideproarts.oassist.feature.share.R.string.share_ask_label)).performTextInput("fixture question")
                 val send = compose.onNodeWithContentDescription(context.getString(ru.outsideproarts.oassist.feature.share.R.string.share_send))
                 compose.waitUntil(10_000) { runCatching { send.assertIsEnabled(); true }.getOrDefault(false) }
@@ -128,6 +142,42 @@ class ShareIncomingPayloadUiTest {
                 val encoded = checkNotNull(ru.outsideproarts.oassist.core.provider.ImageCodec.fromBytes(png))
                 assertTrue(body.contains(encoded.mimeType))
                 assertTrue(body.contains(encoded.imageBase64))
+            }
+            val savedChatId = kotlinx.coroutines.runBlocking {
+                repository.createChat(AssistMode.SHARE, "Saved fixture chat").also { id ->
+                    repository.appendTurn(id, StoredTurn(userText = "Saved fixture question", answer = "Saved fixture answer"))
+                }
+            }
+            val longText = "long fixture text ".repeat(60)
+            val existingIntent = Intent(context, ShareActivity::class.java).setAction(Intent.ACTION_SEND_MULTIPLE).setType("image/png")
+                .putExtra(Intent.EXTRA_TEXT, SpannedString(longText))
+                .putParcelableArrayListExtra(Intent.EXTRA_STREAM, ArrayList(List(4) { image }))
+            ActivityScenario.launch<ShareActivity>(existingIntent).use { scenario ->
+                compose.waitUntil(10_000) {
+                    runCatching { compose.onNode(hasScrollAction()).performScrollToNode(hasText("Saved fixture chat")); true }.getOrDefault(false)
+                }
+                compose.onNodeWithText("Saved fixture chat").assertIsDisplayed().performClick()
+                compose.waitUntil(10_000) {
+                    var loaded = false
+                    scenario.onActivity { loaded = ViewModelProvider(it)[ShareSessionViewModel::class.java].turns.isNotEmpty() }
+                    loaded
+                }
+                scenario.onActivity { assertEquals(savedChatId, ViewModelProvider(it)[ShareSessionViewModel::class.java].chatId) }
+                compose.onNode(hasScrollAction()).performScrollToNode(hasText("Saved fixture question"))
+                compose.onNodeWithText("Saved fixture question").assertIsDisplayed()
+                compose.onNode(hasScrollAction()).performScrollToNode(hasText(longText.take(500)))
+                compose.onNodeWithText(longText.take(500)).assertExists()
+                compose.onNodeWithText(context.getString(ru.outsideproarts.oassist.feature.share.R.string.share_ask_label))
+                    .performTextInput("existing chat question")
+                val send = compose.onNodeWithContentDescription(context.getString(ru.outsideproarts.oassist.feature.share.R.string.share_send))
+                compose.waitUntil(10_000) { runCatching { send.assertIsEnabled(); true }.getOrDefault(false) }
+                send.performClick()
+                compose.waitUntil(20_000) { requests.size == 2 }
+                val body = requests.last().toString()
+                assertTrue(body.contains(longText))
+                assertTrue(body.contains("existing chat question"))
+                val encoded = checkNotNull(ru.outsideproarts.oassist.core.provider.ImageCodec.fromBytes(png))
+                assertEquals(4, body.split(encoded.imageBase64).size - 1)
             }
         } finally {
             uris.forEach { context.contentResolver.delete(it, null, null) }

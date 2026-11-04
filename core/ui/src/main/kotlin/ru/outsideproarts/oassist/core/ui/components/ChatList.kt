@@ -211,6 +211,9 @@ fun ChatPickerList(
     onDeleteChat: (ChatSummary) -> Unit,
     modifier: Modifier = Modifier,
     includeAssistant: Boolean = true,
+    scrollEntireContent: Boolean = false,
+    leadingContent: @Composable () -> Unit = {},
+    trailingContent: @Composable () -> Unit = {},
 ) {
     // Поиск и открытые диалоги переживают пересоздание Activity: ChatSummary
     // не Parcelable — поля сохраняются своим Saver'ом (секретов в модели нет).
@@ -246,7 +249,7 @@ fun ChatPickerList(
         ChatSortOrder.TITLE -> stringResource(R.string.chats_sort_alphabetical)
     }
 
-    Column(modifier = modifier.fillMaxSize()) {
+    val searchAndSort: @Composable () -> Unit = {
         Row(
             modifier = Modifier
                 .fillMaxWidth()
@@ -307,34 +310,48 @@ fun ChatPickerList(
                 }
             }
         }
-        OAssistSettingRow(title = newChatLabel, onClick = onNewChat)
+    }
+    val assistantRow: @Composable () -> Unit = {
         if (assistant != null) {
             ChatListItem(
-                title = titleOf(assistant),
-                subtitle = formatDate(assistant.updatedAt),
-                onClick = { onOpenChat(assistant) },
-                onRename = null,
-                onDelete = null,
+                title = titleOf(assistant), subtitle = formatDate(assistant.updatedAt),
+                onClick = { onOpenChat(assistant) }, onRename = null, onDelete = null,
             )
         }
-        if (filtered.isEmpty()) {
-            Text(
-                text = if (regular.isEmpty()) emptyLabel else noMatchesLabel,
-                style = MaterialTheme.typography.bodyMedium,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                modifier = Modifier.padding(16.dp),
-            )
-        } else {
-            LazyColumn(modifier = Modifier.weight(1f)) {
-                items(filtered, key = { it.id }) { chat ->
-                    ChatListItem(
-                        title = titleOf(chat),
-                        subtitle = formatDate(chat.updatedAt),
-                        onClick = { onOpenChat(chat) },
-                        onRename = { renameTarget = chat },
-                        onDelete = { deleteTarget = chat },
-                    )
-                }
+    }
+    val emptyRow: @Composable () -> Unit = {
+        Text(
+            text = if (regular.isEmpty()) emptyLabel else noMatchesLabel,
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.padding(16.dp),
+        )
+    }
+    val chatRow: @Composable (ChatSummary) -> Unit = { chat ->
+        ChatListItem(
+            title = titleOf(chat), subtitle = formatDate(chat.updatedAt),
+            onClick = { onOpenChat(chat) }, onRename = { renameTarget = chat },
+            onDelete = { deleteTarget = chat },
+        )
+    }
+    if (scrollEntireContent) {
+        LazyColumn(modifier = modifier.fillMaxSize()) {
+            item(key = "control:leading") { leadingContent() }
+            item(key = "control:search") { searchAndSort() }
+            item(key = "control:new") { OAssistSettingRow(title = newChatLabel, onClick = onNewChat) }
+            if (assistant != null) item(key = "control:assistant") { assistantRow() }
+            if (filtered.isEmpty()) item(key = "control:empty") { emptyRow() }
+            else items(filtered, key = { "chat:${it.id}" }) { chat -> chatRow(chat) }
+            item(key = "control:trailing") { trailingContent() }
+        }
+    } else {
+        Column(modifier = modifier.fillMaxSize()) {
+            searchAndSort()
+            OAssistSettingRow(title = newChatLabel, onClick = onNewChat)
+            assistantRow()
+            if (filtered.isEmpty()) emptyRow()
+            else LazyColumn(modifier = Modifier.weight(1f)) {
+                items(filtered, key = { it.id }) { chat -> chatRow(chat) }
             }
         }
     }
