@@ -6,6 +6,28 @@ import java.util.concurrent.TimeoutException
 
 /** The caller owns the direct child; descendants may outlive it. */
 internal object ProcessRunner {
+    fun runToCompletion(cmd: List<String>): ExecResult =
+        runToCompletion(ProcessBuilder(cmd).redirectErrorStream(true).start())
+
+    internal fun runToCompletion(process: Process): ExecResult {
+        process.outputStream.close()
+        val output = FutureTask {
+            process.inputStream.bufferedReader().use { reader ->
+                val saved = StringBuilder()
+                val buffer = CharArray(8192)
+                while (true) {
+                    val count = reader.read(buffer)
+                    if (count < 0) break
+                    val keep = minOf(count, ShellPolicy.DEFAULT_MAX_BYTES - saved.length)
+                    saved.append(buffer, 0, keep)
+                }
+                saved.toString()
+            }
+        }
+        Thread(output, "priv-settings-output").apply { isDaemon = true }.start()
+        process.waitFor()
+        return ExecResult(process.exitValue(), output.get())
+    }
     fun run(cmd: List<String>, timeoutMs: Long, maxChars: Int): ExecResult =
         runProcess(ProcessBuilder(cmd).redirectErrorStream(true).start(), timeoutMs, maxChars)
 

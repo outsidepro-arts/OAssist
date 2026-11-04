@@ -92,10 +92,19 @@ internal class PrivServiceClient(private val appContext: Context) {
         timeoutMs: Long,
         write: (Parcel) -> Unit,
         read: (Parcel) -> T,
+        onCompletion: () -> Unit = {},
+        onUnavailable: ((Throwable) -> Throwable)? = null,
+        onNotDispatched: () -> Unit = {},
     ): Result<T> {
-        val target = service().getOrElse { return Result.failure(it) }
+        val serviceResult = try { service() } catch (e: Exception) {
+            onCompletion()
+            currentCoroutineContext().ensureActive()
+            if (onUnavailable == null) throw e
+            return Result.failure(onUnavailable(e))
+        }
+        val target = serviceResult.getOrElse { onCompletion(); return Result.failure(onUnavailable?.invoke(it) ?: it) }
         return runCatching {
-            deadline.await(timeoutMs) {
+            deadline.await(timeoutMs, onCompletion, onNotDispatched) {
                 val data = Parcel.obtain()
                 val reply = Parcel.obtain()
                 try {

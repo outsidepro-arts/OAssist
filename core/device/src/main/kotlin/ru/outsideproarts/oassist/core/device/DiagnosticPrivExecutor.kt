@@ -28,6 +28,7 @@ class DiagnosticPrivExecutor(private val delegate: PrivExecutor) : PrivExecutor 
     override suspend fun exec(cmd: List<String>, timeoutMs: Long, maxBytes: Int) = execute("exec") { delegate.exec(cmd, timeoutMs, maxBytes) }
     override suspend fun getSetting(namespace: String, key: String) = execute("get_setting") { delegate.getSetting(namespace, key) }
     override suspend fun putSetting(namespace: String, key: String, value: String) = execute("put_setting") { delegate.putSetting(namespace, key, value) }
+    override suspend fun reassertAccessibilityService(component: String, onCompletion: () -> Unit) = execute("reassert_accessibility") { delegate.reassertAccessibilityService(component, onCompletion) }
     override suspend fun inputTap(x: Int, y: Int) = execute("tap") { delegate.inputTap(x, y) }
     override suspend fun inputSwipe(fromX: Int, fromY: Int, toX: Int, toY: Int, durationMs: Long) = execute("swipe") { delegate.inputSwipe(fromX, fromY, toX, toY, durationMs) }
     override suspend fun inputKeyevent(keyCode: Int) = execute("keyevent") { delegate.inputKeyevent(keyCode) }

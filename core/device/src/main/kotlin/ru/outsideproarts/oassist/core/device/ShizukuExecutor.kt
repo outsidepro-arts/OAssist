@@ -82,6 +82,21 @@ class ShizukuExecutor(private val appContext: Context? = null) : PrivExecutor {
         }
     }
 
+    override suspend fun reassertAccessibilityService(component: String, onCompletion: () -> Unit): Result<Unit> {
+        val c = clientOrError().getOrElse { onCompletion(); return Result.failure(AccessibilityReassertUnavailableException(it)) }
+        val notDispatched = java.util.concurrent.atomic.AtomicBoolean()
+        return c.transact(
+            code = PrivUserService.TRANSACTION_REASSERT_ACCESSIBILITY,
+            timeoutMs = ShellPolicy.DEFAULT_TIMEOUT_MS + 5_000L,
+            write = { it.writeString(component) },
+            read = { it.readInt() to it.readString().orEmpty() },
+            onCompletion = onCompletion,
+            onUnavailable = ::AccessibilityReassertUnavailableException,
+            onNotDispatched = { notDispatched.set(true) },
+        ).mapCatching { (code, out) -> check(code == 0) { "Accessibility reassert: $out" } }
+            .fold({ Result.success(it) }, { Result.failure(if (notDispatched.get()) AccessibilityReassertUnavailableException(it) else it) })
+    }
+
     override suspend fun inputTap(x: Int, y: Int): Result<Unit> =
         input("tap", listOf(x.toString(), y.toString()))
 

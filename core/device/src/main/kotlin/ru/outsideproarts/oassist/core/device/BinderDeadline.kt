@@ -5,6 +5,7 @@ import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.withTimeout
 import java.util.concurrent.Executor
+import java.util.concurrent.atomic.AtomicInteger
 import kotlin.coroutines.EmptyCoroutineContext
 
 /**
@@ -17,24 +18,40 @@ internal class BinderDeadline(
 ) {
     private val slot = Mutex()
 
-    suspend fun <T> await(timeoutMs: Long, operation: () -> T): T = withTimeout(timeoutMs) {
-        slot.lock()
-        suspendCancellableCoroutine { continuation ->
-            try {
-                executor.execute {
+    suspend fun <T> await(timeoutMs: Long, onCompletion: () -> Unit = {}, onNotDispatched: () -> Unit = {}, operation: () -> T): T {
+        val state = AtomicInteger(0)
+        fun complete(expected: Int) {
+            if (state.compareAndSet(expected, 2)) {
+                if (expected == 0) onNotDispatched()
+                onCompletion()
+            }
+        }
+        try {
+            return withTimeout(timeoutMs) {
+                slot.lock()
+                suspendCancellableCoroutine { continuation ->
+                    continuation.invokeOnCancellation { complete(0) }
                     try {
-                        // Cancellation before dispatch must not send a stale request.
-                        if (continuation.isActive) {
-                            continuation.resumeWith(runCatching(operation))
+                        executor.execute {
+                            try {
+                                // Cancellation before dispatch must not send a stale request.
+                                if (state.compareAndSet(0, 1) && continuation.isActive) {
+                                    continuation.resumeWith(runCatching(operation))
+                                }
+                            } finally {
+                                slot.unlock()
+                                complete(1)
+                            }
                         }
-                    } finally {
+                    } catch (failure: Exception) {
                         slot.unlock()
+                        complete(0)
+                        continuation.resumeWith(Result.failure(failure))
                     }
                 }
-            } catch (failure: Exception) {
-                slot.unlock()
-                continuation.resumeWith(Result.failure(failure))
             }
+        } finally {
+            complete(0)
         }
     }
 }

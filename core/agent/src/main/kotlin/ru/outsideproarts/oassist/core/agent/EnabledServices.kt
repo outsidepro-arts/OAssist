@@ -1,6 +1,18 @@
 package ru.outsideproarts.oassist.core.agent
 
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
+import ru.outsideproarts.oassist.core.device.AccessibilityReassertUnavailableException
+
+class AccessibilityRestoreException(cause: Throwable) : IllegalStateException("Accessibility reassert failed", cause)
+
+suspend fun requestAccessibilityReassert(request: suspend () -> Result<Unit>) {
+    request().getOrElse {
+        currentCoroutineContext().ensureActive()
+        if (it !is AccessibilityReassertUnavailableException) throw AccessibilityRestoreException(it)
+    }
+}
 
 /**
  * Нотации записей компонент в secure-настройках `enabled_accessibility_services` и
@@ -11,15 +23,8 @@ import kotlinx.coroutines.delay
  */
 
 /** Нормализация записи компоненты: `pkg/.Class` → `pkg/pkg.Class`; прочее — как есть. */
-fun normalizeServiceComponent(entry: String): String {
-    val trimmed = entry.trim()
-    val sep = trimmed.indexOf('/')
-    if (sep <= 0 || sep == trimmed.lastIndex) return trimmed
-    val pkg = trimmed.substring(0, sep)
-    val cls = trimmed.substring(sep + 1)
-    val full = if (cls.startsWith('.')) pkg + cls else cls
-    return "$pkg/$full"
-}
+fun normalizeServiceComponent(entry: String): String =
+    ru.outsideproarts.oassist.core.device.normalizeServiceComponent(entry)
 
 /** Содержит ли `:`-список включённых сервисов компоненту (обе нотации равнозначны). */
 fun enabledServicesContain(services: String?, component: String): Boolean {
@@ -38,7 +43,15 @@ suspend fun <T : Any> awaitReconnected(
     requestReconnect: suspend () -> Unit,
     provider: () -> T?,
 ): T? {
-    runCatching { requestReconnect() }
+    try {
+        requestReconnect()
+    } catch (e: kotlinx.coroutines.CancellationException) {
+        throw e
+    } catch (e: AccessibilityRestoreException) {
+        throw e
+    } catch (_: Exception) {
+        // A failed reconnect request still permits the service to connect independently.
+    }
     val deadline = System.currentTimeMillis() + timeoutMs
     while (System.currentTimeMillis() < deadline) {
         delay(pollMs.coerceAtLeast(1L))

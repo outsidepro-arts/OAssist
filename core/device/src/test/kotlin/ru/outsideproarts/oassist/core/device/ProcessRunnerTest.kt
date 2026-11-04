@@ -69,16 +69,32 @@ class ProcessRunnerTest {
         assertTrue(process.destroyed)
     }
 
+    @Test fun completionRunnerWaitsForProcessWithoutTimedWaitOrDestroy() {
+        val process = ControlledProcess()
+        val result = AtomicReference<ExecResult>()
+        val runner = Thread { result.set(ProcessRunner.runToCompletion(process)) }.apply { start() }
+        assertTrue(process.untimedWaiting.await(2, TimeUnit.SECONDS))
+        assertFalse(process.destroyed)
+        assertTrue(runner.isAlive)
+        process.writeOutput("done")
+        process.complete()
+        runner.join(2000)
+        assertFalse(runner.isAlive)
+        assertEquals("done", result.get().stdout)
+        assertFalse(process.destroyed)
+    }
+
     private class ControlledProcess : Process() {
         private val pipe = PipedInputStream(1024)
         private val writer = PipedOutputStream(pipe)
         private val finished = CountDownLatch(1)
         val waiting = CountDownLatch(1)
+        val untimedWaiting = CountDownLatch(1)
         @Volatile var destroyed = false
         override fun getOutputStream() = ByteArrayOutputStream()
         override fun getInputStream() = pipe
         override fun getErrorStream() = ByteArrayInputStream(byteArrayOf())
-        override fun waitFor(): Int { finished.await(); return 0 }
+        override fun waitFor(): Int { untimedWaiting.countDown(); finished.await(); return 0 }
         override fun waitFor(timeout: Long, unit: TimeUnit): Boolean {
             waiting.countDown()
             return finished.await(timeout, unit)

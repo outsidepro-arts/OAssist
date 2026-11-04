@@ -11,6 +11,9 @@ data class ExecResult(
     val truncated: Boolean = false,
 )
 
+class AccessibilityReassertUnavailableException(cause: Throwable? = null) :
+    IllegalStateException("Accessibility reassert is unavailable", cause)
+
 internal fun Result<ExecResult>.checkExitCode(): Result<ExecResult> = mapCatching {
     check(it.exitCode == 0) { "Command failed (exit ${it.exitCode}): ${it.stdout}" }
     it
@@ -36,6 +39,10 @@ interface PrivExecutor {
 
     suspend fun getSetting(namespace: String, key: String): Result<String?>
     suspend fun putSetting(namespace: String, key: String, value: String): Result<Unit>
+    suspend fun reassertAccessibilityService(component: String, onCompletion: () -> Unit): Result<Unit> {
+        onCompletion()
+        return Result.failure(AccessibilityReassertUnavailableException())
+    }
     suspend fun inputTap(x: Int, y: Int): Result<Unit>
     suspend fun inputSwipe(fromX: Int, fromY: Int, toX: Int, toY: Int, durationMs: Long): Result<Unit>
     suspend fun inputKeyevent(keyCode: Int): Result<Unit>

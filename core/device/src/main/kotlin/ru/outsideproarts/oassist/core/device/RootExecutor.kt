@@ -36,6 +36,25 @@ class RootExecutor internal constructor(
 ) : PrivExecutor {
     constructor() : this(ProcessRunner::run)
     override val level: PrivilegeLevel = PrivilegeLevel.ROOT
+    private val reassertDeadline = BinderDeadline()
+    private val reassert = AccessibilityReassert { cmd ->
+        val flat = cmd.joinToString(" ") { "'" + it.replace("'", "'\\''") + "'" }
+        ProcessRunner.runToCompletion(listOf("su", "-c", "exec $flat"))
+    }
+
+    override suspend fun reassertAccessibilityService(component: String, onCompletion: () -> Unit): Result<Unit> {
+        val notDispatched = java.util.concurrent.atomic.AtomicBoolean()
+        return runCatching {
+            reassertDeadline.await(ShellPolicy.DEFAULT_TIMEOUT_MS + 5_000L, onCompletion, { notDispatched.set(true) }) {
+                try {
+                    reassert.run(component)
+                } catch (e: Exception) {
+                    android.util.Log.e("OAssist", "Accessibility reassert failed", e)
+                    throw e
+                }
+            }
+        }.fold({ Result.success(it) }, { Result.failure(if (notDispatched.get()) AccessibilityReassertUnavailableException(it) else it) })
+    }
 
     suspend fun isAvailable(): Boolean = withContext(Dispatchers.IO) {
         runCatching {

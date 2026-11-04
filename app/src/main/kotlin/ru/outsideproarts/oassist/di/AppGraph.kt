@@ -138,24 +138,17 @@ class AppGraph private constructor(context: Context) {
     /**
      * Пере-заявка нашего сервиса доступности: тогл компоненты в secure-настройках
      * (единственный рычаг без участия пользователя — система перестаёт держать
-     * привязку в фоне). Выключение обязательно возвращается — NonCancellable.
+     * привязку в фоне). Восстановлением владеет привилегированный исполнитель.
      */
+    private val reassertCoordinator = ru.outsideproarts.oassist.core.device.AccessibilityReassertCoordinator()
+
     private suspend fun reassertAccessibilityService() {
-        val priv = privilegeExecutor()
-        val key = ru.outsideproarts.oassist.core.agent.ScreenCurtain.ENABLED_ACCESSIBILITY_SERVICES
-        val current = priv.getSetting("secure", key)
-            .getOrNull()?.takeIf { it.isNotBlank() } ?: return
         val component = android.content.ComponentName(
             appContext,
             ru.outsideproarts.oassist.a11y.OAssistAccessibilityService::class.java,
         ).flattenToString()
-        val (without, removed) =
-            ru.outsideproarts.oassist.core.agent.removeServiceComponent(current, component)
-        if (!removed) return
-        if (priv.putSetting("secure", key, without).isFailure) return
-        kotlinx.coroutines.delay(REASSERT_SETTLE_MS)
-        kotlinx.coroutines.withContext(kotlinx.coroutines.NonCancellable) {
-            runCatching { priv.putSetting("secure", key, current) }
+        ru.outsideproarts.oassist.core.agent.requestAccessibilityReassert {
+            reassertCoordinator.run(component) { privilegeExecutor() }
         }
     }
 
@@ -659,7 +652,6 @@ class AppGraph private constructor(context: Context) {
 
     companion object {
         private const val MCP_LIST_TIMEOUT_MS = 20_000L
-        private const val REASSERT_SETTLE_MS = 400L
 
         @Volatile
         // Контексты уровня приложения, а не Activity/Service: синглтон безопасен.

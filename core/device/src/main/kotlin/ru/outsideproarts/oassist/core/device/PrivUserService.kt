@@ -22,12 +22,23 @@ class PrivUserService internal constructor(
 
     constructor() : this(ProcessRunner::run)
 
+    private val reassert = AccessibilityReassert(command = ProcessRunner::runToCompletion)
+
     init {
         attachInterface(null, DESCRIPTOR)
     }
 
     override fun onTransact(code: Int, data: Parcel, reply: Parcel?, flags: Int): Boolean {
         return when (code) {
+            TRANSACTION_REASSERT_ACCESSIBILITY -> {
+                data.enforceInterface(DESCRIPTOR)
+                val component = data.readString().orEmpty()
+                val result = runCatching { reassert.run(component) }
+                result.exceptionOrNull()?.let { android.util.Log.e("OAssist", "Accessibility reassert failed", it) }
+                reply?.writeInt(if (result.isSuccess) 0 else -1)
+                reply?.writeString(result.exceptionOrNull()?.message.orEmpty())
+                true
+            }
             TRANSACTION_EXEC -> {
                 data.enforceInterface(DESCRIPTOR)
                 val count = data.readInt().coerceIn(0, MAX_ARGS)
@@ -108,6 +119,7 @@ class PrivUserService internal constructor(
         const val TRANSACTION_EXEC = android.os.IBinder.FIRST_CALL_TRANSACTION + 0
         const val TRANSACTION_PUT_SETTING = android.os.IBinder.FIRST_CALL_TRANSACTION + 1
         const val TRANSACTION_INPUT = android.os.IBinder.FIRST_CALL_TRANSACTION + 2
+        const val TRANSACTION_REASSERT_ACCESSIBILITY = android.os.IBinder.FIRST_CALL_TRANSACTION + 3
 
         /**
          * Код destroy по документации Shizuku: `16777115` (в aidl — `16777114`).
