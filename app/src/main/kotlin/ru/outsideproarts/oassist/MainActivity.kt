@@ -201,7 +201,7 @@ private fun OAssistApp(
             startDestination = TopDest.Chat.route,
             modifier = Modifier.padding(padding),
         ) {
-            composable(TopDest.Chat.route) {
+            composable(TopDest.Chat.route) { chatEntry ->
                 val modeConfigs by graph.providers.observeModeConfigs()
                     .collectAsStateWithLifecycle(initialValue = emptyList())
                 val chatConfig = modeConfigs.find { it.mode == AssistMode.CHAT }
@@ -255,6 +255,9 @@ private fun OAssistApp(
                     soundEnabled = chatConfig?.effectiveSoundEnabled() ?: true,
                     stt = chatConfig?.effectiveStt() ?: ru.outsideproarts.oassist.core.model.SttConfig.DEFAULT,
                     audioIn = chatAudioIn,
+                    registerDestinationExit = remember(navController, chatEntry) {
+                        { onExit -> observeChatDestinationExit(navController, chatEntry, onExit) }
+                    },
                 )
             }
             composable("assistant_access") {

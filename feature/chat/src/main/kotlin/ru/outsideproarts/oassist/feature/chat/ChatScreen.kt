@@ -38,6 +38,7 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.rememberDrawerState
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
@@ -52,6 +53,9 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.input.KeyboardCapitalization
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.TextFieldValue
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
+import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.compose.ui.semantics.semantics
 import android.widget.Toast
 import kotlinx.coroutines.launch
@@ -137,6 +141,8 @@ fun ChatScreen(
     stt: SttConfig = SttConfig.DEFAULT,
     /** У модели флаг AUDIO_IN (только ручной) — иначе MODEL_AUDIO падает в STT. */
     audioIn: Boolean = false,
+    /** Register a callback invoked when this navigation entry stops being current. */
+    registerDestinationExit: (((() -> Unit)) -> (() -> Unit))? = null,
     /**
      * Сессия чата (ViewModel activity-скоупа): лента/ходы/черновик/стрим
      * переживают переключение вкладок, пока активно приложение.
@@ -225,6 +231,26 @@ fun ChatScreen(
     // Распознанное не пишется в поле; удержание подтверждается отпусканием, partials —
     // только в preview-статус. Порядок: send → слушатель → старт/стоп → mic.
     val voice = remember { VoiceHandle.get() }
+    val lifecycleOwner = LocalLifecycleOwner.current
+    val toggleSttOwner = remember(voice, lifecycleOwner) { ChatToggleSttOwner(voice) }
+    DisposableEffect(toggleSttOwner, lifecycleOwner) {
+        val observer = LifecycleEventObserver { _, event ->
+            when (event) {
+                Lifecycle.Event.ON_RESUME -> toggleSttOwner.resume()
+                Lifecycle.Event.ON_PAUSE -> toggleSttOwner.pause()
+                else -> Unit
+            }
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose {
+            lifecycleOwner.lifecycle.removeObserver(observer)
+            toggleSttOwner.dispose()
+        }
+    }
+    DisposableEffect(toggleSttOwner, registerDestinationExit) {
+        val unregister = registerDestinationExit?.invoke { toggleSttOwner.leaveDestination() }
+        onDispose { unregister?.invoke() }
+    }
     var capturing by remember { mutableStateOf(false) }
     var holdSession by remember { mutableStateOf<ChatVoiceHoldSession?>(null) }
     LaunchedEffect(voice) {
@@ -774,12 +800,13 @@ fun ChatScreen(
     }
     // Старт toggle-STT после выданных разрешений.
     fun startToggleStt() {
+        if (!toggleSttOwner.active) return
         val handle = voice
         if (handle == null || !handle.isSttAvailable(stt.recognizerComponent)) {
             sttErrorToast(CaptureError.NO_RECOGNIZER)
             return
         }
-        val error = handle.startStt(stt.language, sttListener(), stt.recognizerComponent, stt.bluetoothInput)
+        val error = toggleSttOwner.start(stt.language, sttListener(), stt.recognizerComponent, stt.bluetoothInput)
         if (error != null) sttErrorToast(error)
         else sounds?.playIfEnabled(AgentSound.VOICE_START, soundEnabled)
     }
@@ -788,7 +815,7 @@ fun ChatScreen(
         ActivityResultContracts.RequestPermission(),
     ) { granted ->
         if (granted) {
-            startToggleStt()
+            toggleSttOwner.whenActive { startToggleStt() }
         } else {
             Toast.makeText(context, micDeniedText, Toast.LENGTH_LONG).show()
         }
@@ -800,8 +827,9 @@ fun ChatScreen(
     val btPermissionLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.RequestPermission(),
     ) { _ ->
-        pendingBtStart.value?.invoke()
+        val pending = pendingBtStart.value
         pendingBtStart.value = null
+        if (pending != null) toggleSttOwner.whenActive(pending)
     }
     // Тап микрофона — toggle STT (доступная альтернатива удержанию).
     fun toggleSttMic() {

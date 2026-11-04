@@ -20,12 +20,12 @@ Linux runners. Настройка автоматического выпуска 
 
 ## Системные разрешения
 
-`SystemPermissionLifecycleTest` открывает системные окна и требует отдельной подготовки
+`SystemPermissionLifecycleTest` и `ChatTogglePermissionTest` открывают системные окна и требуют отдельной подготовки
 разрешений. Соберите и установите debug APK приложения и androidTest APK на эмулятор,
 затем запустите `pwsh -NoProfile -File tools/run-system-permission-tests.ps1 -Serial emulator-5554`
 с фактическим serial. Скрипт временно меняет CAMERA и RECORD_AUDIO, затем восстанавливает
 их исходное состояние; доступ поверх окон должен быть выключен. Запускайте остальные
-instrumentation-тесты с исключением этого класса и четырёх VIS-классов ниже, как в `.github/workflows/android.yml`.
+instrumentation-тесты с исключением этих классов и четырёх VIS-классов ниже, как в `.github/workflows/android.yml`.
 Все три фазы обязательны в CI. При принудительном завершении скрипта восстановление не гарантируется.
 
 ## Контекст системного ассистента
@@ -42,7 +42,7 @@ Runner предназначен только для эмулятора API 31+: 
 Эта отдельная обязательная фаза выполняет `VoiceInteractionCaptureTest`,
 `AssistHandoffLifecycleTest`, `AssistServiceHandoffTest` и `AssistTurnSnapshotTest`
 из пакета `ru.outsideproarts.oassist.vis` (5 тестов). Только эти четыре класса,
-наряду с `SystemPermissionLifecycleTest`, исключены из общего запуска через `notClass`.
+наряду с `SystemPermissionLifecycleTest` и `ChatTogglePermissionTest`, исключены из общего запуска через `notClass`.
 Неподготовленный прямой запуск завершается ошибкой предусловия, а не пропуском тестов.
 
 ## Сборка и тесты

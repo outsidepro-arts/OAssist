@@ -6,6 +6,7 @@ $ErrorActionPreference = 'Stop'
 $PSNativeCommandUseErrorActionPreference = $false
 $package = 'ru.outsideproarts.oassist'
 $testClass = "$package.permission.SystemPermissionLifecycleTest"
+$chatTestClass = "$package.chat.ChatTogglePermissionTest"
 $permissions = @('android.permission.CAMERA', 'android.permission.RECORD_AUDIO')
 
 function Invoke-Adb([string[]]$Arguments) {
@@ -53,9 +54,9 @@ $failure = $null
 $restoreFailures = @()
 try {
   foreach ($permission in $permissions) { Set-PermissionState $permission $user @{ Granted = $false; UserSet = $false; UserFixed = $false } }
-  $output = Invoke-Adb @('shell', 'am', 'instrument', '--user', $user, '-w', '-e', 'systemPermissionFixture', 'true', '-e', 'class', $testClass, "$package.test/androidx.test.runner.AndroidJUnitRunner")
+  $output = Invoke-Adb @('shell', 'am', 'instrument', '--user', $user, '-w', '-e', 'systemPermissionFixture', 'true', '-e', 'class', "$testClass,$chatTestClass", "$package.test/androidx.test.runner.AndroidJUnitRunner")
   Write-Output $output
-  if ($output -notmatch '(?m)^OK \(5 tests\)\s*$') { throw 'Instrumentation did not report five passing tests' }
+  if ($output -notmatch '(?m)^OK \(6 tests\)\s*$') { throw 'Instrumentation did not report six passing tests' }
 } catch { $failure = $_ }
 finally {
   foreach ($permission in $permissions) {
