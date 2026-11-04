@@ -22,8 +22,6 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import ru.outsideproarts.oassist.core.model.OAssistLog
-import java.util.ArrayList
-import kotlin.concurrent.thread
 
 /**
  * Захват микрофона: STT через системный SpeechRecognizer (текст наружу)
@@ -272,7 +270,7 @@ class VoiceListener(
         return true
     }
 
-    internal fun cancelStt(owner: SttListener): Boolean {
+    fun cancelStt(owner: SttListener): Boolean {
         if (sttSession?.listener !== owner) return false
         cancelStt()
         return true
@@ -280,7 +278,7 @@ class VoiceListener(
 
     /** Жёсткая отмена без финала и без общих callback со следующим захватом. */
     fun cancelStt() {
-        val listener = sttSession?.listener
+        val listener = sttSession?.listener ?: return
         cancelPendingRetry()
         sttGate.invalidate()
         if (sttSession != null) {
@@ -327,19 +325,12 @@ class VoiceListener(
         const val RAW_SAMPLE_RATE = WavEncoder.SAMPLE_RATE
     }
 
-    @Volatile
-    private var rawStop = false
-    private var rawThread: Thread? = null
-    private var recorder: AudioRecord? = null
-    private val rawPcm = ArrayList<Short>(RAW_SAMPLE_RATE * 10)
-    private val rawLock = Any()
+    private var rawCapture: RawCapture? = null
 
     /**
-     * Начать сырую запись (WAV 16 кГц моно). Пик держим в памяти;
-     * при [MAX_RAW_SEC] запись сама встаёт (отпускание холда забирает итог).
-     * [bluetoothInput] — AUTO-маршрут: гарнитура при подключении, иначе микрофон.
+     * Сырая запись WAV 16 кГц моно, не дольше [MAX_RAW_SEC].
+     * Guard остаётся у этого захвата до освобождения рекордера его потоком.
      */
-    // Разрешение проверено выше через hasMicPermission(); lint его не видит.
     @android.annotation.SuppressLint("MissingPermission")
     fun startRaw(maxSec: Int = MAX_RAW_SEC, bluetoothInput: Boolean = true): CaptureError? {
         session.start(CaptureMode.RAW)?.let { return it }
@@ -347,64 +338,51 @@ class VoiceListener(
             session.reset()
             return CaptureError.NO_PERMISSION
         }
+        var record: AudioRecord? = null
+        var captureOwnsRecord = false
         return try {
             val minBuf = AudioRecord.getMinBufferSize(
-                RAW_SAMPLE_RATE,
-                AudioFormat.CHANNEL_IN_MONO,
-                AudioFormat.ENCODING_PCM_16BIT,
+                RAW_SAMPLE_RATE, AudioFormat.CHANNEL_IN_MONO, AudioFormat.ENCODING_PCM_16BIT,
             )
-            if (minBuf <= 0) {
-                session.reset()
-                return CaptureError.INIT_FAILED
-            }
+            check(minBuf > 0)
             inputRouter.acquire(bluetoothInput)
-            val record = AudioRecord(
-                MediaRecorder.AudioSource.MIC,
-                RAW_SAMPLE_RATE,
-                AudioFormat.CHANNEL_IN_MONO,
-                AudioFormat.ENCODING_PCM_16BIT,
-                minBuf * 2,
+            val source = AudioRecord(
+                MediaRecorder.AudioSource.MIC, RAW_SAMPLE_RATE,
+                AudioFormat.CHANNEL_IN_MONO, AudioFormat.ENCODING_PCM_16BIT, minBuf * 2,
             )
-            if (record.state != AudioRecord.STATE_INITIALIZED) {
-                runCatching { record.release() }
-                inputRouter.release()
-                session.reset()
-                return CaptureError.INIT_FAILED
-            }
-            // Страховка маршрута: setCommunicationDevice выбирает источник сам,
-            // но hint на рекордере исключает расхождения прошивок с AudioSource.MIC.
+            record = source
+            check(source.state == AudioRecord.STATE_INITIALIZED)
             if (inputRouter.route.value == VoiceInputRoute.BLUETOOTH) {
                 context.bluetoothInputDevice()?.let { device ->
-                    runCatching { record.setPreferredDevice(device) }
+                    runCatching { source.setPreferredDevice(device) }
                 }
             }
-            synchronized(rawLock) { rawPcm.clear() }
-            rawStop = false
-            recorder = record
-            record.startRecording()
-            OAssistLog.info("OAssistRaw", "RAW capture routed to device type=${record.routedDevice?.type}")
-            val startedAt = System.currentTimeMillis()
-            _state.value = CaptureState.Listening(CaptureMode.RAW, startedAt)
-            rawThread = thread(name = "oassist-raw-capture", isDaemon = true) {
-                val buf = ShortArray(minBuf / 2)
-                while (!rawStop) {
-                    if (System.currentTimeMillis() - startedAt > maxSec * 1000L) break
-                    val read = runCatching { record.read(buf, 0, buf.size) }.getOrElse { -1 }
-                    if (read < 0) break
-                    if (read > 0) {
-                        synchronized(rawLock) {
-                            for (i in 0 until read) rawPcm.add(buf[i])
-                        }
+            lateinit var capture: RawCapture
+            capture = RawCapture(
+                source = object : RawAudioSource {
+                    override fun start() = source.startRecording()
+                    override fun read(buffer: ShortArray) =
+                        source.read(buffer, 0, buffer.size, AudioRecord.READ_NON_BLOCKING)
+                    override fun stop() = source.stop()
+                    override fun release() = source.release()
+                },
+                bufferSize = minBuf / 2,
+                maxSamples = maxSec.coerceIn(1, MAX_RAW_SEC) * RAW_SAMPLE_RATE,
+                onFinished = {
+                    retryHandler.post {
+                        if (rawCapture === capture && capture.stopRequested) finishRaw(capture)
                     }
-                }
-                runCatching {
-                    record.stop()
-                    record.release()
-                }
-            }
+                },
+            )
+            rawCapture = capture
+            captureOwnsRecord = true
+            capture.start()
+            _state.value = CaptureState.Listening(CaptureMode.RAW, System.currentTimeMillis())
             null
         } catch (e: Exception) {
-            recorder = null
+            if (!captureOwnsRecord) runCatching { record?.release() }
+            rawCapture = null
+            _state.value = CaptureState.Idle
             inputRouter.release()
             session.reset()
             CaptureError.INIT_FAILED
@@ -412,31 +390,28 @@ class VoiceListener(
     }
 
     /**
-     * Остановить запись и вернуть WAV. Пусто/тишина короче секунды —
-     * null (UI показывает хинт «удерживайте», а не шлёт тишину).
+     * Остановить RAW и вернуть WAV; запись короче секунды — null.
+     * При таймауте ожидания потока сохраняем BUSY до фактического освобождения рекордера.
      */
     fun stopRaw(): WavAudio? {
-        val mode = session.stop()
-        rawStop = true
-        runCatching { rawThread?.join(2000L) }
-        rawThread = null
-        recorder = null
-        // Порядок: сначала Idle (штатный конец), затем снятие маршрута.
-        _state.value = CaptureState.Idle
-        inputRouter.release()
-        if (mode != CaptureMode.RAW) return null
-        val pcm = synchronized(rawLock) { rawPcm.toShortArray() }
+        val capture = rawCapture ?: return null
+        if (!capture.stop(2000L)) return null
+        val pcm = capture.samples()
+        finishRaw(capture)
         if (pcm.size < RAW_SAMPLE_RATE) return null
         return WavAudio(WavEncoder.pcmToWav(pcm), WavEncoder.durationSec(pcm.size))
     }
 
-    /** Бросить запись без результата. */
+    /** Бросить только RAW-захват без результата. */
     fun cancelRaw() {
+        val capture = rawCapture ?: return
+        if (capture.stop(1000L)) finishRaw(capture)
+    }
+
+    private fun finishRaw(capture: RawCapture) {
+        if (rawCapture !== capture) return
+        rawCapture = null
         session.reset()
-        rawStop = true
-        runCatching { rawThread?.join(1000L) }
-        rawThread = null
-        recorder = null
         _state.value = CaptureState.Idle
         inputRouter.release()
     }

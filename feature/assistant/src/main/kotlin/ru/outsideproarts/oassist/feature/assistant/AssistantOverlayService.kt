@@ -144,6 +144,7 @@ private val sessionTurns = mutableListOf<ru.outsideproarts.oassist.core.model.St
     private var pendingPermission by mutableStateOf<BlockedPermissionRequest?>(null)
 
     private val voice get() = VoiceHandle.get()
+    private var sttOwner: Pair<VoiceHandle, SttListener>? = null
     private val speech get() = SpeechHandle.get()
     private val sounds get() = SoundHandle.get()
 
@@ -481,7 +482,9 @@ private val sessionTurns = mutableListOf<ru.outsideproarts.oassist.core.model.St
                     if (listening) sounds?.playIfEnabled(AgentSound.VOICE_FINISH, soundEnabled)
                     listening = false
                     sttPreview = ""
-                    voice?.cancelStt()
+                    val owner = sttOwner
+                    sttOwner = null
+                    owner?.first?.cancelStt(owner.second)
                 }
                 is AssistVoiceEffect.SendText -> {
                     sounds?.playIfEnabled(AgentSound.MSG_SEND, soundEnabled)
@@ -523,7 +526,10 @@ private val sessionTurns = mutableListOf<ru.outsideproarts.oassist.core.model.St
             hintText = null
             // Тишина нашего TTS перед стартом: движок распознавания падает поверх звука.
             speech?.stop()
-            val error = handle.startStt(sttLanguage, sttListener(), sttRecognizerComponent, sttBluetoothInput)
+            val listener = sttListener()
+            sttOwner = handle to listener
+            val error = handle.startStt(sttLanguage, listener, sttRecognizerComponent, sttBluetoothInput)
+            if (error != null && sttOwner?.second === listener) sttOwner = null
             if (!isCurrent() || voiceFlow.state.value !is AssistVoiceState.Listening) return@start
             if (error != null) {
                 hintText = sttErrorText(error)
@@ -538,12 +544,15 @@ private val sessionTurns = mutableListOf<ru.outsideproarts.oassist.core.model.St
 
     private fun sttListener(): SttListener = object : SttListener {
         override fun onPartial(text: String) {
+            if (sttOwner?.second !== this) return
             sttPreview = text
             voiceFlow.onSttPartial(text)
             refreshSessionNotification()
         }
 
         override fun onFinal(text: String) {
+            if (sttOwner?.second !== this) return
+            sttOwner = null
             sttPreview = ""
             listening = false
             sounds?.playIfEnabled(AgentSound.VOICE_FINISH, soundEnabled)
@@ -552,6 +561,8 @@ private val sessionTurns = mutableListOf<ru.outsideproarts.oassist.core.model.St
         }
 
         override fun onSttError(error: SttError) {
+            if (sttOwner?.second !== this) return
+            sttOwner = null
             sttPreview = ""
             listening = false
             sounds?.playIfEnabled(AgentSound.VOICE_FINISH, soundEnabled)

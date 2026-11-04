@@ -237,7 +237,15 @@ class TerminalTranscriptPersistenceTest(private val mode: AssistMode, private va
             ChatHandle.register(repository)
             NetworkHandle.register(object : NetworkHandle { override val isOnline = MutableStateFlow(true) })
             VoiceHandle.register(object : VoiceHandle by previousVoice {
+                private var sttOwner: SttListener? = null
+                override fun cancelStt(owner: SttListener): Boolean {
+                    if (sttOwner !== owner) return false
+                    sttOwner = null
+                    cancelStt()
+                    return true
+                }
                 override fun startStt(language: String, listener: SttListener, recognizerComponent: String?, bluetoothInput: Boolean): ru.outsideproarts.oassist.core.speech.CaptureError? {
+                    sttOwner = listener
                     sttStarted.complete(Unit)
                     return null
                 }

@@ -28,6 +28,9 @@ interface VoiceHandle {
     fun stopStt()
     fun cancelStt()
 
+    /** Cancel only the capture started with this exact listener; stale owners are no-op. */
+    fun cancelStt(owner: SttListener): Boolean
+
     fun startRaw(maxSec: Int = VoiceListener.MAX_RAW_SEC, bluetoothInput: Boolean = true): CaptureError?
     fun stopRaw(): WavAudio?
     fun cancelRaw()

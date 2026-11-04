@@ -121,6 +121,7 @@ class ChatVoiceHoldLifecycleTest {
             return null
         }
         override fun stopStt() { stops += 1 }
+        override fun cancelStt(owner: SttListener): Boolean = error("Unexpected scoped STT cancel")
         override fun cancelStt() { cancellations += 1 }
         override fun startRaw(maxSec: Int, bluetoothInput: Boolean): CaptureError? = error("Unexpected RAW capture")
         override fun stopRaw(): WavAudio? = error("Unexpected RAW capture")

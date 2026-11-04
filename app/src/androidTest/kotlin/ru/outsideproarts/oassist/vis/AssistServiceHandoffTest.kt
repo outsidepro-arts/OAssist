@@ -70,9 +70,17 @@ class AssistServiceHandoffTest {
             })
             NetworkHandle.register(object : NetworkHandle { override val isOnline = MutableStateFlow(false) })
             VoiceHandle.register(object : VoiceHandle by previousVoice {
+                private var sttOwner: SttListener? = null
+                override fun cancelStt(owner: SttListener): Boolean {
+                    if (sttOwner !== owner) return false
+                    sttOwner = null
+                    cancelStt()
+                    return true
+                }
                 override fun isSttAvailable(recognizerComponent: String?) = true
                 override fun bluetoothInputDecision(enabled: Boolean) = BtInputDecision.USE_MIC
                 override fun startStt(language: String, listener: SttListener, recognizerComponent: String?, bluetoothInput: Boolean): CaptureError? {
+                    sttOwner = listener
                     starts.incrementAndGet()
                     return null
                 }

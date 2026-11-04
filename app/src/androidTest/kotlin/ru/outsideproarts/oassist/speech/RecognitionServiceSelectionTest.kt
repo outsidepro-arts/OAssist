@@ -31,6 +31,72 @@ class RecognitionServiceSelectionTest {
     private val fixtureComponent = ComponentName(testContext, RecognitionServiceFixture::class.java)
 
     @Test
+    fun busySttCancellationLeavesRawOwnedUntilItStops() {
+        grantMicrophonePermissions()
+        val voice = sharedVoiceListener()
+        val refusedOwner = object : SttListener {
+            override fun onPartial(text: String) = error("Refused owner received partial")
+            override fun onFinal(text: String) = error("Refused owner received final")
+            override fun onSttError(error: SttError) = error("Refused owner received error")
+        }
+        try {
+            instrumentation.runOnMainSync {
+                assertNull(voice.startRaw(bluetoothInput = false))
+                val rawState = voice.state.value
+                val rawRoute = voice.route.value
+                assertEquals(CaptureError.BUSY, voice.startStt("ru-RU", refusedOwner))
+                assertFalse(voice.cancelStt(refusedOwner))
+                voice.cancelStt()
+                voice.stopStt()
+                assertEquals(rawState, voice.state.value)
+                assertEquals(rawRoute, voice.route.value)
+                assertEquals(CaptureError.BUSY, voice.startRaw(bluetoothInput = false))
+                voice.cancelRaw()
+                assertEquals(CaptureState.Idle, voice.state.value)
+                assertNull(voice.startRaw(bluetoothInput = false))
+                voice.cancelStt()
+                assertEquals(CaptureError.BUSY, voice.startRaw(bluetoothInput = false))
+                voice.cancelRaw()
+                assertEquals(CaptureState.Idle, voice.state.value)
+            }
+        } finally { instrumentation.runOnMainSync { voice.cancelRaw() } }
+    }
+
+    @Test
+    fun oldSttOwnerAndRawStopsCannotCancelNewSttCapture() {
+        grantMicrophonePermissions()
+        val voice = sharedVoiceListener()
+        val fixtureOwner = VoiceListener(targetContext, catalog())
+        val first = object : SttListener {
+            override fun onPartial(text: String) = Unit
+            override fun onFinal(text: String) = Unit
+            override fun onSttError(error: SttError) = Unit
+        }
+        val completed = CountDownLatch(1)
+        val result = AtomicReference<String>()
+        val next = object : SttListener {
+            override fun onPartial(text: String) = Unit
+            override fun onFinal(text: String) { result.set(text); completed.countDown() }
+            override fun onSttError(error: SttError) { result.set("error:$error"); completed.countDown() }
+        }
+        try {
+            assertEquals("fixture:keep-alive", recognize(fixtureOwner, "keep-alive", fixtureComponent.flattenToString()))
+            recognize(voice, "warmup", fixtureComponent.flattenToString())
+            instrumentation.runOnMainSync {
+                assertNull(voice.startStt("first", first, fixtureComponent.flattenToString(), false))
+                assertTrue(voice.cancelStt(first))
+                assertNull(voice.startStt("owned-next", next, fixtureComponent.flattenToString(), false))
+                assertFalse(voice.cancelStt(first))
+                assertNull(voice.stopRaw())
+                voice.cancelRaw()
+                assertEquals(CaptureError.BUSY, voice.startRaw(bluetoothInput = false))
+            }
+            assertTrue("Next owner's result timed out", completed.await(10, TimeUnit.SECONDS))
+            assertEquals("fixture:owned-next", result.get())
+        } finally { instrumentation.runOnMainSync { voice.cancelStt(); fixtureOwner.close() } }
+    }
+
+    @Test
     fun catalogListsFixtureAndExcludesOAssistStub() {
         val catalog = catalog()
 

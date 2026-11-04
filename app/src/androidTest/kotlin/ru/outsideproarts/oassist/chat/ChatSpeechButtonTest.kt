@@ -177,6 +177,7 @@ class ChatSpeechButtonTest {
             events.add("stop STT")
             state.value = CaptureState.Idle
         }
+        override fun cancelStt(owner: SttListener): Boolean = error("Unexpected scoped STT cancel")
         override fun cancelStt() {
             events.add("cancel STT")
             state.value = CaptureState.Idle

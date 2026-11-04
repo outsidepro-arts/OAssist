@@ -560,6 +560,7 @@ class AppGraph private constructor(context: Context) {
             ) = voiceListener.startStt(language, listener, recognizerComponent, bluetoothInput)
             override fun stopStt() = voiceListener.stopStt()
             override fun cancelStt() = voiceListener.cancelStt()
+            override fun cancelStt(owner: ru.outsideproarts.oassist.core.speech.SttListener) = voiceListener.cancelStt(owner)
             override fun startRaw(maxSec: Int, bluetoothInput: Boolean) =
                 voiceListener.startRaw(maxSec, bluetoothInput)
             override fun stopRaw() = voiceListener.stopRaw()
