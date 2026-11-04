@@ -31,7 +31,10 @@ class NoopExecutor : PrivExecutor {
  * Root-исполнитель: `su -c` с таймаутом и лимитом вывода.
  * Проверка наличия: `which su` + проба `su -c id`.
  */
-class RootExecutor : PrivExecutor {
+class RootExecutor internal constructor(
+    private val runProcess: (List<String>, Long, Int) -> ExecResult,
+) : PrivExecutor {
+    constructor() : this(ProcessRunner::run)
     override val level: PrivilegeLevel = PrivilegeLevel.ROOT
 
     suspend fun isAvailable(): Boolean = withContext(Dispatchers.IO) {
@@ -64,20 +67,20 @@ class RootExecutor : PrivExecutor {
         }
 
     private fun execRaw(cmd: List<String>, timeoutMs: Long, maxChars: Int): Result<ExecResult> =
-        runCatching { ProcessRunner.run(cmd, timeoutMs, maxChars) }
+        runCatching { runProcess(cmd, timeoutMs, maxChars) }
 
     override suspend fun getSetting(namespace: String, key: String): Result<String?> {
         ShellPolicy.checkNamespace(namespace)?.let { return Result.failure(IllegalArgumentException(it)) }
-        return execTrusted(listOf("/system/bin/settings", "get", namespace, key)).map { it.stdout.trim().takeIf { v -> v != "null" } }
+        return execTrusted(listOf("/system/bin/settings", "get", namespace, key)).settingValue()
     }
 
     override suspend fun putSetting(namespace: String, key: String, value: String): Result<Unit> {
         ShellPolicy.checkNamespace(namespace)?.let { return Result.failure(IllegalArgumentException(it)) }
-        return execTrusted(listOf("/system/bin/settings", "put", namespace, key, value)).map { }
+        return execTrusted(listOf("/system/bin/settings", "put", namespace, key, value)).checkExitCode().map { }
     }
 
     override suspend fun inputTap(x: Int, y: Int): Result<Unit> =
-        execTrusted(listOf("/system/bin/input", "tap", x.toString(), y.toString())).map { }
+        execTrusted(listOf("/system/bin/input", "tap", x.toString(), y.toString())).checkExitCode().map { }
 
     override suspend fun inputSwipe(fromX: Int, fromY: Int, toX: Int, toY: Int, durationMs: Long): Result<Unit> =
         execTrusted(
@@ -86,10 +89,10 @@ class RootExecutor : PrivExecutor {
                 fromX.toString(), fromY.toString(), toX.toString(), toY.toString(),
                 durationMs.coerceIn(1, 5000).toString(),
             ),
-        ).map { }
+        ).checkExitCode().map { }
 
     override suspend fun inputKeyevent(keyCode: Int): Result<Unit> =
-        execTrusted(listOf("/system/bin/input", "keyevent", keyCode.toString())).map { }
+        execTrusted(listOf("/system/bin/input", "keyevent", keyCode.toString())).checkExitCode().map { }
 
     companion object {
         /** Быстрая эвристика без shell: наличие бинарника su в PATH. */

@@ -62,9 +62,7 @@ class ShizukuExecutor(private val appContext: Context? = null) : PrivExecutor {
 
     override suspend fun getSetting(namespace: String, key: String): Result<String?> {
         ShellPolicy.checkNamespace(namespace)?.let { return Result.failure(IllegalArgumentException(it)) }
-        return exec(listOf("settings", "get", namespace, key)).map {
-            it.stdout.trim().takeIf { v -> v != "null" }
-        }
+        return exec(listOf("settings", "get", namespace, key)).settingValue()
     }
 
     override suspend fun putSetting(namespace: String, key: String, value: String): Result<Unit> {

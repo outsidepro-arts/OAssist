@@ -11,6 +11,14 @@ data class ExecResult(
     val truncated: Boolean = false,
 )
 
+internal fun Result<ExecResult>.checkExitCode(): Result<ExecResult> = mapCatching {
+    check(it.exitCode == 0) { "Command failed (exit ${it.exitCode}): ${it.stdout}" }
+    it
+}
+
+internal fun Result<ExecResult>.settingValue(): Result<String?> =
+    checkExitCode().map { it.stdout.trim().takeIf { value -> value != "null" } }
+
 /**
  * Минимальный исполнитель привилегированных операций.
  * Слои: `intent` → `ui` (a11y) → `privileged` (этот интерфейс).
