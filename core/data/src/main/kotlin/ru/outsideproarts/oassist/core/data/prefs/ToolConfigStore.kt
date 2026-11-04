@@ -72,9 +72,8 @@ class ToolConfigStore(private val store: DataStore<Preferences>) {
         }
     }
 
-    /** Replace для импорта: стереть всё и применить снапшот целиком. */
+    /** Импорт не включает инструменты, отключённые на этом устройстве. */
     suspend fun replace(prefs: ToolPreferences) {
-        resetAll()
         store.edit { store ->
             prefs.disabled.forEach { store[booleanPreferencesKey(PREFIX_ENABLED + it)] = false }
             store[KEY_MAX_TOOL_ROUNDS] = normalizeMaxToolRounds(prefs.maxToolRounds)

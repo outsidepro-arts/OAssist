@@ -54,8 +54,12 @@ class McpServerRepository(
 
     internal suspend fun replaceFromBackup(configs: List<McpServerConfig>) = store.writes.withLock {
         store.invalidateEditors()
-        snapshot().forEach { deleteSecrets(it.id, it) }
-        store.replace(configs)
+        val current = snapshot().associateBy { it.id }
+        current.values.forEach { deleteSecrets(it.id, it) }
+        store.replace(configs.map { incoming ->
+            val local = current[incoming.id]
+            incoming.copy(enabled = incoming.enabled && local?.enabled == true && local.url == incoming.url)
+        })
     }
 
     /** Удаляет сервер вместе с его секретами. */
@@ -82,7 +86,12 @@ class McpServerRepository(
         secrets.delete(aliasForBearer(id))
     }
 
-    suspend fun setEnabled(id: String, enabled: Boolean) = store.writes.withLock { store.setEnabled(id, enabled) }
+    suspend fun setEnabled(original: McpServerConfig, enabled: Boolean, expectedEpoch: String) = store.writes.withLock {
+        if (expectedEpoch != store.editorEpoch || snapshot().firstOrNull { it.id == original.id } != original) {
+            throw McpEditorInvalidatedException()
+        }
+        store.setEnabled(original.id, enabled)
+    }
 
     suspend fun hasBearer(serverId: String): Boolean =
         secrets.contains(aliasForBearer(serverId))

@@ -210,7 +210,11 @@ fun SettingsScreen(
             )
             OAssistSettingRow(
                 title = stringResource(R.string.data_import),
-                subtitle = if (importUnfinished) stringResource(R.string.data_import_unfinished) else null,
+                subtitle = if (importUnfinished) {
+                    stringResource(R.string.data_import_unfinished) + "\n" + stringResource(R.string.data_subtitle)
+                } else {
+                    stringResource(R.string.data_subtitle)
+                },
                 icon = Icons.Default.ChevronRight,
                 onClick = onImport,
 

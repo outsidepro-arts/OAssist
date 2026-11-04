@@ -92,8 +92,55 @@ class BackupConcurrencyTest {
         release.complete(Unit)
         writer.await(); importer.await()
         assertEquals("https://imported.invalid", repo.snapshot().single().url)
+        assertFalse(repo.snapshot().single().enabled)
         assertTrue(repo.resolveHeaders(repo.snapshot().single()).isEmpty())
         assertFalse(secrets.contains(McpServerRepository.aliasForBearer("s")))
+    }
+
+    @Test fun disablingServerBeforeImportLockIsPreserved() = runTest {
+        val secrets = ImportSecrets()
+        val repo = McpServerRepository(McpConfigStore(Prefs()), secrets)
+        repo.upsert(server)
+        val entered = CompletableDeferred<Unit>()
+        val release = CompletableDeferred<Unit>()
+        secrets.beforePut = { entered.complete(Unit); release.await() }
+        val editor = async { repo.saveEditor(server.copy(enabled = false), "key".toCharArray(), false, repo.editorEpoch(), server) }
+        entered.await()
+        val importer = async { repo.importServers(listOf(server)) }
+        yield()
+        assertFalse(importer.isCompleted)
+        release.complete(Unit)
+        editor.await()
+        importer.await()
+        assertFalse(repo.snapshot().single().enabled)
+    }
+
+    @Test fun queuedToggleCannotEnableReplacementEvenWhenUrlIsUnchanged() = runTest {
+        for (url in listOf(server.url, "https://imported.invalid")) {
+            val secrets = ImportSecrets()
+            val repo = McpServerRepository(McpConfigStore(Prefs()), secrets)
+            val original = server.copy(enabled = false)
+            repo.upsert(original)
+            val epoch = repo.editorEpoch()
+            val entered = CompletableDeferred<Unit>()
+            val release = CompletableDeferred<Unit>()
+            secrets.beforeDelete = { entered.complete(Unit); release.await() }
+            val importer = async { repo.importServers(listOf(server.copy(url = url))) }
+            entered.await()
+            val toggle = async { runCatching { repo.setEnabled(original, true, epoch) } }
+            yield()
+            assertFalse(toggle.isCompleted)
+            release.complete(Unit)
+            importer.await()
+            assertTrue(toggle.await().exceptionOrNull() is McpEditorInvalidatedException)
+            assertFalse(repo.snapshot().single().enabled)
+            if (url != server.url) {
+                assertTrue(runCatching { repo.setEnabled(original, true, repo.editorEpoch()) }.exceptionOrNull() is McpEditorInvalidatedException)
+            }
+            val current = repo.snapshot().single()
+            repo.setEnabled(current, true, repo.editorEpoch())
+            assertTrue(repo.snapshot().single().enabled)
+        }
     }
 
     @Test fun queuedMcpEditorIsInvalidatedEvenForSameUrlReplacement() = runTest {

@@ -94,12 +94,61 @@ class BackupImportTest {
         } finally { reopened.close() }
     }
 
+    @Test fun importKeepsLocalPermissionsAndDisabledToolsAcrossReopen() = runTest {
+        val dir = temp.newFolder()
+        val f = Fixture(dir)
+        val deny = ToolGroups.key(ToolCategory.COMMUNICATION, ToolAccess.WRITE)
+        val ask = ToolGroups.key(ToolCategory.SCREEN_UI, ToolAccess.WRITE)
+        try {
+            f.approvals.replaceAll(mapOf(deny to ApprovalState.DENY, ToolGroups.MCP_DEFAULT to ApprovalState.DENY))
+            f.tools.setToolEnabled("local-disabled", false)
+            val backup = BackupV1(
+                approvals = mapOf(deny to "ALLOW", ask to "ALLOW", ToolGroups.MCP_DEFAULT to "ALLOW"),
+                alwaysAllowed = listOf("sms_send"),
+                toolPrefs = ToolPrefsBackup(disabled = listOf("import-disabled"), maxToolRounds = 1),
+            )
+            f.importer().apply(encodeBackup(backup)).getOrThrow()
+            assertEquals(mapOf(deny to ApprovalState.DENY, ToolGroups.MCP_DEFAULT to ApprovalState.DENY), f.approvals.snapshot())
+            assertEquals(setOf("local-disabled", "import-disabled"), f.tools.snapshot().disabled)
+            assertEquals(1, f.tools.snapshot().maxToolRounds)
+        } finally { f.close() }
+        val reopened = Fixture(dir)
+        try {
+            assertEquals(mapOf(deny to ApprovalState.DENY, ToolGroups.MCP_DEFAULT to ApprovalState.DENY), reopened.approvals.snapshot())
+            assertEquals(setOf("local-disabled", "import-disabled"), reopened.tools.snapshot().disabled)
+        } finally { reopened.close() }
+    }
+
+    @Test fun importEnablesOnlyPreviouslyEnabledServerWithIdenticalAddress() = runTest {
+        val dir = temp.newFolder()
+        val f = Fixture(dir)
+        val same = McpServerConfig("same", "Same", "https://same.invalid")
+        val changed = McpServerConfig("changed", "Changed", "https://old.invalid")
+        val disabled = McpServerConfig("disabled", "Disabled", "https://disabled.invalid", enabled = false)
+        try {
+            listOf(same, changed, disabled).forEach { f.mcp.upsert(it) }
+            val servers = listOf(same, changed.copy(url = "https://new.invalid"), disabled.copy(enabled = true),
+                McpServerConfig("new", "New", "https://new.invalid"))
+            f.importer().apply(encodeBackup(BackupV1(mcpServers = servers))).getOrThrow()
+        } finally { f.close() }
+        val reopened = Fixture(dir)
+        try {
+            val servers = reopened.mcp.snapshot().associateBy { it.id }
+            assertTrue(servers.getValue("same").enabled)
+            assertFalse(servers.getValue("changed").enabled)
+            assertFalse(servers.getValue("disabled").enabled)
+            assertFalse(servers.getValue("new").enabled)
+        } finally { reopened.close() }
+    }
+
     @Test fun lateFailurePersistsWarningAndSameFileRetryCompletesReplacement() = runTest {
         val dir = temp.newFolder()
         val f = Fixture(dir)
-        val raw = encodeBackup(BackupV1(providers = listOf(profile.copy(baseUrl = "https://new.invalid")), memory = "new"))
+        val group = ToolGroups.key(ToolCategory.COMMUNICATION, ToolAccess.WRITE)
+        val raw = encodeBackup(BackupV1(providers = listOf(profile.copy(baseUrl = "https://new.invalid")), memory = "new", approvals = mapOf(group to "ALLOW")))
         try {
             f.seed()
+            f.approvals.setRemembered(group, ApprovalState.DENY)
             f.beforeMemoryWrite = { throw IOException("disk failure") }
             assertTrue(f.importer().apply(raw).isFailure)
             assertEquals("https://new.invalid", f.providers.getProvider("p")!!.baseUrl)
@@ -112,6 +161,7 @@ class BackupImportTest {
             assertTrue(reopened.settings.importUnfinished.first())
             reopened.importer().apply(raw).getOrThrow()
             assertEquals("new", reopened.memory.read())
+            assertEquals(ApprovalState.DENY, reopened.approvals.snapshot()[group])
             assertFalse(reopened.settings.importUnfinished.first())
         } finally { reopened.close() }
     }
@@ -121,16 +171,21 @@ class BackupImportTest {
         val f = Fixture(dir)
         try {
             f.seed()
+            val group = ToolGroups.key(ToolCategory.COMMUNICATION, ToolAccess.WRITE)
+            f.approvals.setRemembered(group, ApprovalState.DENY)
             val reached = CompletableDeferred<Unit>()
             f.beforeMemoryWrite = { reached.complete(Unit); awaitCancellation() }
-            val job = launch { f.importer().apply(encodeBackup(BackupV1())); fail("Cancellation swallowed") }
+            val job = launch { f.importer().apply(encodeBackup(BackupV1(approvals = mapOf(group to "ALLOW")))); fail("Cancellation swallowed") }
             reached.await()
             job.cancelAndJoin()
             assertTrue(job.isCancelled)
             assertTrue(f.providers.observeProviders().first().isEmpty())
         } finally { f.close() }
         val reopened = Fixture(dir)
-        try { assertTrue(reopened.settings.importUnfinished.first()) } finally { reopened.close() }
+        try {
+            assertTrue(reopened.settings.importUnfinished.first())
+            assertEquals(ApprovalState.DENY, reopened.approvals.snapshot()[ToolGroups.key(ToolCategory.COMMUNICATION, ToolAccess.WRITE)])
+        } finally { reopened.close() }
     }
 
     @Test fun concurrentImporterInstancesWaitForOwnerAndRetryAfterCancellation() = runTest {
@@ -166,15 +221,15 @@ class BackupImportTest {
         val settings = SettingsDataStore(prefs("settings"))
         val providers = ProviderRepository(ProviderConfigStore(prefs("providers")), secrets)
         val tools = ToolConfigStore(prefs("tools"))
-        private val mcp = McpServerRepository(McpConfigStore(prefs("mcp")), secrets)
+        val mcp = McpServerRepository(McpConfigStore(prefs("mcp")), secrets)
         val skills = FileSkillStore({ dir }, prefs("skills"))
         var beforeMemoryWrite: suspend () -> Unit = {}
         private val diskMemory = FileMemoryStore(dir)
         val memory = object : MemoryStore by diskMemory {
             override suspend fun write(text: String) { beforeMemoryWrite(); diskMemory.write(text) }
         }
-        private val approvals = DataStoreApprovalStore(prefs("approvals"))
-        fun importer() = BackupImport(settings, providers, tools, mcp, skills, memory, approvals)
+        val approvals = DataStoreApprovalStore(prefs("approvals"))
+        fun importer() = BackupImport(settings, providers, tools, mcp, skills, memory)
         suspend fun seed() {
             providers.upsertProvider(profile)
             providers.setApiKey("p", "secret".toCharArray())

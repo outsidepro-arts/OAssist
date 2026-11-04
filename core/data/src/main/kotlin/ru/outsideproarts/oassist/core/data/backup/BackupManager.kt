@@ -17,8 +17,8 @@ import ru.outsideproarts.oassist.core.model.ToolPreferences
 
 /**
  * Экспорт/импорт/wipe (M5.3). Работает поверх [DataContainer]; секреты через
- * границу бэкапа не переходят (см. [BackupV1]). Импорт и wipe — replace:
- * отсутствующее в бэкапе удаляется с устройства.
+ * границу бэкапа не переходят (см. [BackupV1]). Импорт сохраняет локальные
+ * разрешения и ограничения инструментов; остальные данные заменяются.
  */
 class BackupManager(private val data: DataContainer) {
 
@@ -45,7 +45,7 @@ class BackupManager(private val data: DataContainer) {
 
     suspend fun import(raw: String): Result<Unit> = BackupImport(
         data.settings, data.providers, data.toolConfigs, data.mcpServers,
-        data.skills, data.memory, data.approvals,
+        data.skills, data.memory,
     ).apply(raw)
 
     /** Полный wipe: конфиги, навыки, память, история, секреты, always-разрешения. */
@@ -80,7 +80,6 @@ internal class BackupImport(
     private val mcpServers: McpServerRepository,
     private val skills: ru.outsideproarts.oassist.core.data.skill.SkillStore,
     private val memory: ru.outsideproarts.oassist.core.data.memory.MemoryStore,
-    private val approvals: ru.outsideproarts.oassist.core.data.prefs.ApprovalStore,
 ) {
     suspend fun apply(raw: String): Result<Unit> {
         val backup = decodeBackup(raw).getOrElse { return Result.failure(it) }
@@ -104,7 +103,6 @@ internal class BackupImport(
                     .forEach { skills.delete(it) }
                 memory.write(backup.memory)
                 AppLanguage.entries.firstOrNull { it.name == backup.language }?.let { settings.setLanguage(it) }
-                approvals.replaceAll(backup.toApprovalStates())
                 settings.setImportUnfinished(false)
                 Result.success(Unit)
             } catch (e: CancellationException) {

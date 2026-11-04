@@ -402,16 +402,17 @@
 
     <!-- Data: export/import/wipe -->
     <string name="data_title">Data</string>
-    <string name="data_subtitle">Export and import settings (no secrets — re-enter keys).</string>
+    <string name="data_subtitle">Export and import settings. Re-enter secrets. Backup permissions are not imported; disabled tools stay disabled. New MCP servers and servers with changed addresses are imported disabled.</string>
     <string name="data_export">Export settings</string>
     <string name="data_import">Import settings</string>
     <string name="data_wipe">Erase all data</string>
     <string name="data_wipe_title">Erase everything?</string>
     <string name="data_wipe_body">Providers, modes, skills, memory, history and secrets will be deleted. Cannot be undone.</string>
     <string name="data_export_done">Export saved</string>
-    <string name="data_import_done">Import done, re-enter secrets</string>
+    <string name="data_import_done">Import complete. Re-enter secrets. Permissions and disabled tools were kept; new MCP servers and servers with changed addresses are disabled.</string>
     <string name="data_import_unfinished">Import may be incomplete. Select the same file again. Re-enter secrets after a successful import.</string>
     <string name="mcp_editor_invalidated">MCP settings changed. Open the editor again.</string>
+    <string name="mcp_toggle_invalidated">MCP settings changed. Check the server and try again.</string>
     <string name="mcp_save_failed">MCP settings could not be fully saved. Check the settings and try saving again.</string>
     <string name="data_export_error">Could not export the backup. Some data may exceed the backup size limits.</string>
     <string name="data_import_error">Could not read backup: %1$s</string>

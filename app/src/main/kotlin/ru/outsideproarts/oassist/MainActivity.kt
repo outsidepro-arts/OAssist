@@ -613,8 +613,18 @@ private fun OAssistApp(
                     onDelete = { id ->
                         scope.launch { graph.data.mcpServers.delete(id) }
                     },
-                    onSetEnabled = { id, enabled ->
-                        scope.launch { graph.data.mcpServers.setEnabled(id, enabled) }
+                    onSetEnabled = { server, enabled, epoch ->
+                        scope.launch {
+                            try {
+                                graph.data.mcpServers.setEnabled(server, enabled, epoch)
+                            } catch (error: kotlinx.coroutines.CancellationException) {
+                                throw error
+                            } catch (error: ru.outsideproarts.oassist.core.data.mcp.McpEditorInvalidatedException) {
+                                showToast(context, SettingsR.string.mcp_toggle_invalidated)
+                            } catch (error: Exception) {
+                                showToast(context, SettingsR.string.mcp_save_failed)
+                            }
+                        }
                     },
                     onTest = { id ->
                         scope.launch {

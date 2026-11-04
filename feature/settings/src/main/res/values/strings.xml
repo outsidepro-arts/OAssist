@@ -399,16 +399,17 @@
 
     <!-- Данные: экспорт/импорт/wipe -->
     <string name="data_title">Данные</string>
-    <string name="data_subtitle">Экспорт и импорт настроек (без секретов — ключи вводятся заново).</string>
+    <string name="data_subtitle">Экспорт и импорт настроек. Секреты нужно ввести заново. Разрешения из копии не переносятся; отключённые инструменты остаются выключенными. Новые MCP-серверы и серверы с изменённым адресом импортируются выключенными.</string>
     <string name="data_export">Экспортировать настройки</string>
     <string name="data_import">Импортировать настройки</string>
     <string name="data_wipe">Стереть все данные</string>
     <string name="data_wipe_title">Стереть всё?</string>
     <string name="data_wipe_body">Удалятся провайдеры, режимы, навыки, память, история и секреты. Отменить нельзя.</string>
     <string name="data_export_done">Экспорт сохранён</string>
-    <string name="data_import_done">Импорт завершён, секреты введите заново</string>
+    <string name="data_import_done">Импорт завершён. Секреты введите заново. Разрешения и отключённые инструменты сохранены; новые MCP-серверы и серверы с изменённым адресом выключены.</string>
     <string name="data_import_unfinished">Импорт мог завершиться не полностью. Выберите тот же файл повторно. После успешного импорта введите секреты заново.</string>
     <string name="mcp_editor_invalidated">Настройки MCP изменились. Откройте редактор заново.</string>
+    <string name="mcp_toggle_invalidated">Настройки MCP изменились. Проверьте сервер и повторите действие.</string>
     <string name="mcp_save_failed">Не удалось полностью сохранить настройки MCP. Проверьте настройки и повторите сохранение.</string>
     <string name="data_export_error">Не удалось экспортировать бэкап. Некоторые данные могут превышать допустимый размер.</string>
     <string name="data_import_error">Не удалось прочитать бэкап: %1$s</string>

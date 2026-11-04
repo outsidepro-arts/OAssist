@@ -67,7 +67,7 @@ fun McpServersScreen(
     onSave: (McpServerConfig, McpSecretsInput, String, McpServerConfig?) -> Unit,
     editorEpoch: () -> String,
     onDelete: (String) -> Unit,
-    onSetEnabled: (String, Boolean) -> Unit,
+    onSetEnabled: (McpServerConfig, Boolean, String) -> Unit,
     onTest: (String) -> Unit,
     onBack: () -> Unit,
     modifier: Modifier = Modifier,
@@ -109,7 +109,7 @@ fun McpServersScreen(
                 editorIsNew = true
             },
             onEdit = { openedEpoch = editorEpoch(); editorFor = it },
-            onSetEnabled = onSetEnabled,
+            onSetEnabled = { server, enabled -> onSetEnabled(server, enabled, editorEpoch()) },
             onBack = onBack,
             modifier = modifier,
         )
@@ -121,7 +121,7 @@ private fun McpServersList(
     servers: List<McpServerConfig>,
     onAdd: () -> Unit,
     onEdit: (McpServerConfig) -> Unit,
-    onSetEnabled: (String, Boolean) -> Unit,
+    onSetEnabled: (McpServerConfig, Boolean) -> Unit,
     onBack: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
@@ -174,7 +174,7 @@ private fun McpServersList(
                         )
                         OAssistSwitchRow(
                             checked = server.enabled,
-                            onCheckedChange = { onSetEnabled(server.id, it) },
+                            onCheckedChange = { onSetEnabled(server, it) },
                             label = stringResource(R.string.mcp_enabled_label, server.name),
                             stateLabelOn = enabledState,
                             stateLabelOff = disabledState,
