@@ -89,22 +89,15 @@ class AgentLoop(
             parentOperationId = parentOperation,
             attributes = mapOf("mode" to sessionScope, "operation" to "agent"), secrets = diagnosticSecrets())
         try {
-        val initialInput = modelUserInput ?: ModelUserInput(userMessage)
-        val userImages = if (visionEnabled) images.orEmpty() else emptyList()
-        val userText = if (!visionEnabled && !images.isNullOrEmpty()) {
-            initialInput.requestText + IMAGE_DISABLED_NOTE
-        } else {
-            initialInput.requestText
-        }
-        val currentInput = initialInput.copy(requestText = userText)
+        val currentInput = modelUserInput ?: ModelUserInput(userMessage)
         val messages = buildList {
             addAll(trimHistoryAudio(history))
             add(
                 ChatMessage(
                     ChatRole.USER,
-                    userText,
+                    currentInput.requestText,
                     audio = audio,
-                    images = userImages,
+                    images = images.orEmpty(),
                     contextData = currentInput.context,
                 ),
             )
@@ -148,7 +141,16 @@ class AgentLoop(
             var anthropicReplay: ru.outsideproarts.oassist.core.model.AnthropicReplay? = null
             var geminiReplay: ru.outsideproarts.oassist.core.model.GeminiReplay? = null
 
-            val budgetedMessages = enforceImageBudget(messages)
+            val budgetedMessages = if (visionEnabled) {
+                enforceImageBudget(messages)
+            } else {
+                messages.map { message ->
+                    if (message.images.isEmpty()) message else message.copy(
+                        images = emptyList(),
+                        content = message.content + IMAGE_DISABLED_NOTE,
+                    )
+                }
+            }
             val roundMessages = buildRuntimeMessages(
                 budgetedMessages,
                 currentUserIndex,
@@ -313,18 +315,12 @@ class AgentLoop(
                 )
                 // Результат — отдельным tool-сообщением с tool_call_id,
                 // а не текстом от ассистента: иначе модель не узнаёт свой вызов и идёт по кругу.
-                val toolImages = if (visionEnabled) result.images else emptyList()
-                val toolOutput = if (!visionEnabled && result.images.isNotEmpty()) {
-                    result.output + IMAGE_DISABLED_NOTE
-                } else {
-                    result.output
-                }
                 messages.add(
                     ChatMessage(
                         role = ChatRole.TOOL,
-                        content = toolOutput,
+                        content = result.output,
                         toolCallId = tc.id,
-                        images = toolImages,
+                        images = result.images,
                     ),
                 )
                 liveToolStatuses[messages.lastIndex] = result.success

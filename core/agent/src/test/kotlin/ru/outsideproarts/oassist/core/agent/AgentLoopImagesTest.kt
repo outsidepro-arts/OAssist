@@ -116,4 +116,47 @@ class AgentLoopImagesTest {
         assertTrue(oldest.images.isEmpty())
         assertTrue(history.first().images.isNotEmpty())
     }
+
+    @Test
+    fun disabledVisionFiltersHistoryAndPreservesItForVisionModel() = runTest {
+        val image = ImagePart(imageBase64 = "QUJD")
+        val history = listOf(
+            ChatMessage(ChatRole.USER, "old user", images = listOf(image)),
+            ChatMessage(ChatRole.ASSISTANT, "", toolCalls = listOf(
+                ru.outsideproarts.oassist.core.model.ToolCallRef("call", "shot", "{}", "signature", "wire-id"),
+            ), reasoning = ru.outsideproarts.oassist.core.model.ReasoningBlock(text = "thinking")),
+            ChatMessage(ChatRole.TOOL, "old tool", toolCallId = "call", images = listOf(image)),
+        )
+        val original = history.toList()
+        val disabled = ScriptedClient(ArrayDeque())
+        AgentLoop(disabled, visionEnabled = false).stream("m", null, history, "question").toList()
+        val sent = disabled.seenMessages.single()
+        assertTrue(sent.all { it.images.isEmpty() })
+        val oldUser = sent.first { it.role == ChatRole.USER }
+        val oldTool = sent.first { it.role == ChatRole.TOOL }
+        assertTrue(oldUser.content.contains(IMAGE_DISABLED_NOTE.trim()))
+        assertTrue(oldTool.content.contains(IMAGE_DISABLED_NOTE.trim()))
+        assertEquals("call", oldTool.toolCallId)
+        assertEquals(history[1].toolCalls, sent.first { it.role == ChatRole.ASSISTANT }.toolCalls)
+        assertEquals(history[1].reasoning, sent.first { it.role == ChatRole.ASSISTANT }.reasoning)
+        assertEquals(original, history)
+        assertEquals(listOf(image), history[0].images)
+        assertEquals(listOf(image), history[2].images)
+
+        val enabled = ScriptedClient(ArrayDeque())
+        AgentLoop(enabled, visionEnabled = true).stream("m", null, history, "question").toList()
+        val restored = enabled.seenMessages.single()
+        assertEquals(listOf(image), restored.first { it.role == ChatRole.USER }.images)
+        assertEquals(listOf(image), restored.first { it.role == ChatRole.TOOL }.images)
+    }
+
+    @Test
+    fun disabledVisionKeepsNewToolImagesInTurnTranscript() = runTest {
+        val client = scripted()
+        var turn = emptyList<ChatMessage>()
+        AgentLoop(client, ToolRegistry(listOf(ShotTool())), visionEnabled = false)
+            .stream("m", null, emptyList(), "q", onTurnMessages = { turn = it }).toList()
+        assertEquals(listOf("QUJD"), turn.first { it.role == ChatRole.TOOL }.images.map { it.imageBase64 })
+        assertTrue(client.seenMessages[1].first { it.role == ChatRole.TOOL }.images.isEmpty())
+    }
 }
