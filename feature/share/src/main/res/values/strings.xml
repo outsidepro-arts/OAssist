@@ -1,5 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
+    <string name="share_retry_save">Повторить сохранение</string>
     <string name="share_activity_label">OAssist — общий доступ</string>
     <string name="share_title">Отправить в OAssist</string>
     <string name="share_received_label">Полученный контент</string>

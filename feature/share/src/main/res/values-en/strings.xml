@@ -1,5 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
+    <string name="share_retry_save">Retry saving</string>
     <string name="share_activity_label">OAssist — share</string>
     <string name="share_title">Share with OAssist</string>
     <string name="share_received_label">Received content</string>

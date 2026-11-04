@@ -43,6 +43,8 @@ import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.TextFieldValue
 import androidx.lifecycle.viewmodel.compose.viewModel
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import ru.outsideproarts.oassist.core.a11y.oassistHeading
@@ -69,6 +71,29 @@ import ru.outsideproarts.oassist.core.ui.components.OAssistPanel
 import ru.outsideproarts.oassist.core.ui.theme.OAssistTheme
 
 private const val SHARE_MAX_IMAGES = 4
+
+internal suspend fun loadShareImages(
+    resolver: android.content.ContentResolver,
+    imageUris: List<Uri>,
+): List<ru.outsideproarts.oassist.core.model.ImagePart> = withContext(Dispatchers.IO) {
+    imageUris.take(SHARE_MAX_IMAGES).mapNotNull { uri ->
+        val bytes = try {
+            resolver.openInputStream(uri)?.let { input ->
+                suspendCancellableCoroutine<ByteArray> { continuation ->
+                    // Android descriptor streams signal blocked readers when closed. Cancellation
+                    // must close here: the reader cannot reach use's finally while waiting for EOF.
+                    continuation.invokeOnCancellation { runCatching { input.close() } }
+                    continuation.resumeWith(runCatching { input.use { it.readBytes() } })
+                }
+            }
+        } catch (cancel: CancellationException) {
+            throw cancel
+        } catch (_: Exception) {
+            null
+        }
+        bytes?.let { ImageCodec.fromBytes(it) }
+    }
+}
 
 class ShareActivity : AppCompatActivity() {
 
@@ -216,13 +241,8 @@ private fun ShareFlow(payload: SharePayload) {
     }
 
     LaunchedEffect(Unit) {
-        vm.images = withContext(Dispatchers.IO) {
-            payload.imageUris.take(SHARE_MAX_IMAGES).mapNotNull { uri ->
-                runCatching {
-                    context.contentResolver.openInputStream(uri)?.use { it.readBytes() }
-                }.getOrNull()?.let { bytes -> ImageCodec.fromBytes(bytes) }
-            }
-        }
+        val resolver = context.applicationContext.contentResolver
+        vm.loadPayload { loadShareImages(resolver, payload.imageUris) }
     }
 
     // Тосты VM: строка резолвится в момент события в хелпере вне @Composable
@@ -270,11 +290,13 @@ private fun ShareFlow(payload: SharePayload) {
             response = vm.response,
             usage = vm.turnUsage,
             isStreaming = vm.isStreaming,
+            canSend = vm.canSend,
+            saveFailed = vm.saveFailed,
             thinkingContextReduced = vm.providerNotice != null,
             question = vm.question,
             onQuestionChange = { vm.question = it },
             onSend = {
-                if (vm.question.text.isNotBlank() && !vm.isStreaming) {
+                if (vm.question.text.isNotBlank() && vm.canSend) {
                     val net = ru.outsideproarts.oassist.core.net.NetworkHandle.get()
                     val request = buildShareAsk(payload, vm.question.text.trim(), templates)
                     if (net != null && !net.isOnline.value) {
@@ -406,6 +428,8 @@ private fun ShareConversation(
     response: String,
     usage: ru.outsideproarts.oassist.core.model.ProviderUsage?,
     isStreaming: Boolean,
+    canSend: Boolean,
+    saveFailed: Boolean,
     thinkingContextReduced: Boolean,
     question: TextFieldValue,
     onQuestionChange: (TextFieldValue) -> Unit,
@@ -446,6 +470,11 @@ private fun ShareConversation(
                     .oassistHeading(),
             )
             if (turns.isNotEmpty() || activeUserMsg != null) {
+                if (saveFailed) {
+                    TextButton(onClick = onSaveChat, modifier = Modifier.oassistTouchTarget()) {
+                        Text(stringResource(R.string.share_retry_save))
+                    }
+                }
                 TextButton(
                     onClick = if (isSaved) onDeleteChat else onSaveChat,
                     modifier = Modifier.oassistTouchTarget(),
@@ -534,7 +563,7 @@ private fun ShareConversation(
             )
             IconButton(
                 onClick = onSend,
-                enabled = question.text.isNotBlank() && !isStreaming,
+                enabled = question.text.isNotBlank() && canSend,
                 modifier = Modifier.oassistTouchTarget(),
             ) {
                 Icon(
@@ -572,11 +601,8 @@ private fun ShareReceivedPanel(payload: SharePayload, compact: Boolean) {
             payload.imageUris.take(SHARE_MAX_IMAGES).forEach { uri ->
                 var thumbBase64 by remember(uri) { mutableStateOf<String?>(null) }
                 LaunchedEffect(uri) {
-                    thumbBase64 = withContext(Dispatchers.IO) {
-                        runCatching {
-                            context.contentResolver.openInputStream(uri)?.use { it.readBytes() }
-                        }.getOrNull()?.let { bytes -> ImageCodec.fromBytes(bytes)?.imageBase64 }
-                    }
+                    thumbBase64 = loadShareImages(context.contentResolver, listOf(uri))
+                        .firstOrNull()?.imageBase64
                 }
                 thumbBase64?.let { base64 ->
                     OAssistImageThumbnail(base64 = base64, contentDescription = imageDesc)
