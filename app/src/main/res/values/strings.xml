@@ -11,6 +11,7 @@
 
     <string name="models_refresh_success">Модели загружены: %1$d</string>
     <string name="models_refresh_error">Не удалось обновить список моделей: %1$s</string>
+    <string name="models_save_error">Не удалось сохранить настройки модели</string>
     <string name="models_provider_not_found">Провайдер не найден</string>
     <string name="models_probe_tools">Модель поддерживает инструменты</string>
     <string name="models_probe_no_tools">Модель без поддержки инструментов</string>

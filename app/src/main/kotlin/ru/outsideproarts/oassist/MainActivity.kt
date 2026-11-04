@@ -747,25 +747,21 @@ private fun OAssistApp(
                     configs.find { it.mode == mode } ?: ModeConfig.default(mode)
                 }
                 val context = LocalContext.current
-                var models by remember { mutableStateOf(emptyList<ru.outsideproarts.oassist.core.model.ModelInfo>()) }
-                var isLoadingModels by remember { mutableStateOf(false) }
-                var isProbing by remember { mutableStateOf(false) }
-
-                LaunchedEffect(config?.providerId) {
-                    val providerId = config?.providerId
-                    models = if (providerId == null) {
-                        emptyList()
-                    } else {
-                        graph.providers.modelsForSelection(providerId)
-                    }
+                val screenScope = rememberCoroutineScope()
+                val catalog = remember {
+                    ModeCatalogController(
+                        screenScope,
+                        load = { id -> graph.providers.modelsForSelection(id) },
+                    )
                 }
+                DisposableEffect(catalog) { onDispose { catalog.close() } }
 
                 ModeConfigScreen(
                     mode = mode,
                     config = config,
                     providers = providers,
-                    models = models,
-                    isLoadingModels = isLoadingModels,
+                    models = catalog.models,
+                    isLoadingModels = catalog.isLoading,
                     loadDefaultPrompt = { graph.defaultPromptText(mode) },
                     onSave = { updated ->
                         scope.launch {
@@ -774,88 +770,59 @@ private fun OAssistApp(
                         }
                     },
                     onRefreshModels = { providerId ->
-                        scope.launch {
-                            isLoadingModels = true
+                        catalog.refresh(providerId, operation = {
                             val profile = providers.find { it.id == providerId }
-                            if (profile == null) {
-                                showToast(context, R.string.models_provider_not_found)
-                                models = emptyList()
-                            } else {
-                                runCatching {
-                                    val client = graph.modelClientFor(profile)
-                                    val fetched = client.fetchModels()
-                                    graph.providers.refreshModelCatalog(profile, fetched)
-                                    fetched
-                                }.onSuccess { fetched ->
-                                    models = fetched
-                                    showToast(context, R.string.models_refresh_success, fetched.size)
-                                }.onFailure { e ->
-                                    models = emptyList()
-                                    val message = ru.outsideproarts.oassist.core.provider.ProviderError.from(e)
-                                        .userMessage(context)
-                                    showToast(
-                                        context,
-                                        R.string.models_refresh_error,
-                                        message,
-                                        duration = android.widget.Toast.LENGTH_LONG,
-                                    )
-                                }
-                            }
-                            isLoadingModels = false
-                        }
-                    },
-                    onProviderSelected = { selectedId ->
-                        scope.launch {
-                            models = graph.providers.modelsForSelection(selectedId)
-                        }
-                    },
-                    isProbing = isProbing,
-                    onProbeModel = { probeProviderId, probeModelId ->
-                        scope.launch {
-                            isProbing = true
-                            val profile = providers.find { it.id == probeProviderId }
-                            if (profile == null) {
+                                ?: throw CatalogProviderMissing()
+                            val fetched = graph.modelClientFor(profile).fetchModels()
+                            graph.providers.refreshModelCatalog(profile, fetched)
+                            fetched
+                        }, onSuccess = { fetched ->
+                            showToast(context, R.string.models_refresh_success, fetched.size)
+                        }, onFailure = { e ->
+                            if (e is CatalogProviderMissing) {
                                 showToast(context, R.string.models_provider_not_found)
                             } else {
-                                runCatching {
-                                    val client = graph.modelClientFor(profile)
-                                    val caps = client.probeCapabilities(probeModelId)
-                                    graph.providers.updateModelCapabilities(probeProviderId, probeModelId, caps)
-                                    caps
-                                }.onSuccess { caps ->
-                                    models = graph.providers.modelsForSelection(probeProviderId)
-                                    showToast(
-                                        context,
-                                        if (ru.outsideproarts.oassist.core.model.ModelCapability.TOOLS in caps) {
-                                            R.string.models_probe_tools
-                                        } else {
-                                            R.string.models_probe_no_tools
-                                        },
-                                    )
-                                }.onFailure { e ->
-                                    val message = ru.outsideproarts.oassist.core.provider.ProviderError.from(e)
-                                        .userMessage(context)
-                                    showToast(
-                                        context,
-                                        R.string.models_refresh_error,
-                                        message,
-                                        duration = android.widget.Toast.LENGTH_LONG,
-                                    )
-                                }
+                                val message = ru.outsideproarts.oassist.core.provider.ProviderError.from(e).userMessage(context)
+                                showToast(context, R.string.models_refresh_error, message, duration = android.widget.Toast.LENGTH_LONG)
                             }
-                            isProbing = false
+                        })
+                    },
+                    onProviderSelected = { catalog.select(it) },
+                    isProbing = catalog.isProbing,
+                    onProbeModel = { providerId, modelId ->
+                        var hasTools = false
+                        catalog.probe(providerId, operation = {
+                            val profile = providers.find { it.id == providerId }
+                                ?: throw CatalogProviderMissing()
+                            val caps = graph.modelClientFor(profile).probeCapabilities(modelId)
+                            graph.providers.updateModelCapabilities(providerId, modelId, caps)
+                            hasTools = ru.outsideproarts.oassist.core.model.ModelCapability.TOOLS in caps
+                            graph.providers.modelsForSelection(providerId)
+                        }, onSuccess = {
+                            showToast(context, if (hasTools) R.string.models_probe_tools else R.string.models_probe_no_tools)
+                        }, onFailure = { e ->
+                            if (e is CatalogProviderMissing) {
+                                showToast(context, R.string.models_provider_not_found)
+                            } else {
+                                val message = ru.outsideproarts.oassist.core.provider.ProviderError.from(e).userMessage(context)
+                                showToast(context, R.string.models_refresh_error, message, duration = android.widget.Toast.LENGTH_LONG)
+                            }
+                        })
+                    },
+                    onSaveCapabilities = { providerId, modelId, caps ->
+                        catalog.update(providerId, onFailure = {
+                            showToast(context, R.string.models_save_error, duration = android.widget.Toast.LENGTH_LONG)
+                        }) {
+                            graph.providers.updateModelCapabilities(providerId, modelId, caps)
+                            graph.providers.modelsForSelection(providerId)
                         }
                     },
-                    onSaveCapabilities = { capsProviderId, capsModelId, caps ->
-                        scope.launch {
-                            graph.providers.updateModelCapabilities(capsProviderId, capsModelId, caps)
-                            models = graph.providers.modelsForSelection(capsProviderId)
-                        }
-                    },
-                    onSaveProtocol = { protoProviderId, protoModelId, protocol ->
-                        scope.launch {
-                            graph.providers.updateModelProtocol(protoProviderId, protoModelId, protocol)
-                            models = graph.providers.modelsForSelection(protoProviderId)
+                    onSaveProtocol = { providerId, modelId, protocol ->
+                        catalog.update(providerId, onFailure = {
+                            showToast(context, R.string.models_save_error, duration = android.widget.Toast.LENGTH_LONG)
+                        }) {
+                            graph.providers.updateModelProtocol(providerId, modelId, protocol)
+                            graph.providers.modelsForSelection(providerId)
                         }
                     },
                     loadVoices = { pkg -> graph.speechOutput.availableVoices(pkg) },

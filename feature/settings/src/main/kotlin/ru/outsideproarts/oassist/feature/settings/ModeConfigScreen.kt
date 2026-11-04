@@ -122,6 +122,7 @@ fun ModeConfigScreen(
     // процесса): rememberSaveable. config == null — конфиг ещё догружается.
     var providerId by rememberSaveable { mutableStateOf(config?.providerId ?: "") }
     var modelId by rememberSaveable { mutableStateOf(config?.modelId ?: "") }
+    LaunchedEffect(Unit) { onProviderSelected(providerId) }
     var initialPrompt by rememberSaveable { mutableStateOf(config?.initialPrompt ?: "") }
     // Дефолтный текст для предзаполнения поля, кнопки «Восстановить»
     // и подстановки при сохранении пустого поля. null — ещё не загружен.
@@ -194,6 +195,7 @@ fun ModeConfigScreen(
         if (config != null && configKey != syncedConfigKey) {
             syncedConfigKey = configKey ?: ""
             providerId = config.providerId ?: ""
+            onProviderSelected(providerId)
             modelId = config.modelId ?: ""
             val stored = config.initialPrompt
             initialPrompt = when {

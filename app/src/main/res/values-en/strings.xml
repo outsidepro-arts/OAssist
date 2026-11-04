@@ -11,6 +11,7 @@
 
     <string name="models_refresh_success">Models loaded: %1$d</string>
     <string name="models_refresh_error">Failed to refresh model list: %1$s</string>
+    <string name="models_save_error">Failed to save model settings</string>
     <string name="models_provider_not_found">Provider not found</string>
     <string name="models_probe_tools">Model supports tools</string>
     <string name="models_probe_no_tools">Model has no tool support</string>
