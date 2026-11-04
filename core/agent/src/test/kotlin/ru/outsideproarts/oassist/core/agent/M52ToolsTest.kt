@@ -3,6 +3,9 @@ package ru.outsideproarts.oassist.core.agent
 import kotlinx.coroutines.runBlocking
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
+import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.jsonPrimitive
+import kotlinx.serialization.json.int
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
@@ -12,6 +15,21 @@ import ru.outsideproarts.oassist.core.model.ToolCategory
 import ru.outsideproarts.oassist.core.model.ToolGroups
 
 class M52ToolsTest {
+
+    @Test
+    fun `notify_reply declares and enforces Unicode length limit`() = runBlocking {
+        var serviceReads = 0
+        val tool = NotifyReplyTool(NotifyActions(serviceProvider = { serviceReads++; null }))
+        val textSchema = tool.schema.parameters["properties"]!!.jsonObject["text"]!!.jsonObject
+        assertEquals(500, textSchema["maxLength"]!!.jsonPrimitive.int)
+        val result = tool.execute(buildJsonObject {
+            put("key", "key")
+            put("text", "😀".repeat(501))
+        })
+        assertFalse(result.success)
+        assertTrue(result.output.contains("500"))
+        assertEquals(0, serviceReads)
+    }
 
     @Test
     fun `percentToIndex отображает границы`() {

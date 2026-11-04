@@ -3,9 +3,42 @@ package ru.outsideproarts.oassist.core.agent
 import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class NotifyActionsTest {
+
+    @Test
+    fun reply_overLimitIsRejectedBeforeAnyServiceAccess() = runBlocking {
+        var serviceReads = 0
+        val actions = NotifyActions(serviceProvider = { serviceReads++; null })
+        for (text in listOf("x".repeat(501), "😀".repeat(501), "x".repeat(499) + "😀x")) {
+            val result = actions.reply("key", text)
+            assertFalse(result.success)
+            assertTrue(result.output.contains("500"))
+        }
+        assertEquals(0, serviceReads)
+    }
+
+    @Test
+    fun reply_blankIsRejectedBeforeAnyServiceAccess() = runBlocking {
+        var serviceReads = 0
+        val actions = NotifyActions(serviceProvider = { serviceReads++; null })
+        for (text in listOf("", " \n\t")) {
+            assertEquals("Пустой текст ответа", actions.reply("key", text).output)
+        }
+        assertEquals(0, serviceReads)
+    }
+
+    @Test
+    fun reply_limitCountsUnicodeCodePointsAndAccepts500() = runBlocking {
+        var serviceReads = 0
+        val actions = NotifyActions(serviceProvider = { serviceReads++; null })
+        for (text in listOf("x".repeat(500), "😀".repeat(500), "x".repeat(499) + "😀")) {
+            assertEquals(NotifyActions.SERVICE_DISABLED_MESSAGE, actions.reply("key", text).output)
+        }
+        assertEquals(3, serviceReads)
+    }
 
     @Test
     fun list_withoutAccess_reportsNotGranted() {

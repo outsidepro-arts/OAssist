@@ -100,9 +100,11 @@ class NotifyActions(
 
     /** Ответить на уведомление текстом (через первое действие с RemoteInput). */
     suspend fun reply(key: String, text: String): ToolResult {
+        if (text.isBlank()) return ToolResult(false, "Пустой текст ответа")
+        if (text.codePointCount(0, text.length) > MAX_REPLY_CHARS) {
+            return ToolResult(false, "Ответ превышает лимит $MAX_REPLY_CHARS символов Unicode; ответ не отправлен")
+        }
         val service = serviceOrError().getOrElse { return ToolResult(false, it.message ?: "Сервис недоступен") }
-        val trimmed = text.trim().take(MAX_REPLY_CHARS)
-        if (trimmed.isEmpty()) return ToolResult(false, "Пустой текст ответа")
         val sbn = service.activeNotifications?.find { it.key == key }
             ?: return ToolResult(false, "Уведомление не найдено — обновите список")
         if (isOwnNotification(sbn.packageName, service.packageName)) return ToolResult(false, OWN_NOTIFICATION_MESSAGE)
@@ -110,12 +112,12 @@ class NotifyActions(
             ?: return ToolResult(false, "У уведомления нет действия ответа")
         return runCatching {
             val results = Bundle().apply {
-                action.remoteInputs!!.forEach { putCharSequence(it.resultKey, trimmed) }
+                action.remoteInputs!!.forEach { putCharSequence(it.resultKey, text) }
             }
             val intent = Intent()
             RemoteInput.addResultsToIntent(action.remoteInputs, intent, results)
             action.actionIntent.send(service, 0, intent)
-            ToolResult(true, "Ответ отправлен")
+            ToolResult(true, "Действие ответа передано приложению; доставка адресату не подтверждена")
         }.getOrElse { ToolResult(false, "Не удалось отправить ответ: ${it.message}") }
     }
 
@@ -143,6 +145,7 @@ class NotifyActions(
         /** Свои уведомления OAssist (FGS-заглушки, сессия ассистента) скрыты от notify-тулов. */
         const val OWN_NOTIFICATION_MESSAGE =
             "Собственное уведомление OAssist скрыто и недоступно инструментам работы с уведомлениями"
+        /** Лимит в кодовых точках Unicode, как maxLength в JSON Schema. */
         const val MAX_REPLY_CHARS = 500
     }
 }

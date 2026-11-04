@@ -84,7 +84,8 @@ class NotifyReplyTool(private val notify: NotifyActions) : Tool {
                 })
                 put("text", buildJsonObject {
                     put("type", "string")
-                    put("description", "Текст ответа")
+                    put("description", "Полный текст ответа, не более ${NotifyActions.MAX_REPLY_CHARS} кодовых точек Unicode (включая пробелы). Превышение лимита отклоняется без отправки.")
+                    put("maxLength", NotifyActions.MAX_REPLY_CHARS)
                 })
             })
             put("required", kotlinx.serialization.json.buildJsonArray {
