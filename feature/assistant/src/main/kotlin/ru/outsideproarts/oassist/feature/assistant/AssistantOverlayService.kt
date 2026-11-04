@@ -134,7 +134,12 @@ private val sessionTurns = mutableListOf<ru.outsideproarts.oassist.core.model.St
     private var pendingBye = false
     /** Ход, отложенный до появления сети (пре-чек или ранний обрыв без сети). */
     private var pendingRetryText: String? = null
-    private var lastNotifAt = 0L
+    private var foregroundType: Int? = null
+    private val notificationUpdates = SessionNotificationUpdates(
+        scope = serviceScope,
+        now = android.os.SystemClock::elapsedRealtime,
+        publish = { publishSessionNotification() },
+    )
 
     /**
      * Запрос системных разрешений, чей диалог заблокирован системой (старт окна из фона):
@@ -212,7 +217,7 @@ private val sessionTurns = mutableListOf<ru.outsideproarts.oassist.core.model.St
         serviceScope.launch {
             PermissionRequestBridge.blocked.collect { request ->
                 pendingPermission = request
-                refreshSessionNotification(force = true)
+                refreshSessionNotification()
             }
         }
         // Фолбэк с гарнитуры mid-capture: подсказка в панели/уведомлении.
@@ -225,7 +230,7 @@ private val sessionTurns = mutableListOf<ru.outsideproarts.oassist.core.model.St
                     listening
                 ) {
                     hintText = getString(R.string.assistant_mic_bt_fallback)
-                    refreshSessionNotification(force = true)
+                    refreshSessionNotification()
                 }
                 prev = route
             }
@@ -270,7 +275,7 @@ private val sessionTurns = mutableListOf<ru.outsideproarts.oassist.core.model.St
         if (!sessionActive) {
             if (showOverlay && !Settings.canDrawOverlays(this)) {
                 hintText = getString(R.string.assistant_no_overlay)
-                refreshSessionNotification(force = true)
+                refreshSessionNotification()
                 return START_NOT_STICKY
             }
             mediaRouter = MediaButtonRouter(this) { execute(voiceFlow.onPlayPause()) }.also { it.start() }
@@ -293,6 +298,7 @@ private val sessionTurns = mutableListOf<ru.outsideproarts.oassist.core.model.St
 
     override fun onDestroy() {
         destroyed = true
+        notificationUpdates.close()
         pendingSttStart.cancel()
         ru.outsideproarts.oassist.core.agent.OverlayControl.unregister(overlayControlImpl)
         execute(voiceFlow.onClose())
@@ -328,20 +334,29 @@ private val sessionTurns = mutableListOf<ru.outsideproarts.oassist.core.model.St
 
     @SuppressLint("InlinedApi")
     private fun startForegroundCompat() {
-        if (android.os.Build.VERSION.SDK_INT >= 34) {
-            // Android 14+ валидирует типы и требует RECORD_AUDIO для типа microphone — без него specialUse.
+        val type = if (android.os.Build.VERSION.SDK_INT >= 34) {
             val micGranted = checkSelfPermission(Manifest.permission.RECORD_AUDIO) ==
                 PackageManager.PERMISSION_GRANTED
-            val type = if (micGranted) {
+            if (micGranted) {
                 ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE or
                     ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE
             } else {
                 ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE
             }
+        } else 0
+        // This service stays foreground until destruction. Repeated commands with the same
+        // type only update its notification; a new type still requires immediate promotion.
+        if (foregroundType == type) {
+            notificationUpdates.request()
+            return
+        }
+        if (android.os.Build.VERSION.SDK_INT >= 34) {
             startForeground(NOTIFICATION_ID, activeNotification(), type)
         } else {
             startForeground(NOTIFICATION_ID, activeNotification())
         }
+        foregroundType = type
+        notificationUpdates.foregroundSent()
     }
 
     private fun ensureChannel() {
@@ -459,16 +474,16 @@ private val sessionTurns = mutableListOf<ru.outsideproarts.oassist.core.model.St
         return android.app.PendingIntent.getService(this, cmd.hashCode(), intent, flags)
     }
 
-    /** Обновление сессионного уведомления в режиме без оверлея; [force] — мимо троттла. */
+    private fun refreshSessionNotification() {
+        if (!showOverlay && !destroyed && foregroundType != null) notificationUpdates.request()
+    }
+
     @SuppressLint("NotificationPermission")
-    private fun refreshSessionNotification(force: Boolean = false) {
-        if (showOverlay) return
-        val now = System.currentTimeMillis()
-        if (!force && now - lastNotifAt < NOTIF_MIN_INTERVAL_MS) return
-        lastNotifAt = now
+    private fun publishSessionNotification() {
+        if (destroyed || foregroundType == null) return
         runCatching {
             getSystemService(NotificationManager::class.java)
-                ?.notify(NOTIFICATION_ID, buildSessionNotification())
+                ?.notify(NOTIFICATION_ID, activeNotification())
         }
     }
 
@@ -505,13 +520,13 @@ private val sessionTurns = mutableListOf<ru.outsideproarts.oassist.core.model.St
             if (handle == null || !handle.isSttAvailable(sttRecognizerComponent)) {
                 hintText = getString(R.string.assistant_no_recognizer)
                 voiceFlow.onSttStartFailed()
-                refreshSessionNotification(force = true)
+                refreshSessionNotification()
                 return@start
             }
             if (checkSelfPermission(Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) {
                 hintText = getString(R.string.assistant_mic_denied)
                 voiceFlow.onSttStartFailed()
-                refreshSessionNotification(force = true)
+                refreshSessionNotification()
                 return@start
             }
             // Сервис просит Bluetooth-разрешение через ConsentActivity; отказ не блокирует микрофон.
@@ -537,7 +552,7 @@ private val sessionTurns = mutableListOf<ru.outsideproarts.oassist.core.model.St
                 listening = true
                 sounds?.playIfEnabled(AgentSound.VOICE_START, soundEnabled)
             }
-            refreshSessionNotification(force = true)
+            refreshSessionNotification()
         }
     }
 
@@ -555,7 +570,7 @@ private val sessionTurns = mutableListOf<ru.outsideproarts.oassist.core.model.St
             sttPreview = ""
             listening = false
             sounds?.playIfEnabled(AgentSound.VOICE_FINISH, soundEnabled)
-            refreshSessionNotification(force = true)
+            refreshSessionNotification()
             execute(voiceFlow.onSttFinal(text))
         }
 
@@ -573,7 +588,7 @@ private val sessionTurns = mutableListOf<ru.outsideproarts.oassist.core.model.St
                 -> getString(R.string.assistant_mic_error)
             }
             voiceFlow.onSttStartFailed()
-            refreshSessionNotification(force = true)
+            refreshSessionNotification()
         }
     }
 
@@ -611,7 +626,7 @@ private val sessionTurns = mutableListOf<ru.outsideproarts.oassist.core.model.St
             // Оффлайн: состояние не трогаем, ход повторится фронтом сети.
             pendingRetryText = text
             hintText = getString(ru.outsideproarts.oassist.core.ui.R.string.net_offline_retry)
-            refreshSessionNotification(force = true)
+            refreshSessionNotification()
             return
         }
         pendingRetryText = null
@@ -786,7 +801,7 @@ private val sessionTurns = mutableListOf<ru.outsideproarts.oassist.core.model.St
                             // сбора (`error` внутри своей лямбды-инициализатора
                             // ещё не в scope — поэтому отдельный флаг).
                             if (chunk.abrupt) sawAbrupt = true
-                            refreshSessionNotification(force = true)
+                            refreshSessionNotification()
                         }
                     }
                 }
@@ -829,12 +844,12 @@ private val sessionTurns = mutableListOf<ru.outsideproarts.oassist.core.model.St
                             android.widget.Toast.LENGTH_LONG,
                         ).show()
                     }
-                    refreshSessionNotification(force = true)
+                    refreshSessionNotification()
                     stopSelf()
                     return@launch
                 }
                 finishSpokenTurn(awaitIdle = { speech?.awaitIdle() }, continueTurn = { shouldContinue ->
-                    refreshSessionNotification(force = true)
+                    refreshSessionNotification()
                     execute(voiceFlow.onTurnFinished(shouldContinue))
                 }, continueDialog = continueDialog, channel = tts.channel)
             } finally {
@@ -845,7 +860,7 @@ private val sessionTurns = mutableListOf<ru.outsideproarts.oassist.core.model.St
                         isStreaming = false
                         srKeepFocusable = false
                         refreshOverlayFocusable()
-                        refreshSessionNotification(force = true)
+                        refreshSessionNotification()
                     }
                 }
             }
@@ -1024,7 +1039,6 @@ private val sessionTurns = mutableListOf<ru.outsideproarts.oassist.core.model.St
         private const val CHANNEL_ID = "oassist_overlay"
         private const val SESSION_CHANNEL_ID = "oassist_session"
         private const val NOTIFICATION_ID = 0x0A52
-        private const val NOTIF_MIN_INTERVAL_MS = 500L
         const val EXTRA_CMD = "cmd"
         const val EXTRA_REPLY = "reply_text"
         const val CMD_MIC = "mic"

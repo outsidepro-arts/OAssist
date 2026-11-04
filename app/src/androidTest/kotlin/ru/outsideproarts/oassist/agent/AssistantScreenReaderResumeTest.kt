@@ -1,6 +1,7 @@
 package ru.outsideproarts.oassist.agent
 
 import android.Manifest
+import android.app.Notification
 import android.app.NotificationManager
 import android.app.RemoteInput
 import android.content.Intent
@@ -128,6 +129,16 @@ class AssistantScreenReaderResumeTest {
             await { idleReceipts.get() == 1 }
             await { runBlocking { repository.loadTurns(ChatRepository.ASSISTANT_CHAT_ID).any { it.userText == "fixture question" } } }
             instrumentation.waitForIdleSync()
+            // UI-015: the provider completes immediately; Finish/speech/finally must converge
+            // to the final notification even when Android rate-limits notification updates.
+            try {
+                await { notifications.activeNotifications.any {
+                    it.notification.extras.getCharSequence(Notification.EXTRA_TEXT)?.toString()?.startsWith(answer.take(50)) == true &&
+                        it.notification.extras.getCharSequence(Notification.EXTRA_TITLE)?.toString() == context.getString(ru.outsideproarts.oassist.feature.assistant.R.string.assistant_title)
+                } }
+            } catch (failure: IllegalStateException) {
+                throw AssertionError("Finished notification missing: ${notifications.activeNotifications.map { it.notification.extras.getCharSequence(Notification.EXTRA_TITLE) to it.notification.extras.getCharSequence(Notification.EXTRA_TEXT) }}", failure)
+            }
             assertEquals("Screen reader must not restart STT automatically (autoSpeak=$autoSpeak)", 1, starts.get())
             // Busy ignores replies; accepting the next request proves that the first turn reached Idle.
             reply("second question")
