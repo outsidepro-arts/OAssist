@@ -10,6 +10,7 @@ import io.ktor.http.content.TextContent
 import io.ktor.client.plugins.contentnegotiation.ContentNegotiation
 import io.ktor.serialization.kotlinx.json.json
 import kotlinx.serialization.json.Json
+import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -29,7 +30,8 @@ import java.lang.reflect.Proxy
 import java.util.zip.ZipInputStream
 
 class ProviderDiagnosticContractTest {
-    @Test fun escapedProviderErrorIsSanitizedBeforeExport() = runTest {
+    // Ktor reads the body on its own dispatcher; virtual time could expire the body timeout first.
+    @Test(timeout = 10_000) fun escapedProviderErrorIsSanitizedBeforeExport() = runBlocking {
         // The file-backed test constructor and cipher are internal to the data module.
         val cipherType = Class.forName("ru.outsideproarts.oassist.core.data.diagnostics.DiagnosticCipher")
         val cipher = Proxy.newProxyInstance(cipherType.classLoader, arrayOf(cipherType)) { _, _, args -> args!![0] }
