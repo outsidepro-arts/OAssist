@@ -43,7 +43,7 @@ class ChatSpeechButtonTest {
     private val events = mutableListOf<String>()
 
     @Test
-    fun tapStopsSpeechWithoutOpeningMicrophoneAndNextTapStartsListening() = withChat {
+    fun tapStopsSpeechWithoutOpeningMicrophoneAndNextTapStartsListening() = withChat(expectedScopedCancels = 1) {
         speechButton().performTouchInput { click() }
         compose.runOnIdle { assertEquals(listOf("stop speech"), events) }
         idleButton().performTouchInput { click() }
@@ -51,7 +51,7 @@ class ChatSpeechButtonTest {
     }
 
     @Test
-    fun naturalSpeechCompletionRestoresVoiceInput() = withChat {
+    fun naturalSpeechCompletionRestoresVoiceInput() = withChat(expectedScopedCancels = 1) {
         speechButton().assertExists()
         compose.runOnIdle { speaking = false }
         idleButton().assertExists()
@@ -73,7 +73,7 @@ class ChatSpeechButtonTest {
     }
 
     @Test
-    fun cancellingHoldAfterSpeechInterruptionDoesNotRestartSpeechOrSend() = withChat {
+    fun cancellingHoldAfterSpeechInterruptionDoesNotRestartSpeechOrSend() = withChat(expectedGlobalCancels = 1) {
         val button = speechButton()
         button.performTouchInput { down(center) }
         compose.mainClock.advanceTimeBy(1_000L)
@@ -84,7 +84,7 @@ class ChatSpeechButtonTest {
     }
 
     @Test
-    fun semanticLongClickInterruptsSpeechAndStartsToggleInput() = withChat {
+    fun semanticLongClickInterruptsSpeechAndStartsToggleInput() = withChat(expectedScopedCancels = 1) {
         speechButton().performSemanticsAction(SemanticsActions.OnLongClick)
         compose.runOnIdle { assertEquals(listOf("stop speech", "start STT"), events) }
         captureButton()
@@ -93,7 +93,7 @@ class ChatSpeechButtonTest {
     }
 
     @Test
-    fun accessibilityVoiceActionInterruptsSpeechAndStartsInput() = withChat {
+    fun accessibilityVoiceActionInterruptsSpeechAndStartsInput() = withChat(expectedScopedCancels = 1) {
         val startLabel = context.getString(ChatR.string.chat_mic_start)
         val actions = speechButton().fetchSemanticsNode().config[SemanticsActions.CustomActions]
         compose.runOnIdle {
@@ -127,11 +127,17 @@ class ChatSpeechButtonTest {
         hasContentDescription(context.getString(ChatR.string.chat_mic), substring = true),
     )
 
-    private fun withChat(pendingCapture: Boolean = false, test: () -> Unit) {
+    private fun withChat(
+        pendingCapture: Boolean = false,
+        expectedScopedCancels: Int = 0,
+        expectedGlobalCancels: Int = 0,
+        test: () -> Unit,
+    ) {
         val instrumentation = InstrumentationRegistry.getInstrumentation()
         instrumentation.uiAutomation.grantRuntimePermission(context.packageName, Manifest.permission.RECORD_AUDIO)
         val original = checkNotNull(VoiceHandle.get())
-        VoiceHandle.register(TestVoiceHandle(pendingCapture))
+        val voice = TestVoiceHandle(pendingCapture)
+        VoiceHandle.register(voice)
         try {
             compose.setContent {
                 MaterialTheme {
@@ -150,6 +156,10 @@ class ChatSpeechButtonTest {
             try {
                 compose.runOnIdle { visible = false }
                 compose.waitForIdle()
+                compose.runOnIdle {
+                    assertEquals(expectedScopedCancels, voice.scopedCancels)
+                    assertEquals(expectedGlobalCancels, voice.globalCancels)
+                }
             } finally {
                 VoiceHandle.register(original)
             }
@@ -158,6 +168,11 @@ class ChatSpeechButtonTest {
 
     private inner class TestVoiceHandle(private val pendingCapture: Boolean) : VoiceHandle {
         private val state = MutableStateFlow<CaptureState>(CaptureState.Idle)
+        private var listener: SttListener? = null
+        var scopedCancels = 0
+            private set
+        var globalCancels = 0
+            private set
         override fun captureState() = state
         override fun routeState() = MutableStateFlow(VoiceInputRoute.MICROPHONE)
         override fun isSttAvailable(recognizerComponent: String?) = true
@@ -169,6 +184,8 @@ class ChatSpeechButtonTest {
             recognizerComponent: String?,
             bluetoothInput: Boolean,
         ): CaptureError? {
+            check(this.listener == null) { "Unexpected overlapping STT capture" }
+            this.listener = listener
             events.add("start STT")
             if (!pendingCapture) state.value = CaptureState.Listening(CaptureMode.STT, 0L)
             return null
@@ -177,8 +194,17 @@ class ChatSpeechButtonTest {
             events.add("stop STT")
             state.value = CaptureState.Idle
         }
-        override fun cancelStt(owner: SttListener): Boolean = error("Unexpected scoped STT cancel")
+        override fun cancelStt(owner: SttListener): Boolean {
+            check(listener === owner) { "Unexpected scoped STT owner" }
+            listener = null
+            scopedCancels++
+            state.value = CaptureState.Idle
+            return true
+        }
         override fun cancelStt() {
+            check(listener != null) { "Unexpected STT cancel" }
+            listener = null
+            globalCancels++
             events.add("cancel STT")
             state.value = CaptureState.Idle
         }
