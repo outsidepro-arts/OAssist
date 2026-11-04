@@ -7,6 +7,8 @@ import android.os.IBinder
 import android.os.Parcel
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
@@ -25,6 +27,7 @@ internal class PrivServiceClient(private val appContext: Context) {
     ).tag(SERVICE_TAG).version(SERVICE_VERSION).daemon(false).processNameSuffix("priv")
 
     private val lock = Mutex()
+    private val deadline = BinderDeadline()
     private var binder: IBinder? = null
     private var connection: ServiceConnection? = null
 
@@ -78,7 +81,11 @@ internal class PrivServiceClient(private val appContext: Context) {
 
     /**
      * Сырая транзакция: [write] наполняет запрос (после interface token),
-     * [read] разбирает ответ. Выполняется на IO с общим таймаутом.
+     * [read] разбирает ответ. После подключения [timeoutMs] ограничивает ожидание
+     * очереди и ответа. Одновременно выполняется одна транзакция на клиент.
+     * Таймаут/отмена не останавливают уже отправленную команду: worker сохраняет
+     * Parcel до возврата Binder, а поздний результат отбрасывается. [write] и [read]
+     * работают на IO и не должны менять состояние вызывающей сессии.
      */
     suspend fun <T> transact(
         code: Int,
@@ -87,28 +94,27 @@ internal class PrivServiceClient(private val appContext: Context) {
         read: (Parcel) -> T,
     ): Result<T> {
         val target = service().getOrElse { return Result.failure(it) }
-        return withContext(Dispatchers.IO) {
-            runCatching {
-                withTimeout(timeoutMs) {
-                    val data = Parcel.obtain()
-                    val reply = Parcel.obtain()
-                    try {
-                        data.writeInterfaceToken(PrivUserService.DESCRIPTOR)
-                        write(data)
-                        target.transact(code, data, reply, 0)
-                        read(reply)
-                    } finally {
-                        reply.recycle()
-                        data.recycle()
-                    }
+        return runCatching {
+            deadline.await(timeoutMs) {
+                val data = Parcel.obtain()
+                val reply = Parcel.obtain()
+                try {
+                    data.writeInterfaceToken(PrivUserService.DESCRIPTOR)
+                    write(data)
+                    target.transact(code, data, reply, 0)
+                    read(reply)
+                } finally {
+                    reply.recycle()
+                    data.recycle()
                 }
-            }.onFailure {
-                if (!target.isBinderAlive && lock.tryLock()) {
-                    try {
-                        if (binder === target) binder = null
-                    } finally {
-                        lock.unlock()
-                    }
+            }
+        }.onFailure {
+            currentCoroutineContext().ensureActive()
+            if (!target.isBinderAlive && lock.tryLock()) {
+                try {
+                    if (binder === target) binder = null
+                } finally {
+                    lock.unlock()
                 }
             }
         }
