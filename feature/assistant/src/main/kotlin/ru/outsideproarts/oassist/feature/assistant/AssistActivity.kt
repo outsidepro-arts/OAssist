@@ -49,7 +49,7 @@ class AssistActivity : AppCompatActivity() {
             return
         }
         val owner = if (incomingToken == null) AssistSessionStore.beginScreenCapture() else null
-        overlayNeeded = kotlinx.coroutines.runBlocking {
+        overlayNeeded = AssistSessionStore.activeShowOverlay() ?: kotlinx.coroutines.runBlocking {
             runCatching {
                 ru.outsideproarts.oassist.core.agent.AgentFactory.get()
                     .modeConfig(ru.outsideproarts.oassist.core.model.AssistMode.ASSISTANT)

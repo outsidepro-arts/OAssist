@@ -10,6 +10,7 @@ import android.os.Bundle
 import android.os.SystemClock
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
+import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicInteger
 import java.util.concurrent.atomic.AtomicReference
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -40,6 +41,7 @@ class AssistServiceHandoffTest {
         val previousFactory = AgentFactory.get()
         val previousVoice = requireNotNull(VoiceHandle.get())
         val previousNetwork = requireNotNull(NetworkHandle.get())
+        val desiredOverlay = AtomicBoolean(false)
         val starts = AtomicInteger()
         val cancels = AtomicInteger()
         val service = Intent(context, AssistantOverlayService::class.java)
@@ -65,7 +67,7 @@ class AssistServiceHandoffTest {
             AgentFactory.register(object : AgentFactory by previousFactory {
                 override suspend fun modeConfig(mode: AssistMode) = ModeConfig(
                     mode = mode, soundEnabled = false, stt = SttConfig(bluetoothInput = false),
-                    assistant = AssistantExtras(showOverlay = false, attachScreenshot = true),
+                    assistant = AssistantExtras(showOverlay = desiredOverlay.get(), attachScreenshot = true),
                 )
             })
             NetworkHandle.register(object : NetworkHandle { override val isOnline = MutableStateFlow(false) })
@@ -95,6 +97,18 @@ class AssistServiceHandoffTest {
             val owner = requireNotNull(AssistSessionStore.current())
             assertSame(image, owner.screenImage)
             owner.appendTurn(ChatMessage(ChatRole.USER, "retained history"), emptyList())
+
+            // Overlay access is denied by the host fixture. A new setting must not route
+            // this active notification session to the overlay permission screen.
+            assertFalse(android.provider.Settings.canDrawOverlays(context))
+            desiredOverlay.set(true)
+            val repeatToken = publish("reactivated through activity", null)
+            context.startActivity(Intent(context, AssistActivity::class.java)
+                .putExtra(AssistScreenHandoff.EXTRA_TOKEN, repeatToken).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+            await { owner.screenContext == "reactivated through activity" }
+            assertSame(owner, AssistSessionStore.current())
+            assertEquals(false, AssistSessionStore.activeShowOverlay())
+            desiredOverlay.set(false)
 
             // A replayed Intent reaches the actual running Service, then a valid empty snapshot follows it.
             context.startService(Intent(service).putExtra(AssistScreenHandoff.EXTRA_TOKEN, token))

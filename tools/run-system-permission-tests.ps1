@@ -9,6 +9,7 @@ $testClass = "$package.permission.SystemPermissionLifecycleTest"
 $chatTestClass = "$package.chat.ChatTogglePermissionTest"
 $holdTestClass = "$package.chat.ChatHoldPermissionTest"
 $permissions = @('android.permission.CAMERA', 'android.permission.RECORD_AUDIO')
+$overlayTestClass = "$package.agent.AssistantOverlayModeTest"
 
 function Invoke-Adb([string[]]$Arguments) {
   $output = @(& adb -s $Serial @Arguments 2>&1)
@@ -49,12 +50,16 @@ $overlay = Invoke-Adb @('shell', 'appops', 'get', '--user', $user, $package, 'SY
 if ($overlay -notmatch 'SYSTEM_ALERT_WINDOW: (deny|ignore|default)' -and $overlay -notmatch 'No operations') {
   throw "Overlay must be disabled: $overlay"
 }
+$overlayMode = if ($overlay -match 'SYSTEM_ALERT_WINDOW: (deny|ignore|default)') { $Matches[1] } else { 'default' }
+if ([int](Invoke-Adb @('shell', 'getprop', 'ro.build.version.sdk')).Trim() -ge 33) {
+  $permissions += 'android.permission.POST_NOTIFICATIONS'
+}
 $states = @{}
 foreach ($permission in $permissions) { $states[$permission] = Get-PermissionState $permission $user }
 $failure = $null
 $restoreFailures = @()
 try {
-  foreach ($permission in $permissions) { Set-PermissionState $permission $user @{ Granted = $false; UserSet = $false; UserFixed = $false } }
+  foreach ($permission in @('android.permission.CAMERA', 'android.permission.RECORD_AUDIO')) { Set-PermissionState $permission $user @{ Granted = $false; UserSet = $false; UserFixed = $false } }
   $output = Invoke-Adb @('shell', 'am', 'instrument', '--user', $user, '-w', '-e', 'systemPermissionFixture', 'true', '-e', 'class', "$testClass,$chatTestClass", "$package.test/androidx.test.runner.AndroidJUnitRunner")
   Write-Output $output
   if ($output -notmatch '(?m)^OK \(6 tests\)\s*$') { throw 'Instrumentation did not report six passing tests' }
@@ -62,8 +67,17 @@ try {
   $output = Invoke-Adb @('shell', 'am', 'instrument', '--user', $user, '-w', '-e', 'systemPermissionFixture', 'true', '-e', 'class', $holdTestClass, "$package.test/androidx.test.runner.AndroidJUnitRunner")
   Write-Output $output
   if ($output -notmatch '(?m)^OK \(1 test\)\s*$') { throw 'Hold permission instrumentation did not report one passing test' }
+  Invoke-Adb @('shell', 'appops', 'set', '--user', $user, $package, 'SYSTEM_ALERT_WINDOW', 'allow') | Out-Null
+  $output = Invoke-Adb @('shell', 'am', 'instrument', '--user', $user, '-w', '-e', 'overlayModeFixture', 'true', '-e', 'class', $overlayTestClass, "$package.test/androidx.test.runner.AndroidJUnitRunner")
+  Write-Output $output
+  if ($output -notmatch '(?m)^OK \(1 test\)\s*$') { throw 'Overlay mode instrumentation did not report one passing test' }
 } catch { $failure = $_ }
 finally {
+  try {
+    Invoke-Adb @('shell', 'appops', 'set', '--user', $user, $package, 'SYSTEM_ALERT_WINDOW', $overlayMode) | Out-Null
+    $restored = Invoke-Adb @('shell', 'appops', 'get', '--user', $user, $package, 'SYSTEM_ALERT_WINDOW')
+    if ($restored -notmatch "SYSTEM_ALERT_WINDOW: $overlayMode" -and !($overlayMode -eq 'default' -and $restored -match 'No operations')) { throw "Failed to restore overlay app-op: $restored" }
+  } catch { $restoreFailures += $_ }
   foreach ($permission in $permissions) {
     try { Set-PermissionState $permission $user $states[$permission] } catch { $restoreFailures += $_ }
   }

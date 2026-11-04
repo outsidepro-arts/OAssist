@@ -281,6 +281,7 @@ private val sessionTurns = mutableListOf<ru.outsideproarts.oassist.core.model.St
             mediaRouter = MediaButtonRouter(this) { execute(voiceFlow.onPlayPause()) }.also { it.start() }
             if (showOverlay) addOverlay()
             sessionActive = true
+            AssistSessionStore.activateUi(session, showOverlay)
             // Появление сессии звучит целиком ДО старта STT: эффекты
             // (включая StartStt) исполняем после конца overlay_start.
             val boot = voiceFlow.onActivate()
@@ -328,7 +329,7 @@ private val sessionTurns = mutableListOf<ru.outsideproarts.oassist.core.model.St
         attachScreenshot = config.assistant?.attachScreenshot ?: true
         // showOverlay фиксируется при старте сессии: решение «окно или уведомление» структурное,
         // переключение посреди сессии смешивало бы два UI (панель + живое уведомление).
-        showOverlay = config.assistant?.showOverlay ?: true
+        if (!sessionActive) showOverlay = config.assistant?.showOverlay ?: true
         soundEnabled = config.effectiveSoundEnabled()
     }
 

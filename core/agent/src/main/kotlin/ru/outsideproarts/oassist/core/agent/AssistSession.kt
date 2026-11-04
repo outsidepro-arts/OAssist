@@ -69,6 +69,7 @@ object AssistSessionStore {
 
     @Volatile
     private var session: AssistSession? = null
+    private var activeOverlayMode: Boolean? = null
     private var epoch = 0L
     private var captureOwner: ScreenCaptureOwner? = null
     private var pendingCapture: PendingScreenCapture? = null
@@ -93,9 +94,17 @@ object AssistSessionStore {
 
     fun current(): AssistSession? = session
 
+    fun activeShowOverlay(): Boolean? = synchronized(this) { activeOverlayMode }
+
+    /** Only the current session may publish its active interface mode. */
+    fun activateUi(expected: AssistSession, showOverlay: Boolean) = synchronized(this) {
+        if (session === expected) activeOverlayMode = showOverlay
+    }
+
     fun clear() {
         synchronized(this) {
             session = null
+            activeOverlayMode = null
             invalidateCapture()
         }
     }

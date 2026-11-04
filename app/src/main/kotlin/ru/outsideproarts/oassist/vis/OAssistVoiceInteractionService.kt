@@ -129,7 +129,7 @@ class OAssistVoiceInteractionSession(
      * приложения вообще не трогается; исключение FGS-старта откатывает на трамплин.
      */
     private fun startOverlay(token: String): Boolean {
-        val showOverlay = kotlinx.coroutines.runBlocking {
+        val showOverlay = AssistSessionStore.activeShowOverlay() ?: kotlinx.coroutines.runBlocking {
             runCatching {
                 ru.outsideproarts.oassist.core.agent.AgentFactory.get()
                     .modeConfig(ru.outsideproarts.oassist.core.model.AssistMode.ASSISTANT)

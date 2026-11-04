@@ -441,7 +441,7 @@
     <string name="mode_assistant_autoclose">Close panel after answer</string>
     <string name="mode_assistant_screenshot">Attach screen context</string>
     <string name="mode_assistant_show_overlay">Show panel over apps</string>
-    <string name="mode_assistant_show_overlay_hint">The service notification stays in both modes — Android requires it. Without the panel the session is managed from the notification; notification permission is required.</string>
+    <string name="mode_assistant_show_overlay_hint">The service notification stays in both modes — Android requires it. Without the panel the session is managed from the notification; notification permission is required. The mode change takes effect after you end the current session and start the assistant again.</string>
     <string name="mode_assistant_continue_dialog">Continue dialog automatically</string>
     <string name="mode_assistant_continue_dialog_hint">If the screen reader is selected as the speech channel, continue manually with the microphone or headset button.</string>
     <string name="mode_share_extras">Share behavior</string>

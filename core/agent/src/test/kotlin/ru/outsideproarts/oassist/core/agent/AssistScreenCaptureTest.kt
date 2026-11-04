@@ -28,6 +28,28 @@ class AssistScreenCaptureTest {
         assertNull(AssistSessionStore.consumeScreenCapture(token, true))
     }
 
+    @Test fun activeUiModeSurvivesCaptureHandoffAndRejectsStaleOwner() {
+        val first = AssistSessionStore.getOrCreate()
+        assertNull(AssistSessionStore.activeShowOverlay())
+        AssistSessionStore.activateUi(first, false)
+        val token = publish()
+        assertSame(first, AssistSessionStore.current())
+        assertEquals(false, AssistSessionStore.activeShowOverlay())
+        assertSame(first, AssistSessionStore.consumeScreenCapture(token, true))
+        assertEquals(false, AssistSessionStore.activeShowOverlay())
+
+        val staleToken = publish()
+        AssistSessionStore.clear(first)
+        assertNull(AssistSessionStore.activeShowOverlay())
+        assertNull(AssistSessionStore.consumeScreenCapture(staleToken, true))
+        val second = AssistSessionStore.getOrCreate()
+        AssistSessionStore.activateUi(second, true)
+        AssistSessionStore.activateUi(first, false)
+        AssistSessionStore.clear(first)
+        assertSame(second, AssistSessionStore.current())
+        assertEquals(true, AssistSessionStore.activeShowOverlay())
+    }
+
     @Test fun revokedScreenshotSettingRemovesPreviouslyCollectedImage() {
         val token = publish()
         val target = requireNotNull(AssistSessionStore.consumeScreenCapture(token, false))
