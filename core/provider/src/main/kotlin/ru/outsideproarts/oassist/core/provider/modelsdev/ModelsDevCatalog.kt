@@ -4,6 +4,8 @@ import io.ktor.client.HttpClient
 import io.ktor.client.request.get
 import io.ktor.client.statement.bodyAsText
 import java.io.File
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.jsonObject
@@ -18,7 +20,7 @@ import ru.outsideproarts.oassist.core.provider.ProviderJson
  *
  * Политика: свежий кэш (TTL) — без сети; протухший — один запрос с таймаутом,
  * при отказе — stale-кэш или null (дальше эвристика). Повторных попыток в
- * процессе после сбоя нет (backoff [FAILURE_BACKOFF_MS]).
+ * процессе после сбоя откладываются на [FAILURE_BACKOFF_MS].
  */
 class ModelsDevCatalog(
     private val http: HttpClient,
@@ -26,6 +28,7 @@ class ModelsDevCatalog(
     private val now: () -> Long = { System.currentTimeMillis() },
 ) {
     private val memory = mutableMapOf<String, ModelsDevSnapshot>()
+    private val mutex = Mutex()
     private var lastFailureAtMs: Long? = null
 
     /** `provider.npm` модели или null (нет в каталоге). */
@@ -36,25 +39,24 @@ class ModelsDevCatalog(
     suspend fun namesFor(providerKey: String): Map<String, String> =
         snapshotFor(providerKey)?.nameByModelId ?: emptyMap()
 
-    suspend fun snapshotFor(providerKey: String): ModelsDevSnapshot? {
-        memory[providerKey]?.let { return it }
-        val cached = cache.read(providerKey)
+    suspend fun snapshotFor(providerKey: String): ModelsDevSnapshot? = mutex.withLock {
+        val cached = memory[providerKey] ?: cache.read(providerKey)
         if (cached != null && now() - cached.updatedAtEpochMs < TTL_MS) {
             memory[providerKey] = cached
-            return cached
+            return@withLock cached
         }
         val failedAt = lastFailureAtMs
         if (failedAt != null && now() - failedAt < FAILURE_BACKOFF_MS) {
-            return cached?.also { memory[providerKey] = it }
+            return@withLock cached?.also { memory[providerKey] = it }
         }
         val fetched = fetchSnapshot(providerKey)
         if (fetched == null) {
             lastFailureAtMs = now()
-            return cached?.also { memory[providerKey] = it }
+            return@withLock cached?.also { memory[providerKey] = it }
         }
         cache.write(providerKey, fetched)
         memory[providerKey] = fetched
-        return fetched
+        fetched
     }
 
     private suspend fun fetchSnapshot(providerKey: String): ModelsDevSnapshot? {

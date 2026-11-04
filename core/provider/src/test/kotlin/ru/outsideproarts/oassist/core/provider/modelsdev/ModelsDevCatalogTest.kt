@@ -7,6 +7,10 @@ import io.ktor.http.HttpStatusCode
 import io.ktor.http.headersOf
 import java.io.File
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.async
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.CoroutineStart
+import kotlinx.coroutines.withTimeout
 import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
@@ -101,6 +105,70 @@ class ModelsDevCatalogTest {
         assertEquals("@ai-sdk/mistral", catalog.npmFor("opencode", "old"))
         assertNull(catalog.npmFor("opencode", "claude-opus-4-8"))
         assertEquals(0, cache.writes)
+    }
+
+    @Test
+    fun catalog_refreshesMemoryAfterTtlAndFailureBackoff_andPersistsRecovery() = runBlocking {
+        var time = 1_000_000L
+        var requests = 0
+        var failing = false
+        val engine = MockEngine {
+            requests++
+            val body = if (failing) "invalid" else if (requests >= 3) fixture.replace("GPT-5.5", "Updated") else fixture
+            respond(body, headers = headersOf("Content-Type", "application/json"))
+        }
+        val disk = FileModelsDevCache(tmp.root)
+        val catalog = ModelsDevCatalog(HttpClient(engine), disk, now = { time })
+
+        assertEquals("GPT-5.5", catalog.namesFor("opencode")["gpt-5.5"])
+        time += ModelsDevCatalog.TTL_MS
+        failing = true
+        assertEquals("@ai-sdk/openai", catalog.npmFor("opencode", "gpt-5.5"))
+        assertEquals(2, requests)
+        time += ModelsDevCatalog.FAILURE_BACKOFF_MS - 1
+        assertEquals("GPT-5.5", catalog.namesFor("opencode")["gpt-5.5"])
+        assertEquals(2, requests)
+        time++
+        failing = false
+        assertEquals("Updated", catalog.namesFor("opencode")["gpt-5.5"])
+        assertEquals(3, requests)
+        assertEquals(time, disk.read("opencode")?.updatedAtEpochMs)
+
+        val reopened = ModelsDevCatalog(HttpClient(engine), FileModelsDevCache(tmp.root), now = { time })
+        assertEquals("@ai-sdk/openai", reopened.npmFor("opencode", "gpt-5.5"))
+        assertEquals(3, requests)
+    }
+
+    @Test
+    fun concurrentStaleRequests_shareRefresh() = runBlocking {
+        withTimeout(5_000) {
+            var time = 1_000_000L
+            var requests = 0
+            val entered = CompletableDeferred<Unit>()
+            val release = CompletableDeferred<Unit>()
+            val engine = MockEngine {
+                requests++
+                if (requests == 2) {
+                    entered.complete(Unit)
+                    release.await()
+                }
+                respond(fixture, headers = headersOf("Content-Type", "application/json"))
+            }
+            val catalog = ModelsDevCatalog(HttpClient(engine), FakeCache(), now = { time })
+            catalog.namesFor("opencode")
+            time += ModelsDevCatalog.TTL_MS
+            try {
+                val first = async { catalog.namesFor("opencode") }
+                entered.await()
+                val second = async(start = CoroutineStart.UNDISPATCHED) { catalog.npmFor("opencode", "gpt-5.5") }
+                release.complete(Unit)
+                assertEquals("GPT-5.5", first.await()["gpt-5.5"])
+                assertEquals("@ai-sdk/openai", second.await())
+                assertEquals(2, requests)
+            } finally {
+                release.complete(Unit)
+            }
+        }
     }
 
     @Test
