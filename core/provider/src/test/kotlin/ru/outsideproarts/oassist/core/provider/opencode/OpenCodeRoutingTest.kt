@@ -195,7 +195,7 @@ class OpenCodeRoutingTest {
 
         assertTrue("expected failure, got $error", error != null)
         assertTrue("not classified: $error", ru.outsideproarts.oassist.core.provider.isProtocolUnsupported(error!!))
-        assertEquals(3, attempts)
+        assertEquals(4, attempts)
     }
 
     @Test

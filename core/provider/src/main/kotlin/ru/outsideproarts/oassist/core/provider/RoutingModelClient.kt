@@ -81,14 +81,14 @@ class RoutingModelClient internal constructor(
     }
 
     /**
-     * Протоколы для попыток: основной + до [MAX_ATTEMPTS]-х запасных при
+     * Протоколы для попыток: основной и остальные поддерживаемые при
      * «не тот протокол». Фиксированный протокол профиля — одна попытка:
      * перепробовка противоречила бы явному выбору пользователя.
      */
     private suspend fun protocolsFor(modelId: String, override: ModelProtocol?): List<ModelProtocol> {
         if (fixedProtocol != null) return listOf(resolveProtocol(modelId, override))
         val primary = override ?: learned[modelId] ?: resolveProtocol(modelId, null)
-        return listOf(primary) + FALLBACK_ORDER.filter { it != primary }.take(MAX_ATTEMPTS - 1)
+        return listOf(primary) + FALLBACK_ORDER.filter { it != primary }
     }
 
     override suspend fun fetchModels(): List<ModelInfo> {
@@ -239,6 +239,3 @@ private val FALLBACK_ORDER = listOf(
     ModelProtocol.OPENAI_RESPONSES,
     ModelProtocol.GEMINI_GENERATE,
 )
-
-/** Всего попыток на модель (основной протокол + запасные). */
-private const val MAX_ATTEMPTS = 3

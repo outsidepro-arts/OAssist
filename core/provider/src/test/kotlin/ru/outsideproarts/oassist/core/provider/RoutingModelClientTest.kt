@@ -17,7 +17,9 @@ import io.ktor.utils.io.ByteReadChannel
 import io.ktor.utils.io.InternalAPI
 import kotlinx.coroutines.test.runTest
 import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.async
+import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.flow.toList
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
@@ -53,6 +55,9 @@ class RoutingModelClientTest {
 
     private val anthropicProbeOk =
         """{"type":"message","content":[{"type":"text","text":"hi"}],"stop_reason":"end_turn"}"""
+
+    private val geminiProbeOk =
+        """{"candidates":[{"content":{"role":"model","parts":[{"text":"hi"}]},"finishReason":"STOP"}]}"""
 
     private fun profile(protocol: ModelProtocol?, baseUrl: String = "https://h.test") = ProviderProfile(
         id = "p",
@@ -96,6 +101,107 @@ class RoutingModelClientTest {
             val client = ModelClient.create(ru.outsideproarts.oassist.core.model.diagnostics.Diagnostics, profile(ModelProtocol.ANTHROPIC_MESSAGES), emptySecrets, engine)
             val result = runCatching { client.probeCapabilities("m") }
             assertTrue("expected failure, got $result", result.isFailure)
+            assertEquals(1, requests)
+        } finally {
+            engine.close()
+        }
+    }
+
+    @Test
+    fun unknownModel_reachesGeminiAndLearnsRoute() = runTest {
+        val paths = mutableListOf<String>()
+        val engine = http { request ->
+            paths += request.url.encodedPath
+            when (request.url.encodedPath) {
+                "/v1/messages" -> assertEquals("test-key", request.headers["x-api-key"])
+                "/v1/models/opaque-model:generateContent" -> assertEquals("test-key", request.headers["x-goog-api-key"])
+                else -> assertEquals("Bearer test-key", request.headers["Authorization"])
+            }
+            if (request.url.encodedPath.endsWith(":generateContent")) {
+                respond(geminiProbeOk, HttpStatusCode.OK, headersOf("Content-Type", "application/json"))
+            } else {
+                respond("missing", HttpStatusCode.NotFound)
+            }
+        }
+        try {
+            val client = ModelClient.create(ru.outsideproarts.oassist.core.model.diagnostics.Diagnostics,
+                profile(null, "https://h.test/v1"), emptySecrets, engine,
+                overrides = ProviderAuth(apiKey = "test-key".toCharArray()))
+            assertEquals(setOf(ModelCapability.TOOLS), client.probeCapabilities("opaque-model"))
+            assertEquals(listOf("/v1/chat/completions", "/v1/messages", "/v1/responses",
+                "/v1/models/opaque-model:generateContent"), paths)
+            paths.clear()
+            assertEquals(setOf(ModelCapability.TOOLS), client.probeCapabilities("opaque-model"))
+            assertEquals(listOf("/v1/models/opaque-model:generateContent"), paths)
+        } finally {
+            engine.close()
+        }
+    }
+
+    @Test
+    fun unknownModel_streamReachesGeminiAndLearnsRoute() = runTest {
+        val paths = mutableListOf<String>()
+        val engine = http { request ->
+            paths += request.url.encodedPath
+            if (request.url.encodedPath.endsWith(":streamGenerateContent")) {
+                respond("data: $geminiProbeOk\n\n", HttpStatusCode.OK, headersOf("Content-Type", "text/event-stream"))
+            } else {
+                respond("missing", HttpStatusCode.NotFound)
+            }
+        }
+        try {
+            val client = ModelClient.create(ru.outsideproarts.oassist.core.model.diagnostics.Diagnostics,
+                profile(null), emptySecrets, engine)
+            assertTrue(client.chatCompletionStream("opaque-model", emptyList()).toList().isNotEmpty())
+            assertEquals(listOf("/chat/completions", "/messages", "/responses",
+                "/models/opaque-model:streamGenerateContent"), paths)
+            paths.clear()
+            assertTrue(client.chatCompletionStream("opaque-model", emptyList()).toList().isNotEmpty())
+            assertEquals(listOf("/models/opaque-model:streamGenerateContent"), paths)
+        } finally {
+            engine.close()
+        }
+    }
+
+    @Test
+    fun stream_authErrorAndCancellationDoNotFallBack() = runTest {
+        for (cancel in listOf(false, true)) {
+            var requests = 0
+            val engine = http {
+                requests++
+                if (cancel) throw CancellationException("cancelled")
+                respond("unauthorized", HttpStatusCode.Unauthorized)
+            }
+            try {
+                val client = ModelClient.create(ru.outsideproarts.oassist.core.model.diagnostics.Diagnostics,
+                    profile(null), emptySecrets, engine)
+                val error = runCatching { client.chatCompletionStream("opaque-model", emptyList()).toList() }.exceptionOrNull()
+                assertTrue(if (cancel) error is CancellationException else error != null)
+                assertEquals(1, requests)
+            } finally {
+                engine.close()
+            }
+        }
+    }
+
+    @Test
+    fun stream_protocolErrorAfterChunkDoesNotFallBack() = runTest {
+        var requests = 0
+        val engine = http {
+            requests++
+            respond("data: {\"choices\":[{\"index\":0,\"delta\":{\"content\":\"hi\"}}]}\n\n" +
+                "data: {\"error\":{\"message\":\"ModelProtocolUnsupported\"}}\n\n",
+                HttpStatusCode.OK, headersOf("Content-Type", "text/event-stream"))
+        }
+        try {
+            val client = ModelClient.create(ru.outsideproarts.oassist.core.model.diagnostics.Diagnostics,
+                profile(null), emptySecrets, engine)
+            var chunks = 0
+            val error = runCatching {
+                client.chatCompletionStream("opaque-model", emptyList()).collect { chunks++ }
+            }.exceptionOrNull()
+            assertTrue(error != null && isProtocolUnsupported(error))
+            assertTrue(chunks > 0)
             assertEquals(1, requests)
         } finally {
             engine.close()
