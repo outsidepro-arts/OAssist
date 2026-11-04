@@ -34,7 +34,6 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.ensureActive
-import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import ru.outsideproarts.oassist.core.agent.AgentFactory
@@ -834,9 +833,10 @@ private val sessionTurns = mutableListOf<ru.outsideproarts.oassist.core.model.St
                     stopSelf()
                     return@launch
                 }
-                speech?.speaking?.first { !it }
-                refreshSessionNotification(force = true)
-                execute(voiceFlow.onTurnFinished(continueDialog))
+                finishSpokenTurn(awaitIdle = { speech?.awaitIdle() }, continueTurn = { drained ->
+                    refreshSessionNotification(force = true)
+                    execute(voiceFlow.onTurnFinished(continueDialog && drained))
+                })
             } finally {
                 try {
                     persistAssistantTurn(text, diagnosticId, timeline, turnTranscript)
@@ -845,6 +845,7 @@ private val sessionTurns = mutableListOf<ru.outsideproarts.oassist.core.model.St
                         isStreaming = false
                         srKeepFocusable = false
                         refreshOverlayFocusable()
+                        refreshSessionNotification(force = true)
                     }
                 }
             }

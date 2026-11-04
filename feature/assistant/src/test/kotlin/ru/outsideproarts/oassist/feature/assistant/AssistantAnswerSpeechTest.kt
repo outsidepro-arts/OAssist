@@ -1,16 +1,81 @@
 package ru.outsideproarts.oassist.feature.assistant
 
 import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.awaitCancellation
 import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
+import ru.outsideproarts.oassist.core.agent.AssistVoiceEffect
+import ru.outsideproarts.oassist.core.agent.AssistVoiceFlow
+import ru.outsideproarts.oassist.core.agent.AssistVoiceState
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class AssistantAnswerSpeechTest {
+    @Test
+    fun regularTurnWaitsForAcceptedSpeechBeforeContinuing() = runBlocking {
+        val receipt = CompletableDeferred<Unit>()
+        val events = mutableListOf<String>()
+        val flow = AssistVoiceFlow().apply { onUserSubmit("Вопрос") }
+        val speaker = AssistantAnswerSpeech { events += "submit:$it" }
+        speaker.onText("Первое.", false)
+        speaker.onFinish("Первое.", false)
+
+        val job = launch(start = CoroutineStart.UNDISPATCHED) {
+            finishSpokenTurn(awaitIdle = { receipt.await() }, continueTurn = {
+                if (AssistVoiceEffect.StartStt in flow.onTurnFinished(it)) events += "startStt"
+            })
+        }
+        assertEquals(listOf("submit:Первое."), events)
+        receipt.complete(Unit)
+        job.join()
+        assertEquals(listOf("submit:Первое.", "startStt"), events)
+    }
+
+    @Test
+    fun regularTurnTimeoutDoesNotStartSttAndExternalCancellationDoesNotContinue() = runBlocking {
+        val receipt = CompletableDeferred<Unit>()
+        val events = mutableListOf<String>()
+        finishSpokenTurn({ receipt.await() }, { if (it) events += "startStt" else events += "idle" }, timeoutMs = 0)
+        assertEquals(listOf("idle"), events)
+        assertFalse(receipt.isCompleted)
+
+        val job = launch(start = CoroutineStart.UNDISPATCHED) {
+            finishSpokenTurn({ receipt.await() }, { events += "unexpected" })
+        }
+        job.cancelAndJoin()
+        assertFalse(receipt.isCompleted)
+        assertEquals(listOf("idle"), events)
+    }
+
+    @Test
+    fun timedOutTurnReturnsToIdleAndAllowsManualStart() = runBlocking {
+        val flow = AssistVoiceFlow()
+        flow.onUserSubmit("Вопрос")
+        val receipt = CompletableDeferred<Unit>()
+        var effects = emptyList<AssistVoiceEffect>()
+        finishSpokenTurn({ receipt.await() }, { effects = flow.onTurnFinished(it) }, timeoutMs = 0)
+        assertTrue(effects.isEmpty())
+        assertEquals(AssistVoiceState.Idle, flow.state.value)
+        assertFalse(receipt.isCompleted)
+        assertEquals(listOf(AssistVoiceEffect.StartStt), flow.onPlayPause())
+    }
+
+    @Test
+    fun regularTurnDoesNotContinueWhenDrainFails() = runBlocking {
+        val failure = IllegalStateException("drain failed")
+        var continued = false
+        val caught = runCatching {
+            finishSpokenTurn({ throw failure }, { continued = true })
+        }.exceptionOrNull()
+        assertTrue(caught is IllegalStateException)
+        assertEquals(failure.message, caught?.message)
+        assertFalse(continued)
+    }
+
     @Test
     fun terminalFarewellIsSubmittedOnceAfterFinishAndThenDrained() = runBlocking {
         val events = mutableListOf<String>()

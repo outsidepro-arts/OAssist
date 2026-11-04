@@ -4,6 +4,15 @@ import kotlinx.coroutines.withTimeoutOrNull
 import ru.outsideproarts.oassist.core.speech.SentenceSplitter
 import ru.outsideproarts.oassist.core.speech.StreamSpeaker
 
+internal suspend fun finishSpokenTurn(
+    awaitIdle: suspend () -> Unit,
+    continueTurn: (Boolean) -> Unit,
+    timeoutMs: Long = 30_000L,
+) {
+    val drained = withTimeoutOrNull(timeoutMs) { awaitIdle(); true } ?: false
+    continueTurn(drained)
+}
+
 internal class AssistantAnswerSpeech(
     private val terminalTimeoutMs: Long = TERMINAL_SPEECH_TIMEOUT_MS,
     speak: (String) -> Unit,
