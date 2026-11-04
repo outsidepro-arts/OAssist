@@ -25,13 +25,13 @@ class ChatMediaStore(private val root: File) {
 
     fun writeAudio(chatId: String, turnId: String, part: AudioPart): MediaRef? {
         val data = decodeBase64(part.wavBase64) ?: return null
-        val path = write(chatId, "${turnId}_a${extFor(part.mimeType)}", data) ?: return null
+        val path = write(chatId, "${turnId}_a${extFor(part.mimeType)}", data)
         return MediaRef(path, part.mimeType, durationSec = part.durationSec)
     }
 
     fun writeImage(chatId: String, turnId: String, name: String, part: ImagePart): MediaRef? {
         val data = decodeBase64(part.imageBase64) ?: return null
-        val path = write(chatId, "${turnId}_$name${extFor(part.mimeType)}", data) ?: return null
+        val path = write(chatId, "${turnId}_$name${extFor(part.mimeType)}", data)
         return MediaRef(path, part.mimeType, width = part.width, height = part.height)
     }
 
@@ -77,12 +77,12 @@ class ChatMediaStore(private val root: File) {
         if (!path.deleteRecursively()) throw IOException("Cannot delete chat media: $path")
     }
 
-    private fun write(chatId: String, name: String, data: ByteArray): String? = runCatching {
+    private fun write(chatId: String, name: String, data: ByteArray): String {
         val dir = File(root, chatId)
-        if (!dir.isDirectory && !dir.mkdirs()) return null
+        if (!dir.isDirectory && !dir.mkdirs()) throw IOException("Cannot create chat media directory: $dir")
         File(dir, name).writeBytes(data)
-        "$chatId/$name"
-    }.getOrNull()
+        return "$chatId/$name"
+    }
 
     private fun readBytes(relative: String): ByteArray? {
         val file = File(root, relative)

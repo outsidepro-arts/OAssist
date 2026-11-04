@@ -15,6 +15,34 @@ import org.junit.Test
 
 class ChatTurnSaverTest {
     @Test
+    fun actualMediaWriteFailureRetainsPendingTurnUntilRetryAndReopensExactPayload() = runBlocking {
+        val root = java.nio.file.Files.createTempDirectory("ds006-saver-").toFile()
+        val blocked = java.io.File(root, "chat").apply { writeText("blocked directory") }
+        val media = ru.outsideproarts.oassist.core.data.chat.ChatMediaStore(root)
+        val turn = ru.outsideproarts.oassist.core.model.StoredTurn(
+            userImages = listOf(ru.outsideproarts.oassist.core.model.ImagePart("aW1hZ2U=")),
+            answer = "answer",
+        )
+        val payloads = mutableListOf<String>()
+        val saver = ChatTurnSaver(this)
+        try {
+            saver.save("chat", { error("already exists") }) {
+                payloads.add(ru.outsideproarts.oassist.core.data.chat.TurnCodec.encode(turn, it, "first", media))
+            }.join()
+            org.junit.Assert.assertTrue(saver.failure is java.io.IOException)
+            assertFalse(saver.awaitSaved())
+            assertEquals(emptyList<String>(), payloads)
+            org.junit.Assert.assertTrue(blocked.delete())
+            saver.retry().join()
+            org.junit.Assert.assertTrue(saver.awaitSaved())
+            val reopened = ru.outsideproarts.oassist.core.data.chat.ChatMediaStore(root)
+            assertEquals(turn, ru.outsideproarts.oassist.core.data.chat.TurnCodec.decode(payloads.single(), reopened))
+        } finally {
+            root.deleteRecursively()
+        }
+    }
+
+    @Test
     fun failedFirstWriteDoesNotLetTheNextTurnOvertakeItOrEscapeTheQueue() = runBlocking {
         val uncaught = mutableListOf<Throwable>()
         val session = CoroutineScope(coroutineContext + SupervisorJob() + CoroutineExceptionHandler { _, error -> uncaught.add(error) })

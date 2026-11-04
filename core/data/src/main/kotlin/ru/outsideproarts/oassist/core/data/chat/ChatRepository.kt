@@ -67,13 +67,13 @@ class ChatRepository(
                 kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
                     onDiagnosticDelete(id, diagnosticRoots)
                 }
-                media.deleteChat(id)
                 database.withTransaction {
                     database.turnDao().deleteForChat(id)
                     database.chatDao().delete(id)
                 }
                 diagnosticGenerations.computeIfAbsent(id) { AtomicLong() }.incrementAndGet()
                 deletedChatIds.add(id)
+                media.deleteChat(id)
             }
         }
     }
@@ -115,8 +115,9 @@ class ChatRepository(
         }
     }
 
-    suspend fun loadTurns(chatId: String): List<StoredTurn> =
+    suspend fun loadTurns(chatId: String): List<StoredTurn> = diagnosticOwnershipLock.withLock {
         database.turnDao().listForChat(chatId).mapNotNull { TurnCodec.decode(it.payload, media) }
+    }
 
     /** История для модели: все ходы диалога (реплика пользователя + транскрипт). */
     suspend fun loadModelHistory(chatId: String): List<ChatMessage> =
@@ -128,37 +129,58 @@ class ChatRepository(
      * сессия непустая, см. вызывающего).
      */
     suspend fun replaceAssistantTurns(turns: List<StoredTurn>) = diagnosticOwnershipLock.withLock {
-        withContext(NonCancellable) {
+        val oldTurns = database.turnDao().listForChat(ASSISTANT_CHAT_ID)
+        val newTurnIds = mutableListOf<String>()
+        var committed = false
+        var failure: Throwable? = null
+        try {
             val now = clock()
-            media.deleteChat(ASSISTANT_CHAT_ID)
-            database.withTransaction {
-                val existing = database.chatDao().findById(ASSISTANT_CHAT_ID)
-                if (existing == null) {
-                    database.chatDao().insert(
-                        ChatEntity(
-                            id = ASSISTANT_CHAT_ID,
-                            title = "",
-                            kind = ChatKind.ASSISTANT.name,
-                            mode = AssistMode.ASSISTANT.name,
-                            createdAt = now,
-                            updatedAt = now,
-                        ),
-                    )
-                } else {
-                    database.chatDao().update(existing.copy(updatedAt = now))
+            val replacements = turns.mapIndexed { index, turn ->
+                val turnId = UUID.randomUUID().toString()
+                newTurnIds.add(turnId)
+                TurnEntity(
+                    id = turnId,
+                    chatId = ASSISTANT_CHAT_ID,
+                    seq = index,
+                    payload = TurnCodec.encode(turn, ASSISTANT_CHAT_ID, turnId, media),
+                    createdAt = now,
+                )
+            }
+            coroutineContext.ensureActive()
+            withContext(NonCancellable) {
+                database.withTransaction {
+                    val existing = database.chatDao().findById(ASSISTANT_CHAT_ID)
+                    if (existing == null) {
+                        database.chatDao().insert(
+                            ChatEntity(
+                                id = ASSISTANT_CHAT_ID,
+                                title = "",
+                                kind = ChatKind.ASSISTANT.name,
+                                mode = AssistMode.ASSISTANT.name,
+                                createdAt = now,
+                                updatedAt = now,
+                            ),
+                        )
+                    } else {
+                        database.chatDao().update(existing.copy(updatedAt = now))
+                    }
+                    database.turnDao().deleteForChat(ASSISTANT_CHAT_ID)
+                    replacements.forEach { database.turnDao().insert(it) }
                 }
-                database.turnDao().deleteForChat(ASSISTANT_CHAT_ID)
-                turns.forEachIndexed { index, turn ->
-                    val turnId = UUID.randomUUID().toString()
-                    database.turnDao().insert(
-                        TurnEntity(
-                            id = turnId,
-                            chatId = ASSISTANT_CHAT_ID,
-                            seq = index,
-                            payload = TurnCodec.encode(turn, ASSISTANT_CHAT_ID, turnId, media),
-                            createdAt = now,
-                        ),
-                    )
+                committed = true
+                // Only old UUIDs may be removed: the directory now also contains committed media.
+                oldTurns.forEach { media.deleteTurn(ASSISTANT_CHAT_ID, it.id) }
+            }
+        } catch (error: Throwable) {
+            failure = error
+            throw error
+        } finally {
+            if (!committed) newTurnIds.forEach { turnId ->
+                try {
+                    media.deleteTurn(ASSISTANT_CHAT_ID, turnId)
+                } catch (cleanupError: Throwable) {
+                    if (failure == null) throw cleanupError
+                    failure.addSuppressed(cleanupError)
                 }
             }
         }
@@ -167,11 +189,11 @@ class ChatRepository(
     /** Полное стирание (wipe/бэкап): чаты, ходы и медиа-файлы. */
     suspend fun clearAll() = diagnosticOwnershipLock.withLock {
         withContext(NonCancellable) {
-            media.deleteAll()
             database.withTransaction {
                 database.turnDao().deleteAll()
                 database.chatDao().deleteAll()
             }
+            media.deleteAll()
         }
     }
 

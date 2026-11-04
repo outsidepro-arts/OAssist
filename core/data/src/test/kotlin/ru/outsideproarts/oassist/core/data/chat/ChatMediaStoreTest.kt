@@ -60,6 +60,33 @@ class ChatMediaStoreTest {
     }
 
     @Test
+    fun validMedia_writeFailureIsReportedForAudioAndImage() {
+        File(root, "blocked").writeText("not a directory")
+        org.junit.Assert.assertThrows(IOException::class.java) {
+            store.writeAudio("blocked", "t1", AudioPart(wavBase64 = base64("audio")))
+        }
+        org.junit.Assert.assertThrows(IOException::class.java) {
+            store.writeImage("blocked", "t1", "u0", ImagePart(imageBase64 = base64("image")))
+        }
+    }
+
+    @Test
+    fun fileWriteFailureAfterEarlierMediaDoesNotProduceSuccessfulPayload() {
+        val dir = File(root, "chat").apply { mkdirs() }
+        // First image is written, then opening the second destination fails.
+        File(dir, "turn_u1.jpg").mkdirs()
+        val turn = ru.outsideproarts.oassist.core.model.StoredTurn(userImages = listOf(
+            ImagePart(imageBase64 = base64("first")), ImagePart(imageBase64 = base64("second")),
+        ))
+        org.junit.Assert.assertThrows(IOException::class.java) {
+            TurnCodec.encode(turn, "chat", "turn", store)
+        }
+        assertTrue(File(dir, "turn_u0.jpg").isFile)
+        store.deleteTurn("chat", "turn")
+        assertFalse(dir.exists())
+    }
+
+    @Test
     fun missingFile_readsNull() {
         assertNull(store.readImage(MediaRef(path = "c1/absent.jpg", mimeType = "image/jpeg")))
     }
