@@ -3,6 +3,7 @@ package ru.outsideproarts.oassist.core.data.memory
 import android.content.Context
 import ru.outsideproarts.oassist.core.data.atomicWriteText
 import java.io.File
+import java.io.IOException
 import java.nio.file.Files
 
 /**
@@ -24,13 +25,14 @@ private const val FILE_NAME = "MEMORY.md"
 
 class FileMemoryStore private constructor(
     private val directory: () -> File,
+    private val deleteFile: (File) -> Boolean,
     private val writeFile: (File, String) -> Unit,
 ) : MemoryStore {
 
-    constructor(deviceContext: Context) : this({ deviceContext.filesDir }, ::atomicWriteText)
+    constructor(deviceContext: Context) : this({ deviceContext.filesDir }, File::delete, ::atomicWriteText)
 
-    internal constructor(directory: File, writeFile: (File, String) -> Unit = ::atomicWriteText) :
-        this({ directory }, writeFile)
+    internal constructor(directory: File, deleteFile: (File) -> Boolean = File::delete, writeFile: (File, String) -> Unit = ::atomicWriteText) :
+        this({ directory }, deleteFile, writeFile)
 
     private fun file(): File {
         val dir = directory()
@@ -59,7 +61,12 @@ class FileMemoryStore private constructor(
     }
 
     override suspend fun clear() {
-        synchronized(lock) { runCatching { file().delete() } }
+        synchronized(lock) {
+            val target = file()
+            if (!Files.notExists(target.toPath()) && !deleteFile(target) && !Files.notExists(target.toPath())) {
+                throw IOException("Cannot delete memory")
+            }
+        }
     }
 
     companion object {

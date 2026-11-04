@@ -409,6 +409,9 @@
     <string name="data_import_done">Импорт завершён, секреты введите заново</string>
     <string name="data_import_error">Не удалось прочитать бэкап: %1$s</string>
     <string name="data_wipe_done">Все данные стёрты</string>
+    <string name="data_wipe_error">Не удалось стереть все данные. Часть данных могла быть удалена. Повторите попытку.</string>
+    <string name="skill_delete_error">Не удалось удалить навык. Повторите попытку.</string>
+    <string name="memory_clear_error">Не удалось очистить память. Повторите попытку.</string>
     <string name="data_wipe_confirm">Стереть</string>
 
     <!-- Инструменты: память и навыки -->

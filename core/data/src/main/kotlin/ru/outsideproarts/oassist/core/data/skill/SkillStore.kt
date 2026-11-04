@@ -2,6 +2,8 @@ package ru.outsideproarts.oassist.core.data.skill
 
 import android.content.Context
 import androidx.datastore.preferences.core.booleanPreferencesKey
+import androidx.datastore.core.DataStore
+import androidx.datastore.preferences.core.Preferences
 import androidx.datastore.preferences.core.edit
 import androidx.datastore.preferences.preferencesDataStore
 import kotlinx.coroutines.flow.first
@@ -9,6 +11,7 @@ import kotlinx.coroutines.flow.map
 import ru.outsideproarts.oassist.core.data.atomicWriteText
 import ru.outsideproarts.oassist.core.model.SkillInfo
 import java.io.File
+import java.io.IOException
 
 private val Context.skillConfigDataStore by preferencesDataStore(name = "skill_config")
 
@@ -23,12 +26,19 @@ interface SkillStore {
     suspend fun upsert(name: String, title: String, body: String)
     suspend fun setEnabled(name: String, enabled: Boolean)
     suspend fun delete(name: String)
+    suspend fun deleteAll() { list().forEach { delete(it.name) } }
 }
 
-class FileSkillStore(private val deviceContext: Context) : SkillStore {
+class FileSkillStore internal constructor(
+    private val filesDir: () -> File,
+    private val config: DataStore<Preferences>,
+    private val deleteDirectory: (File) -> Boolean = File::deleteRecursively,
+) : SkillStore {
+
+    constructor(deviceContext: Context) : this({ deviceContext.filesDir }, deviceContext.skillConfigDataStore)
 
     private fun dir(): File {
-        val dir = File(deviceContext.filesDir, "skills")
+        val dir = File(filesDir(), "skills")
         if (!dir.exists()) dir.mkdirs()
         return dir
     }
@@ -36,7 +46,7 @@ class FileSkillStore(private val deviceContext: Context) : SkillStore {
     private fun skillDir(name: String): File = File(dir(), name)
 
     private suspend fun isEnabled(name: String): Boolean =
-        deviceContext.skillConfigDataStore.data.map { prefs ->
+        config.data.map { prefs ->
             prefs[booleanPreferencesKey(KEY_PREFIX + name)] ?: true
         }.first()
 
@@ -86,16 +96,28 @@ class FileSkillStore(private val deviceContext: Context) : SkillStore {
     }
 
     override suspend fun setEnabled(name: String, enabled: Boolean) {
-        deviceContext.skillConfigDataStore.edit { prefs ->
+        config.edit { prefs ->
             prefs[booleanPreferencesKey(KEY_PREFIX + name)] = enabled
         }
     }
 
     override suspend fun delete(name: String) {
         if (!SkillInfo.NAME_PATTERN.matches(name)) return
-        runCatching { skillDir(name).deleteRecursively() }
-        deviceContext.skillConfigDataStore.edit { prefs ->
+        if (!deleteDirectory(skillDir(name))) throw IOException("Cannot delete skill")
+        config.edit { prefs ->
             prefs.remove(booleanPreferencesKey(KEY_PREFIX + name))
+        }
+    }
+
+    override suspend fun deleteAll() {
+        val root = dir()
+        val entries = root.listFiles() ?: throw IOException("Cannot list skills")
+        for (entry in entries) {
+            if (!SkillInfo.NAME_PATTERN.matches(entry.name)) throw IOException("Invalid skill entry")
+            delete(entry.name)
+        }
+        config.edit { prefs ->
+            prefs.asMap().keys.filter { it.name.startsWith(KEY_PREFIX) }.forEach { prefs.remove(it) }
         }
     }
 

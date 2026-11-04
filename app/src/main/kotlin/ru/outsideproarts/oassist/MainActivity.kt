@@ -420,8 +420,7 @@ private fun OAssistApp(
                                             showToast(context, SettingsR.string.data_wipe_done)
                                         },
                                         onFailure = {
-                                            val reason = it.message?.take(200) ?: "?"
-                                            showToast(context, SettingsR.string.data_import_error, reason)
+                                            showToast(context, SettingsR.string.data_wipe_error)
                                         },
                                     )
                                 }
@@ -441,6 +440,7 @@ private fun OAssistApp(
                 ru.outsideproarts.oassist.update.UpdatesRoute(graph.updates) { navController.popBackStack() }
             }
             composable("skills") {
+                val context = LocalContext.current
                 var version by remember { mutableStateOf(0) }
                 var skills by remember {
                     mutableStateOf(emptyList<ru.outsideproarts.oassist.core.model.SkillInfo>())
@@ -464,7 +464,13 @@ private fun OAssistApp(
                     },
                     onDelete = { name ->
                         scope.launch {
-                            graph.data.skills.delete(name)
+                            try {
+                                graph.data.skills.delete(name)
+                            } catch (e: kotlinx.coroutines.CancellationException) {
+                                throw e
+                            } catch (e: Exception) {
+                                showToast(context, SettingsR.string.skill_delete_error)
+                            }
                             version++
                         }
                     },
@@ -488,8 +494,14 @@ private fun OAssistApp(
                     },
                     onClear = {
                         scope.launch {
-                            graph.data.memory.clear()
-                            text = ""
+                            try {
+                                graph.data.memory.clear()
+                                text = ""
+                            } catch (e: kotlinx.coroutines.CancellationException) {
+                                throw e
+                            } catch (e: Exception) {
+                                showToast(context, SettingsR.string.memory_clear_error)
+                            }
                         }
                     },
                     onBack = { navController.popBackStack() },

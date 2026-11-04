@@ -66,18 +66,23 @@ class BackupManager(private val data: DataContainer) {
     }
 
     /** Полный wipe: конфиги, навыки, память, история, секреты, always-разрешения. */
-    suspend fun wipe(): Result<Unit> = runCatching {
+    suspend fun wipe(): Result<Unit> = try {
         data.providers.observeProviders().first().forEach { data.providers.deleteProvider(it.id) }
         AssistMode.entries.forEach { data.providers.setModeConfig(ModeConfig.default(it)) }
         data.toolConfigs.resetAll()
         data.mcpServers.snapshot().forEach { data.mcpServers.delete(it.id) }
-        data.skills.list().forEach { data.skills.delete(it.name) }
+        data.skills.deleteAll()
         data.memory.clear()
         data.approvals.clear()
         data.chats.clearAll()
         data.diagnostics.clear()
         data.secretStore.clearAll()
         data.settings.setLanguage(AppLanguage.DEFAULT)
+        Result.success(Unit)
+    } catch (e: kotlinx.coroutines.CancellationException) {
+        throw e
+    } catch (e: Exception) {
+        Result.failure(e)
     }
 }
 

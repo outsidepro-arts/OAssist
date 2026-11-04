@@ -412,6 +412,9 @@
     <string name="data_import_done">Import done, re-enter secrets</string>
     <string name="data_import_error">Could not read backup: %1$s</string>
     <string name="data_wipe_done">All data erased</string>
+    <string name="data_wipe_error">Could not erase all data. Some data may have been erased. Try again.</string>
+    <string name="skill_delete_error">Could not delete the skill. Try again.</string>
+    <string name="memory_clear_error">Could not clear memory. Try again.</string>
     <string name="data_wipe_confirm">Erase</string>
 
     <!-- Tools: memory and skills -->
