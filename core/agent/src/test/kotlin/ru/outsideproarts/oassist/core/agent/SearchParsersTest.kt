@@ -91,6 +91,61 @@ class SearchParsersTest {
     }
 
     @Test
+    fun ecosia_preservesDirectUrlsContainingQueryParameterNames() {
+        val urls = listOf(
+            "https://example.com/search?q=android",
+            "https://example.com/faq?faq=https%3A%2F%2Fother.example",
+            "https://example.com/search?%71=https%3A%2F%2Fother.example",
+            "https://example.com/search?q=https%3A%2F%2Fother.example",
+            "https://example.com/search?url=https%3A%2F%2Fother.example",
+            "https://example.com/search?uddg=https%3A%2F%2Fother.example",
+        )
+        val html = urls.joinToString("") { """<a class="result-title" href="$it">Result</a>""" }
+
+        assertEquals(urls, SearchParsers.parse(SearchEngine.ECOSIA, html).results.map { it.url })
+    }
+
+    @Test
+    fun duckduckgo_unwrapsOnlyItsKnownRedirectEndpoint() {
+        val urls = listOf(
+            "https://example.com/search?uddg=https%3A%2F%2Fother.example",
+            "https://duckduckgo.com/other?uddg=https%3A%2F%2Fother.example",
+            "https://duckduckgo.com.evil.example/l/?uddg=https%3A%2F%2Fother.example",
+            "//duckduckgo.com/l/?x=1&amp;uddg=https%3A%2F%2Ftarget.example%2F%3Fq%3Da%26b%3Dc",
+        )
+        val html = urls.joinToString("") { """<a class="result__a" href="$it">Result</a>""" }
+
+        assertEquals(urls.take(3) + "https://target.example/?q=a&b=c", SearchParsers.parse(SearchEngine.DUCKDUCKGO, html).results.map { it.url })
+    }
+
+    @Test
+    fun redirects_requireExactEndpointParameterAndHttpTarget() {
+        val target = "https%3A%2F%2Ftarget.example%2Fa%3Fq%3Dx%252By"
+        assertEquals("https://target.example/a?q=x%2By", SearchParsers.unwrapRedirect("/url?sa=U&amp;%71=$target", "q"))
+        val html = """<a href="/url?sa=U&amp;%71=$target">Result</a>"""
+        assertEquals("https://target.example/a?q=x%2By", SearchParsers.parse(SearchEngine.GOOGLE, html).results.single().url)
+        val unchanged = listOf(
+            "/url?faq=$target",
+            "/other?q=$target",
+            "https://example.com/url?q=$target",
+            "/url?q=javascript%3Aalert%281%29",
+            "/url?q=%2Frelative",
+            "/url?q=%ZZ",
+        )
+        unchanged.forEach { assertEquals(it, SearchParsers.unwrapRedirect(it, "q")) }
+    }
+
+    @Test
+    fun duplicateRedirectParameters_leaveWrapperUnchanged() {
+        val href = "https://duckduckgo.com/l/?uddg=https%3A%2F%2Ffirst.example&amp;%75ddg=https%3A%2F%2Fsecond.example"
+        val html = """<a class="result__a" href="$href">Result</a>"""
+
+        assertEquals(href, SearchParsers.parse(SearchEngine.DUCKDUCKGO, html).results.single().url)
+        val google = "/url?q=https%3A%2F%2Ffirst.example&q"
+        assertEquals(google, SearchParsers.unwrapRedirect(google, "q"))
+    }
+
+    @Test
     fun emptyResults_notBlocked() {
         val parsed = SearchParsers.parse(SearchEngine.DUCKDUCKGO, "<html><body>nothing</body></html>")
 

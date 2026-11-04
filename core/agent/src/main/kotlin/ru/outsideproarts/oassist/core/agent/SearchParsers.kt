@@ -1,5 +1,6 @@
 package ru.outsideproarts.oassist.core.agent
 
+import java.net.URI
 import java.net.URLDecoder
 import java.net.URLEncoder
 import ru.outsideproarts.oassist.core.model.SearchEngine
@@ -38,7 +39,7 @@ object SearchParsers {
             SearchEngine.DUCKDUCKGO -> parseDdg(html)
             SearchEngine.MOJEEK -> parseMojeek(html)
             SearchEngine.BING -> parseBing(html)
-            SearchEngine.ECOSIA -> parseByClasses(html, "result-title", "result-snippet", unwrapParam = "q")
+            SearchEngine.ECOSIA -> parseByClasses(html, "result-title", "result-snippet")
             SearchEngine.GOOGLE -> parseGoogle(html)
             SearchEngine.YANDEX -> parseByClasses(html, "OrganicTitle-Link", "OrganicText")
             SearchEngine.MAILRU -> parseByClasses(html, "result__title", "result__snippet")
@@ -81,9 +82,9 @@ object SearchParsers {
     /** Google (`gbv=1`): href `/url?q=`, заголовки в h3, сниппеты `.st`/`.VwiC3b`/`.s3v9rd`. */
     private fun parseGoogle(html: String): List<SearchResult> {
         val titles = anchors(html, classContains = null)
-            .filter { (href, text) -> (href.startsWith("/url?q=") || href.startsWith("http")) && text.isNotBlank() }
+            .filter { (href, text) -> (href.startsWith("/url?") || href.startsWith("http")) && text.isNotBlank() }
             .map { (href, text) ->
-                val url = if (href.startsWith("/url?q=")) unwrapRedirect(href, "q") else href
+                val url = if (href.startsWith("/url?")) unwrapRedirect(href, "q") else href
                 url to text
             }
         val snippets = listOf("st", "VwiC3b", "s3v9rd", "BNeawe")
@@ -97,12 +98,8 @@ object SearchParsers {
         html: String,
         titleClass: String,
         snippetClass: String,
-        unwrapParam: String? = null,
     ): List<SearchResult> {
-        val titles = anchors(html, titleClass).map { (href, text) ->
-            val url = unwrapParam?.let { unwrapRedirect(href, it) } ?: href
-            url to text
-        }
+        val titles = anchors(html, titleClass)
         val snippets = classTexts(html, snippetClass)
         return zipResults(titles, snippets)
     }
@@ -146,11 +143,24 @@ object SearchParsers {
 
     /** Разворот редиректа (`/url?q=…`, `//duckduckgo.com/l/?uddg=…`) в прямой URL. */
     internal fun unwrapRedirect(href: String, param: String): String {
-        val marker = "$param="
-        val idx = href.indexOf(marker)
-        if (idx < 0) return href
-        val tail = href.substring(idx + marker.length).substringBefore("&")
-        return decodeUrl(tail).ifBlank { href }
+        val uri = runCatching { URI(decodeEntities(href)) }.getOrNull() ?: return href
+        val knownEndpoint = when (param) {
+            "q" -> uri.scheme == null && uri.rawAuthority == null && uri.rawPath == "/url"
+            "uddg" -> (uri.scheme == null || uri.scheme.equals("https", ignoreCase = true)) &&
+                uri.host.equals("duckduckgo.com", ignoreCase = true) && uri.rawPath == "/l/" &&
+                uri.userInfo == null && uri.port == -1
+            else -> false
+        }
+        if (!knownEndpoint) return href
+        val value = uri.rawQuery?.split('&')?.mapNotNull { part ->
+            val key = part.substringBefore('=')
+            if (decodeUrl(key) == param) part.substringAfter('=', "") else null
+        }?.singleOrNull() ?: return href
+        val target = decodeUrl(value)
+        val targetUri = runCatching { URI(target) }.getOrNull() ?: return href
+        return if ((targetUri.scheme.equals("http", ignoreCase = true) ||
+                targetUri.scheme.equals("https", ignoreCase = true)) && targetUri.host != null
+        ) target else href
     }
 
     private fun decodeUrl(s: String): String =
