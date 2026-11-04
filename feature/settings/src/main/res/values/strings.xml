@@ -464,4 +464,6 @@
     <string name="diagnostics_cleared">Диагностика очищена</string>
     <string name="diagnostics_error">Не удалось выполнить операцию диагностики.</string>
     <string name="diagnostics_share_title">Отправить диагностический отчёт</string>
+    <string name="approvals_persistence_failed">Не удалось загрузить или сохранить разрешения. Изменения могут быть потеряны после перезапуска.</string>
+    <string name="approvals_persistence_retry">Повторить сохранение разрешений</string>
 </resources>

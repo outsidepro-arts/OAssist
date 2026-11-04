@@ -31,10 +31,11 @@ interface ApprovalStore {
     suspend fun clear()
 }
 
-class DataStoreApprovalStore(private val context: Context) : ApprovalStore {
+class DataStoreApprovalStore internal constructor(private val dataStore: DataStore<Preferences>) : ApprovalStore {
+    constructor(context: Context) : this(context.approvalDataStore)
 
     override val remembered: Flow<Map<String, ApprovalState>> =
-        context.approvalDataStore.data.map { prefs ->
+        dataStore.data.map { prefs ->
             val states = mutableMapOf<String, ApprovalState>()
             // Легаси (M2.1–M5.3): approval.always.<toolName> = true → ALLOW группы тула.
             prefs.asMap().forEach { (key, value) ->
@@ -57,15 +58,17 @@ class DataStoreApprovalStore(private val context: Context) : ApprovalStore {
     override suspend fun snapshot(): Map<String, ApprovalState> = remembered.first()
 
     override suspend fun setRemembered(groupKey: String, state: ApprovalState) {
-        context.approvalDataStore.edit { prefs ->
+        dataStore.edit { prefs ->
             val key = stringPreferencesKey(PREFIX_STATE + groupKey)
             if (state == ApprovalState.ASK) prefs.remove(key) else prefs[key] = state.name
         }
     }
 
     override suspend fun replaceAll(states: Map<String, ApprovalState>) {
-        clear()
-        context.approvalDataStore.edit { prefs ->
+        dataStore.edit { prefs ->
+            prefs.asMap().keys
+                .filter { it.name.startsWith(PREFIX_STATE) || it.name.startsWith(PREFIX_LEGACY_ALLOW) }
+                .forEach { prefs.remove(it) }
             states.filterValues { it != ApprovalState.ASK }.forEach { (groupKey, state) ->
                 prefs[stringPreferencesKey(PREFIX_STATE + groupKey)] = state.name
             }
@@ -73,7 +76,7 @@ class DataStoreApprovalStore(private val context: Context) : ApprovalStore {
     }
 
     override suspend fun clear() {
-        context.approvalDataStore.edit { prefs ->
+        dataStore.edit { prefs ->
             prefs.asMap().keys
                 .filter {
                     it.name.startsWith(PREFIX_STATE) || it.name.startsWith(PREFIX_LEGACY_ALLOW)

@@ -106,7 +106,7 @@ class AppGraph private constructor(context: Context) {
      * (тот создаётся заново на каждое сообщение) и перезапуск приложения
      * (персист в device-protected DataStore, M5.3).
      */
-    val approvalPolicy: ru.outsideproarts.oassist.core.agent.ApprovalPolicy by lazy {
+    val approvalPolicy: ru.outsideproarts.oassist.core.agent.PersistentApprovalPolicy by lazy {
         ru.outsideproarts.oassist.core.agent.PersistentApprovalPolicy(data.approvals, persistScope)
     }
 

@@ -6,6 +6,7 @@ import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.flow.toList
 import kotlinx.coroutines.test.runTest
+import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.withTimeout
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.buildJsonObject
@@ -419,5 +420,61 @@ class AgentLoopApprovalTest {
         assertEquals(0, requester.requests)
         assertTrue(chunks.any { it is ChatChunk.ToolResult && it.output.contains("выполнено:danger_call") })
         assertFalse(chunks.any { it is ChatChunk.ApprovalNeeded })
+    }
+
+    @OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
+    @Test
+    fun latePolicyLoadCannotPermitConsumerAfterDenyAllRevokesSession() = runTest {
+        for (group in listOf(ToolGroups.key(ToolCategory.SCREEN_UI, ToolAccess.WRITE), ToolGroups.mcp("server"))) {
+            val store = ControlledApprovalStore(mapOf(group to ApprovalState.ALLOW))
+            val load = kotlinx.coroutines.CompletableDeferred<Unit>()
+            store.loadBarrier = load
+            val policies = listOf(PersistentApprovalPolicy(store, backgroundScope), InMemoryApprovalPolicy())
+            runCurrent()
+            for (policy in policies) {
+                val tool = CountingTool("danger_call", groupKey = group)
+                policy.setSessionAllow(group, "CHAT")
+                policy.applyPreset(ru.outsideproarts.oassist.core.model.AskPreset.DENY_ALL)
+                load.complete(Unit)
+                runCurrent()
+                store.remembered.emit(mapOf(group to ApprovalState.ALLOW))
+                runCurrent()
+                val client = ScriptedClient(ArrayDeque(listOf(
+                    listOf(toolCall("denied", "danger_call"), ChatChunk.Finish("tool_calls")),
+                    listOf(ChatChunk.Finish("stop")),
+                )))
+                val agent = AgentLoop(client, ToolRegistry(listOf(tool)), approvalPolicy = policy)
+                val chunks = agent.stream("m", null, emptyList(), "execute").toList()
+                assertEquals(0, tool.executions)
+                assertFalse(chunks.any { it is ChatChunk.ApprovalNeeded })
+                assertTrue(chunks.any { it is ChatChunk.ToolResult })
+            }
+        }
+    }
+
+    @OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
+    @Test
+    fun readFailureThenSuccessfulWriteResumesObservingExternalDeny() = runTest {
+        val tool = CountingTool("danger_call")
+        val store = ControlledApprovalStore()
+        store.failNextLoad = true
+        val policy = PersistentApprovalPolicy(store, backgroundScope)
+        runCurrent()
+        assertTrue(policy.persistenceFailed.value)
+        policy.setRemembered(tool.groupKey, ApprovalState.ALLOW)
+        runCurrent()
+        assertFalse(policy.persistenceFailed.value)
+        // The external writer uses the same store path as BackupManager, not policy setters.
+        store.replaceAll(mapOf(tool.groupKey to ApprovalState.DENY))
+        runCurrent()
+        val client = ScriptedClient(ArrayDeque(listOf(
+            listOf(toolCall("denied", "danger_call"), ChatChunk.Finish("tool_calls")),
+            listOf(ChatChunk.Finish("stop")),
+        )))
+        val agent = AgentLoop(client, ToolRegistry(listOf(tool)), approvalPolicy = policy)
+        val chunks = agent.stream("m", null, emptyList(), "execute").toList()
+        assertEquals(0, tool.executions)
+        assertFalse(chunks.any { it is ChatChunk.ApprovalNeeded })
+        assertEquals(ApprovalState.DENY, policy.state(tool.groupKey, "CHAT"))
     }
 }

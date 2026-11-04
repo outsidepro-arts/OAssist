@@ -467,4 +467,6 @@
     <string name="diagnostics_cleared">Diagnostics cleared</string>
     <string name="diagnostics_error">Could not complete the diagnostics operation.</string>
     <string name="diagnostics_share_title">Share diagnostic report</string>
+    <string name="approvals_persistence_failed">Could not load or save permissions. Changes may be lost after restarting.</string>
+    <string name="approvals_persistence_retry">Retry saving permissions</string>
 </resources>

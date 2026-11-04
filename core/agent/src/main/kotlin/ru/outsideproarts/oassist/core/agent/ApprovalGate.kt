@@ -3,6 +3,13 @@ package ru.outsideproarts.oassist.core.agent
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.channels.Channel
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import ru.outsideproarts.oassist.core.data.prefs.ApprovalStore
 import ru.outsideproarts.oassist.core.model.ApprovalDecision
 import ru.outsideproarts.oassist.core.model.ApprovalState
@@ -18,7 +25,7 @@ import java.util.concurrent.ConcurrentHashMap
 interface ApprovalPolicy {
     /**
      * Эффективное состояние группы для сессии [scope] (CHAT/ASSISTANT/SHARE):
-     * служебные — всегда ALLOW; «на сессию» → ALLOW; запомненное; дефолт — ASK.
+     * служебные — всегда ALLOW; актуальный DENY; «на сессию» → ALLOW; дефолт — ASK.
      */
     fun state(groupKey: String, scope: String): ApprovalState
 
@@ -94,113 +101,194 @@ class InMemoryApprovalPolicy : ApprovalPolicy {
     private val remembered = ConcurrentHashMap<String, ApprovalState>()
     private val sessionAllowed = ConcurrentHashMap<String, MutableSet<String>>()
 
+    @Synchronized
     override fun state(groupKey: String, scope: String): ApprovalState = when {
+        ApprovalStates.stateOf(remembered, groupKey) == ApprovalState.DENY -> ApprovalState.DENY
         sessionAllowed[scope].orEmpty().contains(groupKey) -> ApprovalState.ALLOW
         else -> ApprovalStates.stateOf(remembered, groupKey)
     }
 
+    @Synchronized
     override fun setRemembered(groupKey: String, state: ApprovalState) {
+        sessionAllowed.values.forEach { grants ->
+            if (groupKey == ToolGroups.MCP_DEFAULT) grants.removeAll { ToolGroups.isMcp(it) }
+            else grants.remove(groupKey)
+        }
         if (state == ApprovalState.ASK) remembered.remove(groupKey) else remembered[groupKey] = state
     }
 
+    @Synchronized
     override fun setSessionAllow(groupKey: String, scope: String) {
         sessionAllowed.getOrPut(scope) { ConcurrentHashMap.newKeySet() }.add(groupKey)
     }
 
+    @Synchronized
     override fun clearSession(scope: String) {
         sessionAllowed.remove(scope)
     }
 
+    @Synchronized
     override fun clearRemembered() {
+        sessionAllowed.clear()
         remembered.clear()
     }
 
+    @Synchronized
     override fun applyPreset(preset: AskPreset) {
+        sessionAllowed.clear()
         remembered.clear()
         remembered.putAll(ApprovalStates.applyPreset(preset))
     }
 
+    @Synchronized
     override fun matchesPreset(): AskPreset? = ApprovalStates.matchesPreset(remembered)
 
+    @Synchronized
     override fun remembered(): Map<String, ApprovalState> = remembered.toMap()
 }
 
 /**
- * Персистентная политика (M5.3 → v2): запомненные состояния групп живут в DataStore.
- * In-memory снимок для синхронного [state]; стор — источник истины. Запись идёт
- * в обе стороны сразу, чтобы диалог работал без ожидания эмита Flow.
+ * Process-owned policy. Local mutations stay effective until persisted; stale Flow payloads
+ * only trigger a fresh read serialized with writes. Failed mutations remain queued for retry.
  */
 class PersistentApprovalPolicy(
     private val store: ApprovalStore,
     scope: CoroutineScope,
     initial: Map<String, ApprovalState> = emptyMap(),
 ) : ApprovalPolicy {
-    @Volatile
-    private var snapshot: Map<String, ApprovalState> = initial
+    private val lock = Any()
+    private val ioMutex = Mutex()
+    private var snapshot = initial.toMap()
+    private val sessionAllowed = mutableMapOf<String, MutableSet<String>>()
+    private val pending = ArrayDeque<Change>()
+    private val wakeWriter = Channel<Unit>(Channel.CONFLATED)
+    private val retryReads = Channel<Unit>(Channel.CONFLATED)
+    private var readFailed = false
+    private var writeFailed = false
+    private val _persistenceFailed = MutableStateFlow(false)
+    val persistenceFailed: StateFlow<Boolean> = _persistenceFailed.asStateFlow()
 
-    private val sessionAllowed = ConcurrentHashMap<String, MutableSet<String>>()
+    private class Change(
+        val apply: (Map<String, ApprovalState>) -> Map<String, ApprovalState>,
+        val write: suspend () -> Unit,
+    )
 
     init {
         scope.launch {
-            store.remembered.collect { snapshot = it }
+            while (true) {
+                try {
+                    store.remembered.collect {
+                        ioMutex.withLock {
+                            val current = store.snapshot()
+                            synchronized(lock) {
+                                val next = pending.fold(current) { states, change -> change.apply(states) }
+                                if (snapshot != next) sessionAllowed.clear()
+                                snapshot = next
+                                readFailed = false
+                                _persistenceFailed.value = writeFailed
+                            }
+                        }
+                    }
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (_: Exception) {
+                    synchronized(lock) {
+                        readFailed = true
+                        _persistenceFailed.value = true
+                    }
+                }
+                retryReads.receive()
+            }
         }
         scope.launch {
-            snapshot = runCatching { store.snapshot() }.getOrDefault(snapshot)
+            for (signal in wakeWriter) {
+                try {
+                    ioMutex.withLock {
+                        while (true) {
+                            val change = synchronized(lock) { pending.firstOrNull() } ?: break
+                            change.write()
+                            val current = store.snapshot()
+                            synchronized(lock) {
+                                pending.removeFirst()
+                                snapshot = pending.fold(current) { states, queued -> queued.apply(states) }
+                            }
+                        }
+                        val current = store.snapshot()
+                        synchronized(lock) {
+                            snapshot = pending.fold(current) { states, queued -> queued.apply(states) }
+                        }
+                        synchronized(lock) {
+                            writeFailed = false
+                            _persistenceFailed.value = readFailed
+                        }
+                        // A successful write must also restart an observer stopped by a read error.
+                        retryReads.trySend(Unit)
+                    }
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (_: Exception) {
+                    // Never roll a failed DENY back to the previously persisted ALLOW.
+                    synchronized(lock) {
+                        writeFailed = true
+                        _persistenceFailed.value = true
+                    }
+                }
+            }
         }
     }
 
-    override fun state(groupKey: String, scope: String): ApprovalState = when {
-        sessionAllowed[scope].orEmpty().contains(groupKey) -> ApprovalState.ALLOW
-        else -> ApprovalStates.stateOf(snapshot, groupKey)
-    }
-
-    override fun setRemembered(groupKey: String, state: ApprovalState) {
-        snapshot = if (state == ApprovalState.ASK) {
-            snapshot - groupKey
-        } else {
-            snapshot + (groupKey to state)
+    override fun state(groupKey: String, scope: String): ApprovalState = synchronized(lock) {
+        val remembered = ApprovalStates.stateOf(snapshot, groupKey)
+        when {
+            remembered == ApprovalState.DENY -> ApprovalState.DENY
+            groupKey in sessionAllowed[scope].orEmpty() -> ApprovalState.ALLOW
+            else -> remembered
         }
-        pendingWrite(store, groupKey, state)
     }
 
-    override fun setSessionAllow(groupKey: String, scope: String) {
-        sessionAllowed.getOrPut(scope) { ConcurrentHashMap.newKeySet() }.add(groupKey)
+    private fun enqueue(change: Change, groupKey: String? = null) = synchronized(lock) {
+        if (groupKey == null) sessionAllowed.clear()
+        else sessionAllowed.values.forEach { grants ->
+            if (groupKey == ToolGroups.MCP_DEFAULT) grants.removeAll { ToolGroups.isMcp(it) }
+            else grants.remove(groupKey)
+        }
+        snapshot = change.apply(snapshot)
+        pending.addLast(change)
+        wakeWriter.trySend(Unit)
+        Unit
     }
 
-    override fun clearSession(scope: String) {
+    override fun setRemembered(groupKey: String, state: ApprovalState) = enqueue(
+        Change(
+            { if (state == ApprovalState.ASK) it - groupKey else it + (groupKey to state) },
+            { store.setRemembered(groupKey, state) },
+        ), groupKey,
+    )
+
+    override fun setSessionAllow(groupKey: String, scope: String) = synchronized(lock) {
+        sessionAllowed.getOrPut(scope) { mutableSetOf() }.add(groupKey)
+        Unit
+    }
+
+    override fun clearSession(scope: String) = synchronized(lock) {
         sessionAllowed.remove(scope)
+        Unit
     }
 
-    override fun clearRemembered() {
-        snapshot = emptyMap()
-        pendingClear(store)
-    }
+    override fun clearRemembered() = enqueue(Change({ emptyMap() }, { store.clear() }))
 
     override fun applyPreset(preset: AskPreset) {
-        snapshot = ApprovalStates.applyPreset(preset)
-        pendingReplace(store, snapshot)
+        val states = ApprovalStates.applyPreset(preset)
+        enqueue(Change({ states }, { store.replaceAll(states) }))
     }
 
-    override fun matchesPreset(): AskPreset? = ApprovalStates.matchesPreset(snapshot)
-
-    override fun remembered(): Map<String, ApprovalState> = snapshot
-
-    companion object {
-        // Записи — через shared IO-скоуп, без привязки к жизненному циклу экрана.
-        private val writeScope = CoroutineScope(kotlinx.coroutines.SupervisorJob() + kotlinx.coroutines.Dispatchers.IO)
-
-        private fun pendingWrite(store: ApprovalStore, groupKey: String, state: ApprovalState) {
-            writeScope.launch { runCatching { store.setRemembered(groupKey, state) } }
-        }
-
-        private fun pendingReplace(store: ApprovalStore, states: Map<String, ApprovalState>) {
-            writeScope.launch { runCatching { store.replaceAll(states) } }
-        }
-
-        private fun pendingClear(store: ApprovalStore) {
-            writeScope.launch { runCatching { store.clear() } }
-        }
+    fun retryPersistence() {
+        retryReads.trySend(Unit)
+        wakeWriter.trySend(Unit)
     }
+
+    override fun matchesPreset(): AskPreset? = synchronized(lock) { ApprovalStates.matchesPreset(snapshot) }
+    override fun remembered(): Map<String, ApprovalState> = synchronized(lock) { snapshot.toMap() }
 }
 
 /**

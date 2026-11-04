@@ -516,6 +516,7 @@ private fun OAssistApp(
                         initialValue = ru.outsideproarts.oassist.core.model.ToolPreferences(),
                     )
                 val context = LocalContext.current
+                val approvalPersistenceFailed by graph.approvalPolicy.persistenceFailed.collectAsStateWithLifecycle()
                 val approvalVersion = remember { mutableStateOf(0) }
                 val rememberedApprovals = remember(approvalVersion.value) {
                     graph.approvalPolicy.remembered()
@@ -527,6 +528,8 @@ private fun OAssistApp(
                     tools = ru.outsideproarts.oassist.core.agent.ToolCatalog.descriptors(),
                     disabled = prefs.disabled,
                     rememberedApprovals = rememberedApprovals,
+                    approvalPersistenceFailed = approvalPersistenceFailed,
+                    onRetryApprovalPersistence = graph.approvalPolicy::retryPersistence,
                     matchedPreset = matchedPreset,
                     maxToolRounds = prefs.maxToolRounds,
                     onToggleEnabled = { name, enabled ->

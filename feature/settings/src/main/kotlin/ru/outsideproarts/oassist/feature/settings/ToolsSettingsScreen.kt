@@ -26,6 +26,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.res.stringResource
 import ru.outsideproarts.oassist.core.a11y.oassistDropdownClassName
 import ru.outsideproarts.oassist.core.a11y.oassistHeading
+import ru.outsideproarts.oassist.core.a11y.oassistLiveRegion
 import ru.outsideproarts.oassist.core.a11y.oassistTouchTarget
 import ru.outsideproarts.oassist.core.agent.ToolDescriptor
 import ru.outsideproarts.oassist.core.model.ApprovalState
@@ -57,6 +58,8 @@ fun ToolsSettingsScreen(
     onResetTools: () -> Unit,
     onBack: () -> Unit,
     modifier: Modifier = Modifier,
+    approvalPersistenceFailed: Boolean = false,
+    onRetryApprovalPersistence: () -> Unit = {},
 ) {
     val title = stringResource(R.string.tools_settings_title)
     val toolsSection = stringResource(R.string.tools_section_tools)
@@ -70,6 +73,15 @@ fun ToolsSettingsScreen(
             .padding(OAssistDimens.ScreenContentPadding),
         verticalArrangement = Arrangement.spacedBy(OAssistDimens.SectionSpacing),
     ) {
+        if (approvalPersistenceFailed) {
+            Text(
+                stringResource(R.string.approvals_persistence_failed),
+                modifier = Modifier.oassistLiveRegion(polite = false),
+            )
+            OutlinedButton(onClick = onRetryApprovalPersistence) {
+                Text(stringResource(R.string.approvals_persistence_retry))
+            }
+        }
         Text(
             text = title,
             style = MaterialTheme.typography.headlineSmall,
