@@ -55,12 +55,14 @@ data class GeminiBlobDto(
 data class GeminiFunctionCallDto(
     val name: String,
     val args: JsonElement? = null,
+    val id: String? = null,
 )
 
 @Serializable
 data class GeminiFunctionResponseDto(
     val name: String,
     val response: JsonElement,
+    val id: String? = null,
 )
 
 @Serializable

@@ -47,6 +47,38 @@ class GeminiReplayTest {
     }
 
     @Test
+    fun serverIdentityIsIndependentOfRuntimeRemapAndStaleReplayCannotRestoreIt() {
+        val original = message(parts.replace("\"name\":\"ping\"", "\"id\":\"server-id\",\"name\":\"ping\""))
+            .let { it.copy(toolCalls = listOf(it.toolCalls!!.single().copy(geminiFunctionCallId = "server-id"))) }
+        val remapped = original.copy(toolCalls = listOf(original.toolCalls!!.single().copy(id = "remapped")))
+        val reply = ChatMessage(ChatRole.TOOL, "result", toolCallId = "remapped")
+        val mapped = mapGeminiContents(listOf(remapped, reply), "origin").second
+        assertEquals("server-id", mapped.first().parts.last().functionCall!!.id)
+        assertEquals("call-signature", mapped.first().parts.last().thoughtSignature)
+        assertEquals("server-id", mapped.last().parts.single().functionResponse!!.id)
+        for (newId in listOf("changed", null)) {
+            val edited = remapped.copy(toolCalls = listOf(remapped.toolCalls!!.single().copy(geminiFunctionCallId = newId)))
+            val changed = mapGeminiContents(listOf(edited, reply), "origin").second
+            assertEquals(newId, changed.first().parts.last().functionCall!!.id)
+            assertEquals(newId, changed.last().parts.single().functionResponse!!.id)
+            assertTrue(changed.flatMap { it.parts }.all { it.thoughtSignature == null })
+        }
+    }
+
+    @Test
+    fun outOfOrderResultsUseCallIdentityInsteadOfNameOrPositionAndLegacyIdsStayLocal() {
+        val calls = listOf(ToolCallRef("local-a", "ping", "{}", geminiFunctionCallId = "server-a"),
+            ToolCallRef("local-b", "ping", "{}", geminiFunctionCallId = "server-b"),
+            Json.decodeFromString<ToolCallRef>("""{"id":"legacy","name":"ping","argumentsJson":"{}"}"""))
+        val mapped = mapGeminiContents(listOf(ChatMessage(ChatRole.ASSISTANT, "", toolCalls = calls),
+            ChatMessage(ChatRole.TOOL, "b", toolCallId = "local-b"),
+            ChatMessage(ChatRole.TOOL, "a", toolCallId = "local-a"),
+            ChatMessage(ChatRole.TOOL, "old", toolCallId = "legacy"))).second
+        assertEquals(listOf("server-b", "server-a", null), mapped.drop(1).map { it.parts.single().functionResponse!!.id })
+        assertEquals(listOf("server-a", "server-b", null), mapped.first().parts.map { it.functionCall!!.id })
+    }
+
+    @Test
     fun metadataOnlyEmptyTextRemainsARealPartAndOldHistoryNeedsNoMigration() {
         val metadata = ReasoningBlock(geminiReplay = GeminiReplay("origin",
             """[{"role":"model","parts":[{"text":"","thoughtSignature":"empty-signature"}]}]"""))

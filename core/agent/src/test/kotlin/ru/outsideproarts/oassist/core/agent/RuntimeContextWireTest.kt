@@ -52,6 +52,73 @@ class RuntimeContextWireTest {
     @get:Rule val temporaryFolder = TemporaryFolder()
 
     @Test
+    fun geminiUnsignedServerIdsSurviveSplitStreamEarlyEofAndReopenWithoutInventingIds() = runBlocking {
+        withTimeout(30_000) {
+            for (complete in listOf(true, false)) {
+                val calls = geminiSse(listOf(
+                    """[{"functionCall":{"id":"call_1","name":"ping","args":{}}}]""",
+                    """[{"functionCall":{"name":"ping","args":{}}},{"functionCall":{"id":"server-C","name":"ping","args":{}}}]""",
+                ), complete)
+                val done = geminiSse(listOf("""[{"text":"done"}]"""))
+                LoopbackSseServer(listOf(calls, done, done)).use { server ->
+                    httpClient().use { http ->
+                        val profile = ProviderProfile(id = "gemini-ids", name = "Gemini", preset = ProviderPreset.CUSTOM,
+                            protocol = ModelProtocol.GEMINI_GENERATE, baseUrl = server.baseUrl)
+                        suspend fun agent() = AgentLoop(ModelClient.create(ru.outsideproarts.oassist.core.model.diagnostics.Diagnostics,
+                            profile, secrets, http), ToolRegistry(listOf(PingTool())))
+                        var transcript = emptyList<ChatMessage>()
+                        val chunks = agent().stream("model", null, emptyList(), "ping", onTurnMessages = { transcript = it }).toList()
+                        val toolCalls = chunks.filterIsInstance<ru.outsideproarts.oassist.core.provider.ChatChunk.ToolCall>()
+                        assertEquals(listOf("call_0", "call_1", "call_2"), toolCalls.map { it.id })
+                        val expected = listOf("call_1", null, "server-C")
+                        assertEquals(expected, toolCalls.map { it.geminiFunctionCallId })
+                        assertEquals(toolCalls.map { it.id }, chunks.filterIsInstance<ru.outsideproarts.oassist.core.provider.ChatChunk.ToolResult>().map { it.id })
+                        assertTrue(transcript.all { it.reasoning?.geminiReplay == null })
+                        val folder = temporaryFolder.newFolder()
+                        val file = java.io.File(folder, "turn.json")
+                        file.writeText(TurnCodec.encode(StoredTurn(userText = "ping", turn = transcript), "chat", "turn", ChatMediaStore(folder)))
+                        val restored = requireNotNull(TurnCodec.decode(file.readText(), ChatMediaStore(folder)))
+                        assertEquals(transcript, restored.turn)
+                        agent().stream("model", null, restored.modelMessages(), "continue").toList()
+                        for (request in server.requestBodies.drop(1)) {
+                            assertEquals(expected, request.parseJsonObject().geminiFunctionIds("functionCall"))
+                            assertEquals(expected, request.parseJsonObject().geminiFunctionIds("functionResponse"))
+                            assertFalse(request.contains("thoughtSignature"))
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    @Test
+    fun geminiServerCallErrorOrCancellationDoesNotExecuteOrPersistPendingTools() = runBlocking {
+        withTimeout(30_000) {
+            // A reasoning delta allows deterministic cancellation before the call is dispatched.
+            val pending = geminiSse(listOf("""[{"text":"thinking","thought":true},{"functionCall":{"id":"pending-id","name":"ping","args":{}},"thoughtSignature":"sig"}]"""), complete = false)
+            LoopbackSseServer(listOf(pending + "data: {\"error\":{\"message\":\"failed\"}}\n\n", pending)).use { server ->
+                httpClient().use { http ->
+                    val profile = ProviderProfile(id = "gemini-error-ids", name = "Gemini", preset = ProviderPreset.CUSTOM,
+                        protocol = ModelProtocol.GEMINI_GENERATE, baseUrl = server.baseUrl)
+                    suspend fun agent() = AgentLoop(ModelClient.create(ru.outsideproarts.oassist.core.model.diagnostics.Diagnostics,
+                        profile, secrets, http), ToolRegistry(listOf(PingTool())))
+                    var published = false
+                    val observed = mutableListOf<ru.outsideproarts.oassist.core.provider.ChatChunk>()
+                    assertTrue(runCatching {
+                        agent().stream("model", null, emptyList(), "ping", onTurnMessages = { published = true }).collect { observed += it }
+                    }.isFailure)
+                    assertFalse(published)
+                    assertTrue(observed.none { it is ru.outsideproarts.oassist.core.provider.ChatChunk.ToolResult })
+                    val cancelled = agent().stream("model", null, emptyList(), "ping", onTurnMessages = { published = true }).take(1).toList()
+                    assertFalse(published)
+                    assertTrue(cancelled.none { it is ru.outsideproarts.oassist.core.provider.ChatChunk.ToolResult })
+                    assertEquals(2, server.requestBodies.size)
+                }
+            }
+        }
+    }
+
+    @Test
     fun geminiSignedFragmentsSurviveToolRoundDiskReopenAndOriginChanges() = runBlocking {
         withTimeout(30_000) {
             val toolFragments = listOf(
@@ -299,10 +366,10 @@ class RuntimeContextWireTest {
         withTimeout(30_000) {
             // Only the first call in a parallel batch has a signature. The next
             // model round has its own signature, which must not replace the first.
-            val parallel = """{"candidates":[{"content":{"role":"model","parts":[{"functionCall":{"name":"ping","args":{}},"thoughtSignature":"c2lnLzE="},{"functionCall":{"name":"ping","args":{}}}]},"finishReason":"STOP"}]}"""
+            val parallel = """{"candidates":[{"content":{"role":"model","parts":[{"functionCall":{"id":"server /+α=","name":"ping","args":{}},"thoughtSignature":"c2lnLzE="},{"functionCall":{"id":"call_0","name":"ping","args":{}}}]},"finishReason":"STOP"}]}"""
             val sequential = """{"candidates":[{"content":{"role":"model","parts":[{"functionCall":{"name":"ping","args":{}},"thoughtSignature":"c2lnKzI="}]},"finishReason":"STOP"}]}"""
             val final = """{"candidates":[{"content":{"role":"model","parts":[{"text":"done"}]},"finishReason":"STOP"}]}"""
-            LoopbackSseServer(listOf(parallel, sequential, final, final).map { "data: $it\n\n" }).use { server ->
+            LoopbackSseServer(listOf(parallel, sequential, final, final, final).map { "data: $it\n\n" }).use { server ->
                 httpClient().use { http ->
                     val profile = ProviderProfile(
                         id = "gemini-signatures", name = "Gemini", preset = ProviderPreset.CUSTOM,
@@ -319,6 +386,10 @@ class RuntimeContextWireTest {
                     assertEquals(3, server.requestBodies.size)
                     val second = server.requestBodies[1].parseJsonObject()
                     val third = server.requestBodies[2].parseJsonObject()
+                    assertEquals(listOf("server /+α=", "call_0"), second.geminiFunctionIds("functionCall"))
+                    assertEquals(listOf("server /+α=", "call_0"), second.geminiFunctionIds("functionResponse"))
+                    assertEquals(listOf("server /+α=", "call_0", null), third.geminiFunctionIds("functionCall"))
+                    assertEquals(listOf("server /+α=", "call_0", null), third.geminiFunctionIds("functionResponse"))
                     assertEquals(listOf("c2lnLzE=", null), second.geminiCallSignatures())
                     assertEquals(listOf("c2lnLzE=", null, "c2lnKzI="), third.geminiCallSignatures())
                     val outcomes = second["contents"]!!.jsonArray.flatMap { it.jsonObject["parts"]!!.jsonArray }
@@ -329,17 +400,30 @@ class RuntimeContextWireTest {
                     assertEquals("error", results[1]["status"]!!.jsonPrimitive.content)
 
                     // Exercise the actual persisted turn format, then a new agent.
-                    val media = ChatMediaStore(temporaryFolder.newFolder())
-                    val payload = TurnCodec.encode(StoredTurn(userText = "ping", turn = transcript), "chat", "turn", media)
-                    val restored = requireNotNull(TurnCodec.decode(payload, media))
+                    val folder = temporaryFolder.newFolder()
+                    val file = java.io.File(folder, "turn.json")
+                    file.writeText(TurnCodec.encode(StoredTurn(userText = "ping", turn = transcript), "chat", "turn", ChatMediaStore(folder)))
+                    val restored = requireNotNull(TurnCodec.decode(file.readText(), ChatMediaStore(folder)))
                     val reopened = AgentLoop(
                         ModelClient.create(ru.outsideproarts.oassist.core.model.diagnostics.Diagnostics, profile, secrets, http),
                         ToolRegistry(listOf(PingTool())),
                     )
                     reopened.stream("model-under-test", null, restored.modelMessages(), "continue").toList()
                     assertEquals(4, server.requestBodies.size)
+                    assertEquals(listOf("server /+α=", "call_0", null), server.requestBodies[3].parseJsonObject().geminiFunctionIds("functionCall"))
+                    assertEquals(listOf("server /+α=", "call_0", null), server.requestBodies[3].parseJsonObject().geminiFunctionIds("functionResponse"))
                     assertEquals(listOf("c2lnLzE=", null, "c2lnKzI="),
                         server.requestBodies[3].parseJsonObject().geminiCallSignatures())
+                    val edited = restored.modelMessages().map { message ->
+                        message.copy(toolCalls = message.toolCalls?.map { call ->
+                            if (call.geminiFunctionCallId == "server /+α=") call.copy(geminiFunctionCallId = "edited-server-id") else call
+                        })
+                    }
+                    reopened.stream("model-under-test", null, edited, "continue").toList()
+                    val changed = server.requestBodies[4].parseJsonObject()
+                    assertEquals(listOf("edited-server-id", "call_0", null), changed.geminiFunctionIds("functionCall"))
+                    assertEquals(listOf("edited-server-id", "call_0", null), changed.geminiFunctionIds("functionResponse"))
+                    assertEquals(listOf(null, null, "c2lnKzI="), changed.geminiCallSignatures())
                 }
             }
         }
@@ -349,6 +433,11 @@ class RuntimeContextWireTest {
         getValue("contents").jsonArray.flatMap { it.jsonObject.getValue("parts").jsonArray }
             .map { it.jsonObject }.filter { "functionCall" in it }
             .map { it["thoughtSignature"]?.jsonPrimitive?.content }
+
+    private fun JsonObject.geminiFunctionIds(kind: String): List<String?> =
+        getValue("contents").jsonArray.flatMap { it.jsonObject.getValue("parts").jsonArray }
+            .mapNotNull { it.jsonObject[kind]?.jsonObject }
+            .map { it["id"]?.jsonPrimitive?.content }
 
     private val secrets = object : SecretStore {
         override suspend fun putPair(firstAlias: String, first: CharArray?, secondAlias: String, second: CharArray?) {

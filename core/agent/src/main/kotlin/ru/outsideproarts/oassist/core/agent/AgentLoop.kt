@@ -201,7 +201,7 @@ class AgentLoop(
             diagnostics.emit(DiagnosticKind.PROVIDER_RESPONSE, diagnosticOperation,
                 attributes = mapOf("round" to rounds.toString(), "abrupt" to streamAbrupt.toString()),
                 content = Json.encodeToString(ChatMessage(ChatRole.ASSISTANT, contentSb.toString(),
-                    toolCalls = toolCalls.map { ru.outsideproarts.oassist.core.model.ToolCallRef(it.id, it.name, it.argumentsJson, it.thoughtSignature) },
+                    toolCalls = toolCalls.map { ru.outsideproarts.oassist.core.model.ToolCallRef(it.id, it.name, it.argumentsJson, it.thoughtSignature, it.geminiFunctionCallId) },
                     reasoning = reasoning)), secrets = diagnosticSecrets())
 
             if (toolCalls.isEmpty()) {
@@ -247,6 +247,7 @@ class AgentLoop(
                             name = tc.name,
                             argumentsJson = tc.argumentsJson,
                             thoughtSignature = tc.thoughtSignature,
+                            geminiFunctionCallId = tc.geminiFunctionCallId,
                         )
                     },
                     reasoning = reasoning,
@@ -256,7 +257,7 @@ class AgentLoop(
             for (tc in toolCalls) {
                 if (!invalidByeBatch) {
                     emit(ChatChunk.ToolCall(id = tc.id, name = tc.name, argumentsJson = tc.argumentsJson,
-                        thoughtSignature = tc.thoughtSignature))
+                        thoughtSignature = tc.thoughtSignature, geminiFunctionCallId = tc.geminiFunctionCallId))
                 }
                 val parsedArgs = runCatching {
                     Json.parseToJsonElement(tc.argumentsJson).jsonObject

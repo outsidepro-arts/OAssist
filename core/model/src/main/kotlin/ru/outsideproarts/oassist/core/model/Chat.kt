@@ -89,6 +89,8 @@ data class ToolCallRef(
     val argumentsJson: String,
     /** Непрозрачная подпись Gemini: возвращается с тем же вызовом без изменений. */
     val thoughtSignature: String? = null,
+    /** Gemini wire identity; independent of the locally remapped [id]. Null for legacy/id-less calls. */
+    val geminiFunctionCallId: String? = null,
 )
 
 @Serializable

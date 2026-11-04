@@ -122,6 +122,8 @@
 
 После PW-002 и контроля PW-005, `core/provider/gemini`, model/history при необходимости: сохранять серверный id отдельно от локального fallback. Проверить два одноимённых calls и matching functionResponse ids во втором запросе, а также случай без id.
 
+PW-006 исправлен: additive nullable серверный ID через доменную историю, корреляция ответов по локальному ID без отправки synthetic fallback, проверка identity в replay. Регрессия на реальном HTTP/SSE воспроизведена; проверки включают tool errors, повторные раунды, disk/reopen, unsigned/id-less и stream failures. Unit-тесты model/provider/agent/data, релевантный Lint, сборка приложения и проверка model JAR пройдены; независимое ревью пройдено без замечаний. Live API не проверялся.
+
 ## 28. PW-003 — Возможности thinking Anthropic
 
 После RT-001/002 и PW-002, `core/provider/anthropic` и capability model: manual/adaptive по проверенным возможностям endpoint/model. Проверить фактические тела manual, adaptive и unknown; не создавать статический каталог и не переносить native контракт на proxy.

@@ -21,10 +21,10 @@ import ru.outsideproarts.oassist.core.provider.openai.ToolSchemaDto
  * именем, дальше его ловит ASK-ветка реестра.
  */
 internal fun mapGeminiContents(messages: List<ChatMessage>, replayOrigin: String? = null): Pair<GeminiContentDto?, List<GeminiContentDto>> {
-    val idToName = messages
+    val idToCall = messages
         .filter { it.role == ChatRole.ASSISTANT }
         .flatMap { it.toolCalls.orEmpty() }
-        .associate { it.id to it.name }
+        .associateBy { it.id }
     val system = messages
         .filter { it.role == ChatRole.SYSTEM && it.content.isNotBlank() }
         .joinToString("\n\n") { it.content }
@@ -65,6 +65,7 @@ internal fun mapGeminiContents(messages: List<ChatMessage>, replayOrigin: String
                             functionCall = GeminiFunctionCallDto(
                                 name = call.name,
                                 args = parseGeminiArgs(call.argumentsJson),
+                                id = call.geminiFunctionCallId,
                             ),
                             // A rejected replay snapshot must not leak signatures to another origin.
                             thoughtSignature = call.thoughtSignature.takeIf { metadata == null },
@@ -77,7 +78,8 @@ internal fun mapGeminiContents(messages: List<ChatMessage>, replayOrigin: String
                 add(GeminiContentDto(
                     role = "user",
                     parts = listOf(GeminiPartDto(functionResponse = GeminiFunctionResponseDto(
-                        name = idToName[msg.toolCallId] ?: msg.toolCallId.orEmpty(),
+                        name = idToCall[msg.toolCallId]?.name ?: msg.toolCallId.orEmpty(),
+                        id = idToCall[msg.toolCallId]?.geminiFunctionCallId,
                         response = buildJsonObject { put("result", msg.content) },
                     ))),
                 ))
@@ -111,6 +113,7 @@ private fun completeGeminiReplay(message: ChatMessage, json: String): List<Gemin
     if (calls.size != message.toolCalls.orEmpty().size) return null
     if (!calls.zip(message.toolCalls.orEmpty()).all { (part, call) ->
         part.functionCall!!.name == call.name &&
+            part.functionCall.id == call.geminiFunctionCallId &&
             (part.functionCall.args ?: JsonObject(emptyMap())) == ProviderJson.parseToJsonElement(call.argumentsJson) &&
             part.thoughtSignature == call.thoughtSignature
     }) return null
@@ -159,6 +162,7 @@ internal fun extractGeminiChunk(
                 ),
                 index = counter - 1 - nextId,
                 thoughtSignature = part.thoughtSignature,
+                geminiFunctionCallId = call.id,
             )
         }
     }
