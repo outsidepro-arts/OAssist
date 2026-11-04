@@ -1,6 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
 <voice-interaction-service
     xmlns:android="http://schemas.android.com/apk/res/android"
-    android:settingsActivity="ru.outsideproarts.oassist.feature.settings.SettingsScreen"
+    android:sessionService="ru.outsideproarts.oassist.vis.OAssistVoiceInteractionSessionService"
+    android:recognitionService="ru.outsideproarts.oassist.vis.OAssistRecognitionService"
     android:supportsAssist="true"
     android:supportsLaunchVoiceAssistFromKeyguard="true" />

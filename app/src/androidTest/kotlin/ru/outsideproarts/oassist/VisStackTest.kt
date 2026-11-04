@@ -4,9 +4,12 @@ import android.content.ComponentName
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.provider.Settings
+import android.service.voice.VoiceInteractionService
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
 import org.junit.Assert.assertNotNull
+import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -35,6 +38,29 @@ class VisStackTest {
         assertTrue(
             services.any { it.serviceInfo.name.endsWith("OAssistVoiceInteractionService") },
         )
+    }
+
+    @Test
+    fun voiceInteractionService_metadataReferencesInstalledServices() {
+        val component = ComponentName(context, OAssistVoiceInteractionService::class.java)
+        val info = pm.getServiceInfo(component, PackageManager.GET_META_DATA)
+        val parser = requireNotNull(info.loadXmlMetaData(pm, VoiceInteractionService.SERVICE_META_DATA))
+        try {
+            while (parser.next() != org.xmlpull.v1.XmlPullParser.START_TAG) {
+                check(parser.eventType != org.xmlpull.v1.XmlPullParser.END_DOCUMENT)
+            }
+            val namespace = "http://schemas.android.com/apk/res/android"
+            assertEquals("voice-interaction-service", parser.name)
+            val session = parser.getAttributeValue(namespace, "sessionService")
+            val recognition = parser.getAttributeValue(namespace, "recognitionService")
+            assertEquals(OAssistVoiceInteractionSessionService::class.java.name, session)
+            assertEquals(OAssistRecognitionService::class.java.name, recognition)
+            assertNotNull(pm.getServiceInfo(ComponentName(context.packageName, requireNotNull(session)), 0))
+            assertNotNull(pm.getServiceInfo(ComponentName(context.packageName, requireNotNull(recognition)), 0))
+            assertNull(parser.getAttributeValue(namespace, "settingsActivity"))
+        } finally {
+            parser.close()
+        }
     }
 
     @Test
