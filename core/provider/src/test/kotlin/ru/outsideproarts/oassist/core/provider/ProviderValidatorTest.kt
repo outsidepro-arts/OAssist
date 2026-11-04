@@ -17,6 +17,30 @@ import ru.outsideproarts.oassist.core.model.ProviderProfile
 
 class ProviderValidatorTest {
 
+    @Test
+    fun validationUsesSavedAndNewExtraHeaders() = runTest {
+        val store = object : SecretStore {
+            override suspend fun put(alias: String, plaintext: CharArray) = Unit
+            override suspend fun get(alias: String) = "saved".toCharArray()
+            override suspend fun contains(alias: String) = true
+            override suspend fun delete(alias: String) = Unit
+            override suspend fun clearAll() = Unit
+            override suspend fun aliases() = emptyList<String>()
+        }
+        val http = HttpClient(MockEngine { request ->
+            assertEquals("saved", request.headers["X-Saved"])
+            assertEquals("new", request.headers["X-New"])
+            respond("""{"data":[]}""", headers = headersOf("Content-Type", "application/json"))
+        })
+        try {
+            val validator = ProviderValidator(ru.outsideproarts.oassist.core.model.diagnostics.Diagnostics, store, http, probeTimeoutMs = null)
+            val result = validator.validate(profile(extraHeaders = mapOf("X-Saved" to "saved.alias")), ProviderAuth(extraHeaders = mapOf("X-New" to "new")))
+            assertTrue(result.toString(), result is ProviderValidationResult.Success)
+        } finally {
+            http.close()
+        }
+    }
+
     private val emptySecrets = object : SecretStore {
         override suspend fun put(alias: String, plaintext: CharArray) = Unit
         override suspend fun get(alias: String): CharArray? = null
@@ -32,6 +56,7 @@ class ProviderValidatorTest {
         protocol: ModelProtocol? = null,
         fetchScheme: ModelFetchScheme = ModelFetchScheme.MODELS,
         baseUrl: String = "https://api.example.com/v1",
+        extraHeaders: Map<String, String> = emptyMap(),
     ) = ProviderProfile(
         id = "p1",
         name = name,
@@ -39,6 +64,7 @@ class ProviderValidatorTest {
         baseUrl = baseUrl,
         protocol = protocol,
         fetchScheme = fetchScheme,
+        extraHeaders = extraHeaders,
     )
 
     /** Движок-заглушка: запрос не должен выполняться (локальные проверки/заглушки). */

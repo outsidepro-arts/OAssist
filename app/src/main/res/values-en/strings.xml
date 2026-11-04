@@ -17,6 +17,10 @@
     <string name="mcp_test_success">MCP %1$s: tools: %2$d</string>
     <string name="mcp_test_error">MCP %1$s: %2$s</string>
     <string name="provider_save_no_check">Check for this type coming later — provider saved</string>
+    <string name="provider_cleanup_warning_title">Settings saved</string>
+    <string name="provider_cleanup_warning">Old secret headers could not be deleted. They are no longer used. Retry deletion now or close this message.</string>
+    <string name="provider_cleanup_retry">Retry deletion</string>
+    <string name="provider_cleanup_close">Close</string>
     <string name="approvals_reset_done">Tool permissions reset</string>
     <string name="tools_reset_done">Tool settings reset</string>
     <string name="a11y_service_description">OAssist reads the screen and performs gestures only on your agent command.</string>

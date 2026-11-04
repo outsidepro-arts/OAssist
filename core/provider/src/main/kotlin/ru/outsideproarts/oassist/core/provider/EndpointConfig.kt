@@ -189,18 +189,15 @@ internal suspend fun resolveProviderAuth(
         }
     }
     val basicPassword = overrides?.basicPassword ?: profile.basicPasswordRef?.let { secretStore.get(it) }
-    val extras = if (overrides != null && overrides.extraHeaders.isNotEmpty()) {
-        overrides.extraHeaders
-    } else {
-        profile.extraHeaders.mapNotNull { (name, alias) ->
-            val value = secretStore.get(alias) ?: return@mapNotNull null
-            try {
-                name to String(value)
-            } finally {
-                value.fill(SECRET_FILLER)
-            }
-        }.toMap()
-    }
+    val extras = profile.extraHeaders.mapNotNull { (name, alias) ->
+        if (overrides?.extraHeaders?.containsKey(name) == true) return@mapNotNull null
+        val value = secretStore.get(alias) ?: return@mapNotNull null
+        try {
+            name to String(value)
+        } finally {
+            value.fill(SECRET_FILLER)
+        }
+    }.toMap() + overrides?.extraHeaders.orEmpty()
     return ProviderAuth(
         apiKey = apiKey,
         basicUser = basicUser,

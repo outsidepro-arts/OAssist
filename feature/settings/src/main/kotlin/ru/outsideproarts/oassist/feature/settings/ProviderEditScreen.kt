@@ -184,8 +184,8 @@ fun ProviderEditScreen(
             apiKeyHeaderName = ""
             catalogPath = ""
             extraBody = ""
-            savedHeaders = emptyMap()
             clearedHeaders = savedHeaders.keys.toList() + clearedHeaders
+            savedHeaders = emptyMap()
             pendingHeaders = emptyMap()
             newPreset.defaultBaseUrl()?.let { baseUrl = it }
             if (newPreset == ProviderPreset.GOOGLE) googleVersion = GoogleApiVersion.BETA
@@ -206,6 +206,7 @@ fun ProviderEditScreen(
             apiKeyHeaderName = apiKeyHeaderName.trim().ifBlank { null },
             catalogPath = catalogPath.trim().ifBlank { null },
             extraBody = extraBody.trim().ifBlank { null },
+            extraHeaders = savedHeaders,
             enabled = enabled,
         )
 
@@ -815,7 +816,6 @@ fun ProviderEditScreen(
                         val headerName = newHeaderName.trim()
                         if (headerName.isNotEmpty() && newHeaderValue.isNotEmpty()) {
                             pendingHeaders = pendingHeaders + (headerName to newHeaderValue)
-                            clearedHeaders = clearedHeaders - headerName
                             newHeaderName = ""
                             newHeaderValue = ""
                         }

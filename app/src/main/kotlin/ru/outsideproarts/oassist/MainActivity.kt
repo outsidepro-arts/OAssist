@@ -19,6 +19,7 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -34,6 +35,8 @@ import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.stateDescription
 import androidx.core.os.LocaleListCompat
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
 import androidx.navigation.NavGraph.Companion.findStartDestination
 import androidx.navigation.NavType
 import androidx.navigation.compose.NavHost
@@ -42,6 +45,7 @@ import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
 import androidx.navigation.navArgument
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.launch
 import ru.outsideproarts.oassist.core.a11y.AnnouncerHost
 import ru.outsideproarts.oassist.core.a11y.FlowAnnouncer
@@ -643,29 +647,46 @@ private fun OAssistApp(
                     .collectAsStateWithLifecycle(initialValue = emptyList())
                 val profile = providers.find { it.id == id }
                 val context = LocalContext.current
+                val editorOwner = rememberProviderEditorOwner(backStackEntry)
                 var isSaving by remember { mutableStateOf(false) }
                 var saveError by remember { mutableStateOf<String?>(null) }
+                var pendingHeaderCleanup by remember { mutableStateOf<Set<String>>(emptySet()) }
+                var cleanupWarningReady by remember { mutableStateOf(false) }
+                val isCurrentEditor = { navController.currentBackStackEntry == backStackEntry }
                 ProviderEditScreen(
                     profile = profile,
                     isSaving = isSaving,
                     saveError = saveError,
                     onDismissSaveError = { saveError = null },
                     onSave = { updated, secrets ->
-                        scope.launch {
+                        editorOwner.launch {
                             isSaving = true
                             saveError = null
-                            saveProvider(graph, updated, secrets)
-                                .onSuccess { result ->
-                                    if (result is ProviderValidationResult.Skipped) {
-                                        showToast(context, R.string.provider_save_no_check)
+                            cleanupWarningReady = false
+                            try {
+                                saveProvider(
+                                    graph.providers,
+                                    ProviderValidator(ru.outsideproarts.oassist.core.model.diagnostics.Diagnostics, graph.data.secretStore, graph.httpClient),
+                                    graph.data.secretStore, updated, secrets,
+                                    pendingCleanup = pendingHeaderCleanup,
+                                    onCleanupPending = { if (isCurrentEditor()) pendingHeaderCleanup = it },
+                                )
+                                    .onSuccess { result ->
+                                        if (!isCurrentEditor()) return@onSuccess
+                                        if (result is ProviderValidationResult.Skipped) {
+                                            showToast(context, R.string.provider_save_no_check)
+                                        }
+                                        if (pendingHeaderCleanup.isEmpty()) navController.popBackStack()
+                                        else cleanupWarningReady = true
                                     }
-                                    navController.popBackStack()
-                                }
-                                .onFailure { e ->
-                                    saveError = ru.outsideproarts.oassist.core.provider.ProviderError.from(e)
-                                        .userMessage(context)
-                                }
-                            isSaving = false
+                                    .onFailure { e ->
+                                        if (!isCurrentEditor()) return@onFailure
+                                        saveError = ru.outsideproarts.oassist.core.provider.ProviderError.from(e)
+                                            .userMessage(context)
+                                    }
+                            } finally {
+                                isSaving = false
+                            }
                         }
                     },
                     onDelete = { providerId ->
@@ -676,6 +697,39 @@ private fun OAssistApp(
                     },
                     onBack = { navController.popBackStack() },
                 )
+                if (cleanupWarningReady && pendingHeaderCleanup.isNotEmpty() && !isSaving) {
+                    AlertDialog(
+                        onDismissRequest = { navController.popBackStack() },
+                        title = { Text(stringResource(R.string.provider_cleanup_warning_title)) },
+                        text = { Text(stringResource(R.string.provider_cleanup_warning)) },
+                        confirmButton = {
+                            TextButton(onClick = {
+                                editorOwner.launch {
+                                    isSaving = true
+                                    try {
+                                        retryProviderHeaderCleanup(
+                                            graph.providers, graph.data.secretStore, pendingHeaderCleanup,
+                                            isCurrentEditor,
+                                            onPending = { pendingHeaderCleanup = it },
+                                            onDone = { navController.popBackStack() },
+                                        )
+                                    } catch (e: kotlinx.coroutines.CancellationException) {
+                                        throw e
+                                    } catch (_: Exception) {
+                                        // Keep the dialog and remaining aliases available for another retry.
+                                    } finally {
+                                        isSaving = false
+                                    }
+                                }
+                            }) { Text(stringResource(R.string.provider_cleanup_retry)) }
+                        },
+                        dismissButton = {
+                            TextButton(onClick = { navController.popBackStack() }) {
+                                Text(stringResource(R.string.provider_cleanup_close))
+                            }
+                        },
+                    )
+                }
             }
             composable(
                 "mode_config/{mode}",
@@ -836,44 +890,60 @@ private fun showToast(
  * авторизации передаётся как [ProviderAuth]; результат проверки сохраняется отдельно
  * от значения секрета.
  */
-private suspend fun saveProvider(
-    graph: AppGraph,
+internal suspend fun saveProvider(
+    providers: ru.outsideproarts.oassist.core.data.provider.ProviderRepository,
+    validator: ProviderValidator,
+    secretStore: ru.outsideproarts.oassist.core.data.secret.SecretStore,
     updated: ru.outsideproarts.oassist.core.model.ProviderProfile,
     secrets: ProviderSecretsInput,
+    pendingCleanup: Set<String> = emptySet(),
+    onCleanupPending: (Set<String>) -> Unit = {},
 ): Result<ProviderValidationResult> = try {
     val overrides = ProviderAuth(
         apiKey = secrets.apiKey?.toCharArray(),
         basicUser = secrets.basicUser,
         basicPassword = secrets.basicPassword?.toCharArray(),
+        extraHeaders = secrets.extraHeaders,
     )
-    val validator = ProviderValidator(ru.outsideproarts.oassist.core.model.diagnostics.Diagnostics, graph.data.secretStore, graph.httpClient)
     when (val result = validator.validate(updated, overrides)) {
         is ProviderValidationResult.Failure -> Result.failure(result.error)
         else -> {
-            graph.providers.upsertProvider(updated)
+            val oldHeaders = providers.getProvider(updated.id)?.extraHeaders.orEmpty()
+            val removedAliases = pendingCleanup + secrets.clearedExtraHeaders.mapNotNull(oldHeaders::get)
+            kotlinx.coroutines.currentCoroutineContext().ensureActive()
+            kotlinx.coroutines.withContext(kotlinx.coroutines.NonCancellable) {
+                providers.upsertProvider(updated)
+                onCleanupPending(removedAliases)
+            }
             val apiKey = secrets.apiKey
             when {
-                secrets.clearApiKey -> graph.providers.clearApiKey(updated.id)
-                apiKey != null -> graph.providers.setApiKey(updated.id, apiKey.toCharArray())
+                secrets.clearApiKey -> providers.clearApiKey(updated.id)
+                apiKey != null -> providers.setApiKey(updated.id, apiKey.toCharArray())
             }
             val basicUser = secrets.basicUser
             val basicPassword = secrets.basicPassword
             when {
-                secrets.clearBasic -> graph.providers.clearBasicCredentials(updated.id)
+                secrets.clearBasic -> providers.clearBasicCredentials(updated.id)
                 // Парная запись: полная пара или ничего (частичный ввод не сохраняется).
                 basicUser != null && basicPassword != null ->
-                    graph.providers.setBasicCredentials(
+                    providers.setBasicCredentials(
                         updated.id,
                         basicUser.toCharArray(),
                         basicPassword.toCharArray(),
                     )
             }
-            secrets.clearedExtraHeaders.forEach { graph.providers.clearExtraHeader(updated.id, it) }
             secrets.extraHeaders.forEach { (headerName, value) ->
-                graph.providers.setExtraHeader(updated.id, headerName, value.toCharArray())
+                providers.setExtraHeader(updated.id, headerName, value.toCharArray())
             }
             if (result is ProviderValidationResult.Success) {
-                graph.providers.refreshModelCatalog(updated.id, result.models)
+                providers.refreshModelCatalog(updated.id, result.models)
+            }
+            try {
+                cleanupProviderHeaders(providers, secretStore, removedAliases, onCleanupPending)
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                throw e
+            } catch (_: Exception) {
+                // The saved profile no longer references the retired headers.
             }
             Result.success(result)
         }
@@ -882,4 +952,65 @@ private suspend fun saveProvider(
     throw e
 } catch (e: Throwable) {
     Result.failure(e)
+}
+
+internal suspend fun retryProviderHeaderCleanup(
+    providers: ru.outsideproarts.oassist.core.data.provider.ProviderRepository,
+    secretStore: ru.outsideproarts.oassist.core.data.secret.SecretStore,
+    aliases: Set<String>,
+    isCurrentEditor: () -> Boolean,
+    onPending: (Set<String>) -> Unit,
+    onDone: () -> Unit,
+) {
+    cleanupProviderHeaders(providers, secretStore, aliases) { remaining ->
+        if (isCurrentEditor()) onPending(remaining)
+    }
+    kotlinx.coroutines.currentCoroutineContext().ensureActive()
+    if (isCurrentEditor()) onDone()
+}
+
+internal class ProviderEditorOwner(private val scope: kotlinx.coroutines.CoroutineScope) {
+    private var operation: kotlinx.coroutines.Job? = null
+
+    fun launch(block: suspend kotlinx.coroutines.CoroutineScope.() -> Unit) {
+        operation = scope.launch(block = block)
+    }
+
+    fun cancel() { operation?.cancel() }
+}
+
+@Composable
+internal fun rememberProviderEditorOwner(entry: androidx.navigation.NavBackStackEntry): ProviderEditorOwner {
+    val scope = rememberCoroutineScope()
+    val owner = remember(entry) { ProviderEditorOwner(scope) }
+    DisposableEffect(entry, owner) {
+        val observer = LifecycleEventObserver { _, event ->
+            if (event == Lifecycle.Event.ON_PAUSE) owner.cancel()
+        }
+        entry.lifecycle.addObserver(observer)
+        onDispose {
+            entry.lifecycle.removeObserver(observer)
+            owner.cancel()
+        }
+    }
+    return owner
+}
+
+internal suspend fun cleanupProviderHeaders(
+    providers: ru.outsideproarts.oassist.core.data.provider.ProviderRepository,
+    secretStore: ru.outsideproarts.oassist.core.data.secret.SecretStore,
+    aliases: Set<String>,
+    onPending: (Set<String>) -> Unit,
+) {
+    var pending = aliases
+    for (alias in aliases) {
+        val active = providers.observeProviders().first().any { profile ->
+            alias in profile.extraHeaders.values || alias == profile.apiKeyRef ||
+                alias == profile.basicUserRef || alias == profile.basicPasswordRef
+        }
+        if (!active) secretStore.delete(alias)
+        kotlinx.coroutines.currentCoroutineContext().ensureActive()
+        pending = pending - alias
+        onPending(pending)
+    }
 }
