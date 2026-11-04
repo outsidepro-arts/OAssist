@@ -27,6 +27,54 @@ import ru.outsideproarts.oassist.core.provider.ProviderValidator
 import ru.outsideproarts.oassist.feature.settings.ProviderSecretsInput
 
 class ProviderSaveFailureTest {
+    @Test fun partialBasicPairCanBeRepairedThroughValidationSaveAndHttp() = runTest {
+        checkBasicRepair(cleanupFails = false)
+    }
+
+    @Test fun basicRepairCleanupFailureKeepsSavedPairAndPendingRetry() = runTest {
+        checkBasicRepair(cleanupFails = true)
+    }
+
+    private suspend fun checkBasicRepair(cleanupFails: Boolean) {
+        val secrets = MemorySecrets()
+        val repository = ProviderRepository(ProviderConfigStore(MemoryPreferences()), secrets)
+        val profile = ProviderProfile("p", "Provider", ProviderPreset.CUSTOM, "https://provider.example",
+            authScheme = ru.outsideproarts.oassist.core.model.AuthScheme.BASIC, basicUserRef = "legacy.user")
+        secrets.put("legacy.user", "old-user".toCharArray())
+        if (cleanupFails) secrets.failDeletion = "legacy.user"
+        repository.upsertProvider(profile)
+        val expected = "Basic " + java.util.Base64.getEncoder().encodeToString("new-user:new-password".toByteArray())
+        val received = mutableListOf<String?>()
+        val http = HttpClient(MockEngine { request ->
+            val auth = request.headers["Authorization"]
+            received += auth
+            respond("""{"data":[]}""", status = if (auth == expected) io.ktor.http.HttpStatusCode.OK
+                else io.ktor.http.HttpStatusCode.Unauthorized, headers = headersOf("Content-Type", "application/json"))
+        })
+        try {
+            var pending = emptySet<String>()
+            val result = saveProvider(repository, ProviderValidator(Diagnostics, secrets, http, probeTimeoutMs = null),
+                secrets, profile, ProviderSecretsInput(basicUser = "new-user", basicPassword = "new-password"),
+                onCleanupPending = { pending = it })
+            assertTrue(result.toString(), result.isSuccess)
+            val saved = repository.getProvider("p")!!
+            assertNotEquals("legacy.user", saved.basicUserRef)
+            if (cleanupFails) {
+                assertTrue("legacy.user" in pending)
+                assertEquals("old-user", secrets.get("legacy.user")?.concatToString())
+            } else {
+                assertTrue(pending.isEmpty())
+                assertNull(secrets.get("legacy.user"))
+            }
+            ModelClient.create(Diagnostics, saved, secrets, http).fetchModels()
+            assertEquals(listOf(expected, expected), received)
+            secrets.failDeletion = null
+            cleanupProviderHeaders(repository, secrets, pending) { pending = it }
+            assertTrue(pending.isEmpty())
+            assertNull(secrets.get("legacy.user"))
+        } finally { http.close() }
+    }
+
     @Test fun failedProfileWriteKeepsOldProfileAndSecrets() = runTest {
         checkFailedProfileWrite(IllegalStateException("write failed"))
     }
@@ -245,6 +293,15 @@ class ProviderSaveFailureTest {
         var deletionFailure: Exception = IllegalStateException("delete failed")
         var putFailure: Exception? = null
         var beforeDelete: suspend () -> Unit = {}
+        override suspend fun putPair(firstAlias: String, first: CharArray?, secondAlias: String, second: CharArray?) {
+            putFailure?.let { throw it }
+            if (first == null) values.remove(firstAlias) else values[firstAlias] = first.copyOf()
+            if (second == null) values.remove(secondAlias) else values[secondAlias] = second.copyOf()
+            first?.fill('\u0000')
+            second?.fill('\u0000')
+        }
+        override suspend fun getPair(firstAlias: String?, secondAlias: String?): Pair<CharArray?, CharArray?> =
+            firstAlias?.let { get(it) } to secondAlias?.let { get(it) }
         override suspend fun put(alias: String, plaintext: CharArray) {
             putFailure?.let { throw it }
             values[alias] = plaintext.copyOf()

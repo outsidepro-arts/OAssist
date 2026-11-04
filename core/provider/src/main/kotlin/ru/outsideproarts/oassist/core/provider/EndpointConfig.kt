@@ -76,7 +76,7 @@ class EndpointConfig(
             }
             AuthScheme.BASIC -> {
                 val user = auth.basicUser ?: return
-                val password = auth.basicPassword?.let { String(it) }.orEmpty()
+                val password = auth.basicPassword?.let { String(it) } ?: return
                 val encoded = Base64.getEncoder().encodeToString("$user:$password".toByteArray(Charsets.UTF_8))
                 builder.headers.append(HttpHeaders.Authorization, "Basic $encoded")
             }
@@ -179,16 +179,15 @@ internal suspend fun resolveProviderAuth(
     overrides: ProviderAuth?,
 ): ProviderAuth {
     val apiKey = overrides?.apiKey ?: profile.apiKeyRef?.let { secretStore.get(it) }
-    val basicUser = overrides?.basicUser ?: profile.basicUserRef?.let { ref ->
-        secretStore.get(ref)?.let { value ->
-            try {
-                String(value)
-            } finally {
-                value.fill(SECRET_FILLER)
-            }
-        }
-    }
-    val basicPassword = overrides?.basicPassword ?: profile.basicPasswordRef?.let { secretStore.get(it) }
+    val savedBasic = if ((overrides?.basicUser == null || overrides.basicPassword == null) &&
+        profile.basicUserRef != null && profile.basicPasswordRef != null &&
+        profile.basicUserRef != profile.basicPasswordRef) {
+        secretStore.getPair(profile.basicUserRef, profile.basicPasswordRef)
+    } else null to null
+    val basicUser = overrides?.basicUser ?: savedBasic.first?.let { String(it) }
+    savedBasic.first?.fill(SECRET_FILLER)
+    val basicPassword = overrides?.basicPassword ?: savedBasic.second
+    if (overrides?.basicPassword != null) savedBasic.second?.fill(SECRET_FILLER)
     val extras = profile.extraHeaders.mapNotNull { (name, alias) ->
         if (overrides?.extraHeaders?.containsKey(name) == true) return@mapNotNull null
         val value = secretStore.get(alias) ?: return@mapNotNull null

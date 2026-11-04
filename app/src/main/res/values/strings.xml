@@ -18,7 +18,7 @@
     <string name="mcp_test_error">MCP %1$s: %2$s</string>
     <string name="provider_save_no_check">Проверка для этого типа появится позже — провайдер сохранён</string>
     <string name="provider_cleanup_warning_title">Настройки сохранены</string>
-    <string name="provider_cleanup_warning">Не удалось удалить старые секретные заголовки. Они больше не используются. Повторите удаление сейчас или закройте это сообщение.</string>
+    <string name="provider_cleanup_warning">Не удалось удалить старые секреты. Они больше не используются. Повторите удаление сейчас или закройте это сообщение.</string>
     <string name="provider_cleanup_retry">Повторить удаление</string>
     <string name="provider_cleanup_close">Закрыть</string>
     <string name="approvals_reset_done">Разрешения тулов сброшены</string>

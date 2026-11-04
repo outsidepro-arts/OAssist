@@ -909,7 +909,7 @@ internal suspend fun saveProvider(
         is ProviderValidationResult.Failure -> Result.failure(result.error)
         else -> {
             val oldHeaders = providers.getProvider(updated.id)?.extraHeaders.orEmpty()
-            val removedAliases = pendingCleanup + secrets.clearedExtraHeaders.mapNotNull(oldHeaders::get)
+            var removedAliases = pendingCleanup + secrets.clearedExtraHeaders.mapNotNull(oldHeaders::get)
             kotlinx.coroutines.currentCoroutineContext().ensureActive()
             kotlinx.coroutines.withContext(kotlinx.coroutines.NonCancellable) {
                 providers.upsertProvider(updated)
@@ -925,12 +925,16 @@ internal suspend fun saveProvider(
             when {
                 secrets.clearBasic -> providers.clearBasicCredentials(updated.id)
                 // Парная запись: полная пара или ничего (частичный ввод не сохраняется).
-                basicUser != null && basicPassword != null ->
-                    providers.setBasicCredentials(
-                        updated.id,
-                        basicUser.toCharArray(),
-                        basicPassword.toCharArray(),
-                    )
+                basicUser != null && basicPassword != null -> {
+                    kotlinx.coroutines.currentCoroutineContext().ensureActive()
+                    kotlinx.coroutines.withContext(kotlinx.coroutines.NonCancellable) {
+                        val retired = providers.setBasicCredentials(
+                            updated.id, basicUser.toCharArray(), basicPassword.toCharArray(),
+                        )
+                        removedAliases = removedAliases + retired
+                        onCleanupPending(removedAliases)
+                    }
+                }
             }
             secrets.extraHeaders.forEach { (headerName, value) ->
                 providers.setExtraHeader(updated.id, headerName, value.toCharArray())

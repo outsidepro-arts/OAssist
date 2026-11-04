@@ -160,6 +160,11 @@ class ProviderHeaderEditTest {
     private class MemorySecrets : SecretStore {
         private val values = mutableMapOf<String, CharArray>()
         var beforeDelete: suspend () -> Unit = {}
+        override suspend fun putPair(firstAlias: String, first: CharArray?, secondAlias: String, second: CharArray?) {
+            error("Pair writes are not used by this test")
+        }
+        override suspend fun getPair(firstAlias: String?, secondAlias: String?): Pair<CharArray?, CharArray?> =
+            firstAlias?.let { get(it) } to secondAlias?.let { get(it) }
         override suspend fun put(alias: String, plaintext: CharArray) { values[alias] = plaintext.copyOf() }
         override suspend fun get(alias: String) = values[alias]?.copyOf()
         override suspend fun contains(alias: String) = alias in values

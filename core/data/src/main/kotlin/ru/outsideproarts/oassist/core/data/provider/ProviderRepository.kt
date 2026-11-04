@@ -2,6 +2,11 @@ package ru.outsideproarts.oassist.core.data.provider
 
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
+import kotlinx.coroutines.withContext
+import java.util.UUID
 import ru.outsideproarts.oassist.core.data.secret.SecretStore
 import ru.outsideproarts.oassist.core.model.AssistMode
 import ru.outsideproarts.oassist.core.model.ModeConfig
@@ -74,22 +79,71 @@ class ProviderRepository(
     /**
      * Сохраняет пару Basic-учётных данных ([ru.outsideproarts.oassist.core.model.AuthScheme.BASIC])
      * как секреты: логин и пароль пишутся только в [SecretStore].
+     * Возвращает старые aliases для отслеживаемого владельцем сохранения cleanup после repair.
      */
-    suspend fun setBasicCredentials(providerId: String, user: CharArray, password: CharArray) {
-        secrets.put(aliasForBasicUser(providerId), user)
-        secrets.put(aliasForBasicPassword(providerId), password)
-        updateProvider(providerId) {
-            it.copy(
-                basicUserRef = aliasForBasicUser(providerId),
-                basicPasswordRef = aliasForBasicPassword(providerId),
-            )
+    suspend fun setBasicCredentials(providerId: String, user: CharArray, password: CharArray): Set<String> {
+        try {
+            val profile = requireNotNull(getProvider(providerId)) { "Provider does not exist" }
+            val partial = (profile.basicUserRef != null || profile.basicPasswordRef != null) &&
+                (profile.basicUserRef == null || profile.basicPasswordRef == null ||
+                    profile.basicUserRef == profile.basicPasswordRef)
+            if (partial) {
+                return repairBasicCredentials(profile, user, password)
+            }
+            val userAlias = profile.basicUserRef ?: aliasForBasicUser(providerId)
+            val passwordAlias = profile.basicPasswordRef ?: aliasForBasicPassword(providerId)
+            secrets.putPair(userAlias, user, passwordAlias, password)
+            if (profile.basicUserRef != userAlias || profile.basicPasswordRef != passwordAlias) {
+                updateProvider(providerId) {
+                    it.copy(basicUserRef = userAlias, basicPasswordRef = passwordAlias)
+                }
+            }
+            return emptySet()
+        } finally {
+            user.fill('\u0000')
+            password.fill('\u0000')
         }
+    }
+
+    // A damaged profile has no usable pair. Stage new aliases so a failed publication
+    // cannot overwrite its remaining secret. The persisted reference format is unchanged.
+    private suspend fun repairBasicCredentials(profile: ProviderProfile, user: CharArray, password: CharArray): Set<String> {
+        val generation = UUID.randomUUID().toString()
+        val userAlias = "${aliasForBasicUser(profile.id)}.$generation"
+        val passwordAlias = "${aliasForBasicPassword(profile.id)}.$generation"
+        try {
+            secrets.putPair(userAlias, user, passwordAlias, password)
+            currentCoroutineContext().ensureActive()
+            withContext(NonCancellable) {
+                val current = requireNotNull(getProvider(profile.id)) { "Provider does not exist" }
+                store.upsertProviderProfile(current.copy(basicUserRef = userAlias, basicPasswordRef = passwordAlias))
+            }
+        } catch (error: Throwable) {
+            try {
+                withContext(NonCancellable) {
+                    val current = getProvider(profile.id)
+                    // Never remove a pair if publication committed before reporting an error.
+                    if (current?.basicUserRef != userAlias && current?.basicPasswordRef != passwordAlias) {
+                        secrets.putPair(userAlias, null, passwordAlias, null)
+                    }
+                }
+            } catch (cleanupError: Throwable) {
+                error.addSuppressed(cleanupError)
+            }
+            throw error
+        }
+        // The save owner tracks cleanup independently of the committed credentials.
+        return setOfNotNull(profile.basicUserRef, profile.basicPasswordRef,
+            aliasForBasicUser(profile.id), aliasForBasicPassword(profile.id))
     }
 
     /** Удаляет сохранённую пару Basic-учётных данных. */
     suspend fun clearBasicCredentials(providerId: String) {
-        secrets.delete(aliasForBasicUser(providerId))
-        secrets.delete(aliasForBasicPassword(providerId))
+        val profile = getProvider(providerId) ?: return
+        val userAlias = profile.basicUserRef ?: aliasForBasicUser(providerId)
+        val passwordAlias = profile.basicPasswordRef ?: aliasForBasicPassword(providerId)
+        if (userAlias == passwordAlias) secrets.delete(userAlias)
+        else secrets.putPair(userAlias, null, passwordAlias, null)
         updateProvider(providerId) { it.copy(basicUserRef = null, basicPasswordRef = null) }
     }
 

@@ -50,7 +50,7 @@
 
 ## 11. DS-010 — Атомарная пара Basic credentials
 
-`core/data/secret` и `provider`, `app/MainActivity`: согласованная запись username/password и ссылок. Проверить failure/cancel между частями и reopen со старой либо новой полной парой.
+`core/data/secret` и `provider`, `app/MainActivity`: согласованная запись username/password и ссылок. Проверить failure/cancel между частями и reopen со старой либо новой полной парой. Полная пара требует одного snapshot для чтения; repair неполных refs — публикации новой пары с существующим pending cleanup/warning. Настоящий disk/reopen проверять Android instrumentation, отдельно от JVM-тестов границ commit.
 
 ## 12. DS-011 — Device-protected backup domains
 

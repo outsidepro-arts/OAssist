@@ -114,6 +114,32 @@ class AuthSchemeTest {
     }
 
     @Test
+    fun basic_missingPasswordDoesNotSendPartialCredentials() {
+        val headers = fetchWith(
+            ModelProtocol.OPENAI_COMPLETIONS, AuthScheme.BASIC, ProviderAuth(basicUser = "user"),
+        )
+        assertNull(headers["authorization"])
+    }
+
+    @Test
+    fun basic_incompleteReferencesDoNotReadOrSendCredentials() = runTest {
+        val store = object : SecretStore {
+            override suspend fun put(alias: String, plaintext: CharArray) = error("unused")
+            override suspend fun get(alias: String): CharArray? = error("Must not read partial pair")
+            override suspend fun putPair(firstAlias: String, first: CharArray?, secondAlias: String, second: CharArray?) = error("unused")
+            override suspend fun getPair(firstAlias: String?, secondAlias: String?): Pair<CharArray?, CharArray?> = error("Must not read partial pair")
+            override suspend fun contains(alias: String) = false
+            override suspend fun delete(alias: String) = Unit
+            override suspend fun clearAll() = Unit
+            override suspend fun aliases(): List<String> = emptyList()
+        }
+        val profile = ProviderProfile("p", "P", ProviderPreset.CUSTOM, "https://h.test",
+            authScheme = AuthScheme.BASIC, basicUserRef = "legacy.user")
+        val auth = resolveProviderAuth(profile, store, null)
+        assertNull(fetchWith(ModelProtocol.OPENAI_COMPLETIONS, AuthScheme.BASIC, auth)["authorization"])
+    }
+
+    @Test
     fun none_sendsNoAuthHeaders() {
         val headers = fetchWith(ModelProtocol.OPENAI_COMPLETIONS, AuthScheme.NONE, ProviderAuth(apiKey = "k".toCharArray()))
         assertNull(headers["authorization"])
@@ -124,12 +150,13 @@ class AuthSchemeTest {
     @Test
     fun create_resolvesBasicPairFromSecretStore() = runTest {
         val secrets = object : SecretStore {
-            override suspend fun put(alias: String, plaintext: CharArray) = Unit
-            override suspend fun get(alias: String): CharArray? = when (alias) {
-                "provider.p.basicUser" -> "user".toCharArray()
-                "provider.p.basicPassword" -> "pass".toCharArray()
-                else -> null
+            override suspend fun putPair(firstAlias: String, first: CharArray?, secondAlias: String, second: CharArray?) {
+                error("Pair writes are not used by this test")
             }
+            override suspend fun getPair(firstAlias: String?, secondAlias: String?): Pair<CharArray?, CharArray?> =
+                "user".toCharArray() to "pass".toCharArray()
+            override suspend fun put(alias: String, plaintext: CharArray) = Unit
+            override suspend fun get(alias: String): CharArray? = error("Basic must use one snapshot")
             override suspend fun contains(alias: String): Boolean = true
             override suspend fun delete(alias: String) = Unit
             override suspend fun clearAll() = Unit
