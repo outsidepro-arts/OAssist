@@ -44,6 +44,13 @@ class UpdateCacheDeviceTest {
         fun awaitReady(manager: UpdateManager) = runBlocking {
             withTimeout(10_000) { manager.state.first { it.preferences != null } }
         }
+        // Android 12 File.lastModified() truncates milliseconds to whole seconds.
+        val staleTime = (System.currentTimeMillis() - TimeUnit.DAYS.toMillis(8)) / 1_000 * 1_000
+        fun age(file: File) {
+            assertTrue("Could not age ${file.name}", file.setLastModified(staleTime))
+            val modified = file.lastModified()
+            assertTrue("${file.name}: expected a positive stale timestamp, got $modified", modified in 1..staleTime)
+        }
         var first: UpdateManager? = null
         var second: UpdateManager? = null
         try {
@@ -65,9 +72,9 @@ class UpdateCacheDeviceTest {
             assertTrue(persisted.readText().contains("handed.apk"))
             val uri = FileProvider.getUriForFile(base, "${base.packageName}.updates", handed)
             assertEquals("pending installer", base.contentResolver.openInputStream(uri)!!.bufferedReader().use { it.readText() })
-            val stale = File(updates, "stale.apk").apply { writeText("stale"); check(setLastModified(1)) }
-            check(legacy.setLastModified(1))
-            check(handed.setLastModified(1))
+            val stale = File(updates, "stale.apk").apply { writeText("stale"); age(this) }
+            age(legacy)
+            age(handed)
             instrumentation.runOnMainSync { firstManager.close() }
             first = null
             val secondManager = manager()
@@ -81,7 +88,7 @@ class UpdateCacheDeviceTest {
             instrumentation.runOnMainSync { secondManager.close() }
             second = null
             persisted.writeText("corrupt")
-            val retained = File(updates, "retained.apk").apply { writeText("retained"); check(setLastModified(1)) }
+            val retained = File(updates, "retained.apk").apply { writeText("retained"); age(this) }
             val third = manager()
             second = third
             start(third)

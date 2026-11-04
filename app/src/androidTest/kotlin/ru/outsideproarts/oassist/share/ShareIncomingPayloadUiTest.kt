@@ -102,8 +102,11 @@ class ShareIncomingPayloadUiTest {
             }
             for ((caseIndex, streams) in cases.withIndex()) {
                 launch(streams).use { scenario ->
+                    compose.dismissShareKeyboard(scenario)
+                    compose.onNode(hasScrollToIndexAction()).performScrollToIndex(0)
                     val label = context.getString(ru.outsideproarts.oassist.feature.share.R.string.share_unsupported_file)
                     compose.waitUntil(10_000) { compose.onAllNodesWithText(label).fetchSemanticsNodes().isNotEmpty() }
+                    compose.onNode(hasScrollAction()).performScrollToNode(hasText(label))
                     compose.onNodeWithText(label).assertIsDisplayed()
                     if (caseIndex == 3) {
                         val close = context.getString(ru.outsideproarts.oassist.feature.share.R.string.share_close)
@@ -127,7 +130,8 @@ class ShareIncomingPayloadUiTest {
                     assertTrue(requests.isEmpty())
                 }
             }
-            launch(listOf(image)).use {
+            launch(listOf(image)).use { scenario ->
+                compose.dismissShareKeyboard(scenario)
                 val newChat = context.getString(ru.outsideproarts.oassist.core.ui.R.string.chats_new)
                 compose.onNode(hasScrollAction()).performScrollToNode(hasText(newChat))
                 compose.onNodeWithText(newChat).assertIsDisplayed().performClick()
@@ -153,6 +157,7 @@ class ShareIncomingPayloadUiTest {
                 .putExtra(Intent.EXTRA_TEXT, SpannedString(longText))
                 .putParcelableArrayListExtra(Intent.EXTRA_STREAM, ArrayList(List(4) { image }))
             ActivityScenario.launch<ShareActivity>(existingIntent).use { scenario ->
+                compose.dismissShareKeyboard(scenario)
                 compose.waitUntil(10_000) {
                     runCatching { compose.onNode(hasScrollAction()).performScrollToNode(hasText("Saved fixture chat")); true }.getOrDefault(false)
                 }

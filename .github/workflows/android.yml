@@ -147,7 +147,11 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        api: [31, 36]
+        include:
+          - api: 31
+            extra_excluded_tests: ',ru.outsideproarts.oassist.DndContractInstrumentedTest#otherActiveRuleKeepsGlobalDndAfterAppRequestsOff'
+          - api: 36
+            extra_excluded_tests: ''
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -167,7 +171,7 @@ jobs:
           target: google_apis
           script: |
             set -e
-            ./gradlew --continue :app:connectedDebugAndroidTest -Pandroid.testInstrumentationRunnerArguments.verifyInternet=true -Pandroid.testInstrumentationRunnerArguments.notClass=ru.outsideproarts.oassist.permission.SystemPermissionLifecycleTest,ru.outsideproarts.oassist.chat.ChatTogglePermissionTest,ru.outsideproarts.oassist.chat.ChatHoldPermissionTest,ru.outsideproarts.oassist.vis.VoiceInteractionCaptureTest,ru.outsideproarts.oassist.vis.AssistHandoffLifecycleTest,ru.outsideproarts.oassist.vis.AssistServiceHandoffTest,ru.outsideproarts.oassist.vis.AssistTurnSnapshotTest,ru.outsideproarts.oassist.agent.AssistantOverlayModeTest,ru.outsideproarts.oassist.agent.TerminalTranscriptPersistenceTest,ru.outsideproarts.oassist.notify.NotifyReplyContractInstrumentedTest
+            ./gradlew --continue :app:connectedDebugAndroidTest -Pandroid.testInstrumentationRunnerArguments.verifyInternet=true "-Pandroid.testInstrumentationRunnerArguments.notClass=ru.outsideproarts.oassist.permission.SystemPermissionLifecycleTest,ru.outsideproarts.oassist.chat.ChatTogglePermissionTest,ru.outsideproarts.oassist.chat.ChatHoldPermissionTest,ru.outsideproarts.oassist.vis.VoiceInteractionCaptureTest,ru.outsideproarts.oassist.vis.AssistHandoffLifecycleTest,ru.outsideproarts.oassist.vis.AssistServiceHandoffTest,ru.outsideproarts.oassist.vis.AssistTurnSnapshotTest,ru.outsideproarts.oassist.agent.AssistantOverlayModeTest,ru.outsideproarts.oassist.agent.TerminalTranscriptPersistenceTest,ru.outsideproarts.oassist.notify.NotifyReplyContractInstrumentedTest${{ matrix.extra_excluded_tests }}"
             adb install -r app/build/outputs/apk/debug/app-debug.apk
             adb install -r app/build/outputs/apk/androidTest/debug/app-debug-androidTest.apk
             pwsh -NoProfile -File tools/run-assist-capture-tests.ps1 -Serial "$(adb get-serialno)"
@@ -179,6 +183,13 @@ jobs:
           Import-Module ./tools/ci/OAssistCi.psm1
           $reports = @(Get-ChildItem app/build/outputs/androidTest-results/connected -Recurse -File -Filter 'TEST-*.xml' | ForEach-Object FullName)
           Test-OAssistTestReports -ReportFiles $reports
+          if (${{ matrix.api }} -ge 35) {
+            $dndTests = @($reports | ForEach-Object {
+              $report = [xml](Get-Content -LiteralPath $_ -Raw)
+              $report.SelectNodes("//*[local-name()='testcase' and @classname='ru.outsideproarts.oassist.DndContractInstrumentedTest' and @name='otherActiveRuleKeepsGlobalDndAfterAppRequestsOff']")
+            })
+            if ($dndTests.Count -ne 1) { throw 'Expected the DND contract test to execute exactly once.' }
+          }
       - name: Upload Android test reports
         if: ${{ !cancelled() && (steps.tests.outcome == 'success' || steps.tests.outcome == 'failure') }}
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2

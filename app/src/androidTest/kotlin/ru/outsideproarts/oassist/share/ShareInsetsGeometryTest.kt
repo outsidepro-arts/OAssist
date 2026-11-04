@@ -104,6 +104,9 @@ class ShareInsetsGeometryTest {
                     compose.onNode(hasScrollToIndexAction()).performScrollToIndex(0)
                     scrollTo(close)
                 }
+                compose.dismissShareKeyboard(scenario)
+                compose.onNode(hasScrollToIndexAction()).performScrollToIndex(0)
+                scrollTo(title)
                 checkBounds("list title", rect(title))
                 scrollTo(open)
                 checkBounds("list open", rect(open))
@@ -117,6 +120,7 @@ class ShareInsetsGeometryTest {
                 val question = context.getString(ShareR.string.share_ask_label)
                 val send = context.getString(ShareR.string.share_send)
                 compose.waitUntil(10_000) { compose.onAllNodesWithContentDescription(back).fetchSemanticsNodes().isNotEmpty() }
+                compose.dismissShareKeyboard(scenario)
                 checkBounds("conversation back", rect(back, true))
                 val initialQuestion = rect(question)
                 checkBounds("conversation question", initialQuestion)
@@ -150,12 +154,7 @@ class ShareInsetsGeometryTest {
                     compose.onAllNodesWithContentDescription(back).fetchSemanticsNodes().isEmpty() &&
                         compose.onAllNodes(hasScrollToNodeAction()).fetchSemanticsNodes().isNotEmpty()
                 }
-                scenario.onActivity { it.window.insetsController?.hide(WindowInsets.Type.ime()) }
-                compose.waitUntil(10_000) {
-                    var hidden = false
-                    scenario.onActivity { hidden = it.window.decorView.rootWindowInsets?.isVisible(WindowInsets.Type.ime()) == false }
-                    hidden
-                }
+                compose.dismissShareKeyboard(scenario)
                 scrollToClose()
                 compose.waitUntil(10_000) { kotlin.math.abs(rect(close).bottom - initialClose.bottom) <= 2f }
                 val afterClose = rect(close)
@@ -165,6 +164,7 @@ class ShareInsetsGeometryTest {
             }
             val emptyIntent = Intent(context, ShareActivity::class.java).setAction(Intent.ACTION_SEND).setType("text/plain")
             ActivityScenario.launch<ShareActivity>(emptyIntent).use { scenario ->
+                compose.dismissShareKeyboard(scenario)
                 fun scrollTo(label: String) {
                     compose.onNode(hasScrollToNodeAction()).performScrollToNode(hasText(label))
                     compose.onNodeWithText(label).assertIsDisplayed()
@@ -196,6 +196,7 @@ class ShareInsetsGeometryTest {
                 compose.onNodeWithText(emptyNewChat).performClick()
                 val back = context.getString(ShareR.string.share_back)
                 compose.waitUntil(10_000) { compose.onAllNodesWithContentDescription(back).fetchSemanticsNodes().isNotEmpty() }
+                compose.dismissShareKeyboard(scenario)
                 checkEmpty(back, true)
                 val emptyQuestion = context.getString(ShareR.string.share_ask_label)
                 checkEmpty(emptyQuestion)
