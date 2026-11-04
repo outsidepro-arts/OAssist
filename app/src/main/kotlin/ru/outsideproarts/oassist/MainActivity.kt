@@ -351,9 +351,12 @@ private fun OAssistApp(
                 ) { uri ->
                     if (uri == null) return@rememberLauncherForActivityResult
                     scope.launch {
-                        val json = runCatching { backup.export() }.getOrElse { null }
-                        if (json == null) {
-                            showToast(context, SettingsR.string.data_import_error, "?")
+                        val json = try {
+                            backup.export()
+                        } catch (e: kotlinx.coroutines.CancellationException) {
+                            throw e
+                        } catch (e: Exception) {
+                            showToast(context, SettingsR.string.data_export_error)
                             return@launch
                         }
                         val ok = runCatching {
@@ -362,7 +365,7 @@ private fun OAssistApp(
                             } ?: throw IllegalStateException("Нет потока записи")
                         }.isSuccess
                         if (ok) showToast(context, SettingsR.string.data_export_done)
-                        else showToast(context, SettingsR.string.data_import_error, "?")
+                        else showToast(context, SettingsR.string.data_export_error)
                     }
                 }
                 val importLauncher = rememberLauncherForActivityResult(

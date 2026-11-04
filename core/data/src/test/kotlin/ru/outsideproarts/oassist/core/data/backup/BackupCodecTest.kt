@@ -93,6 +93,23 @@ class BackupCodecTest {
     }
 
     @Test
+    fun `export accepts memory boundary and rejects overflow without truncation`() {
+        val memory = "я".repeat(65536)
+        assertEquals(memory, decodeBackup(encodeRestorableBackup(BackupV1(memory = memory))).getOrThrow().memory)
+        assertTrue(runCatching { encodeRestorableBackup(BackupV1(memory = memory + "я")) }.isFailure)
+    }
+
+    @Test
+    fun `export checks total serialized size including escaping`() {
+        val empty = BackupV1(approvals = mapOf("key" to ""))
+        val overhead = encodeBackup(empty).length
+        val atLimit = empty.copy(approvals = mapOf("key" to "x".repeat(2 * 1024 * 1024 - overhead)))
+        assertEquals(2 * 1024 * 1024, encodeRestorableBackup(atLimit).length)
+        val escapedOverflow = atLimit.copy(approvals = mapOf("key" to "x".repeat(2 * 1024 * 1024 - overhead - 1) + "\n"))
+        assertTrue(runCatching { encodeRestorableBackup(escapedOverflow) }.isFailure)
+    }
+
+    @Test
     fun `scrubbed режет секретные ссылки`() {
         val profile = ProviderProfile(
             id = "p", name = "P", preset = ProviderPreset.CUSTOM, baseUrl = "https://x",

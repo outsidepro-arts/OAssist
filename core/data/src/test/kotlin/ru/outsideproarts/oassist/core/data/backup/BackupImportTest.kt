@@ -63,6 +63,37 @@ class BackupImportTest {
         } finally { reopened.close() }
     }
 
+    @Test fun oversizedMemoryExportFailurePreservesStoredMemory() = runTest {
+        val f = Fixture(temp.newFolder())
+        try {
+            val memory = "я".repeat(65537)
+            f.memory.write(memory)
+            assertTrue(runCatching { encodeRestorableBackup(BackupV1(memory = f.memory.read())) }.isFailure)
+            assertEquals(memory, f.memory.read())
+        } finally { f.close() }
+    }
+
+    @Test fun toolRoundsRoundTripAndLegacyDefaultSurviveReopen() = runTest {
+        val dir = temp.newFolder()
+        val f = Fixture(dir)
+        try {
+            for (rounds in listOf(0, 1)) {
+                f.tools.setMaxToolRounds(rounds)
+                val raw = encodeRestorableBackup(BackupV1(toolPrefs = f.tools.snapshot().toBackup()))
+                assertTrue(raw.contains("\"maxToolRounds\":$rounds"))
+                f.tools.setMaxToolRounds(if (rounds == 0) 1 else 0)
+                f.importer().apply(raw).getOrThrow()
+                assertEquals(rounds, f.tools.snapshot().maxToolRounds)
+            }
+            f.importer().apply("""{"version":1,"toolPrefs":{"disabled":["old"]}}""").getOrThrow()
+        } finally { f.close() }
+        val reopened = Fixture(dir)
+        try {
+            assertEquals(ToolPreferences.DEFAULT_MAX_TOOL_ROUNDS, reopened.tools.snapshot().maxToolRounds)
+            assertEquals(setOf("old"), reopened.tools.snapshot().disabled)
+        } finally { reopened.close() }
+    }
+
     @Test fun lateFailurePersistsWarningAndSameFileRetryCompletesReplacement() = runTest {
         val dir = temp.newFolder()
         val f = Fixture(dir)
@@ -134,7 +165,7 @@ class BackupImportTest {
         val secrets = ImportSecrets()
         val settings = SettingsDataStore(prefs("settings"))
         val providers = ProviderRepository(ProviderConfigStore(prefs("providers")), secrets)
-        private val tools = ToolConfigStore(prefs("tools"))
+        val tools = ToolConfigStore(prefs("tools"))
         private val mcp = McpServerRepository(McpConfigStore(prefs("mcp")), secrets)
         val skills = FileSkillStore({ dir }, prefs("skills"))
         var beforeMemoryWrite: suspend () -> Unit = {}

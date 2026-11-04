@@ -7,6 +7,7 @@ import ru.outsideproarts.oassist.core.model.ModeConfig
 import ru.outsideproarts.oassist.core.model.ModelCatalog
 import ru.outsideproarts.oassist.core.model.ProviderProfile
 import ru.outsideproarts.oassist.core.model.SkillInfo
+import ru.outsideproarts.oassist.core.model.ToolPreferences
 /**
  * Экспорт/импорт настроек (M5.3). Формат `oassist-backup v1` (JSON).
  *
@@ -42,6 +43,7 @@ data class BackupV1(
 @Serializable
 data class ToolPrefsBackup(
     val disabled: List<String> = emptyList(),
+    val maxToolRounds: Int = ToolPreferences.DEFAULT_MAX_TOOL_ROUNDS,
 )
 
 @Serializable
@@ -100,6 +102,11 @@ fun decodeBackup(raw: String): Result<BackupV1> = runCatching {
 }
 
 fun encodeBackup(backup: BackupV1): String = BackupJson.encodeToString(backup)
+
+/** Do not return an export that this version cannot import. */
+internal fun encodeRestorableBackup(backup: BackupV1): String = encodeBackup(backup).also {
+    decodeBackup(it).getOrThrow()
+}
 
 private const val MAX_BACKUP_CHARS = 2 * 1024 * 1024
 private const val MAX_PROVIDERS = 20

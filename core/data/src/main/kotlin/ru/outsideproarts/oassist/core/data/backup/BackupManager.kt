@@ -22,7 +22,7 @@ import ru.outsideproarts.oassist.core.model.ToolPreferences
  */
 class BackupManager(private val data: DataContainer) {
 
-    suspend fun export(): String = encodeBackup(
+    suspend fun export(): String = encodeRestorableBackup(
         BackupV1(
             exportedAtEpochMs = System.currentTimeMillis(),
             language = data.settings.language.first().name,
@@ -127,11 +127,11 @@ internal suspend fun ProviderRepository.importProfiles(
 internal suspend fun McpServerRepository.importServers(servers: List<McpServerConfig>) =
     replaceFromBackup(servers.associateBy { it.id }.values.map { it.scrubbed() })
 
-private fun ToolPreferences.toBackup(): ToolPrefsBackup =
-    ToolPrefsBackup(disabled.sorted())
+internal fun ToolPreferences.toBackup(): ToolPrefsBackup =
+    ToolPrefsBackup(disabled.sorted(), maxToolRounds)
 
 private fun ToolPrefsBackup.toDomain(): ToolPreferences =
-    ToolPreferences(disabled.toSet())
+    ToolPreferences(disabled.toSet(), maxToolRounds)
 
 /**
  * Запомненные состояния из бэкапа: новые `approvals` (groupKey → состояние)

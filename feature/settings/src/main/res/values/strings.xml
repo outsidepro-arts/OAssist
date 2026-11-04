@@ -410,6 +410,7 @@
     <string name="data_import_unfinished">Импорт мог завершиться не полностью. Выберите тот же файл повторно. После успешного импорта введите секреты заново.</string>
     <string name="mcp_editor_invalidated">Настройки MCP изменились. Откройте редактор заново.</string>
     <string name="mcp_save_failed">Не удалось полностью сохранить настройки MCP. Проверьте настройки и повторите сохранение.</string>
+    <string name="data_export_error">Не удалось экспортировать бэкап. Некоторые данные могут превышать допустимый размер.</string>
     <string name="data_import_error">Не удалось прочитать бэкап: %1$s</string>
     <string name="data_wipe_done">Все данные стёрты</string>
     <string name="data_wipe_error">Не удалось стереть все данные. Часть данных могла быть удалена. Повторите попытку.</string>

@@ -153,6 +153,7 @@
 ### Безопасность и приватность
 
 * **Хранение секретов:** все API-ключи, токены и заголовки шифруются через Android Keystore (`AES-256-GCM`) и хранятся в защищенном хранилище устройства (с поддержкой Direct Boot для работы ассистента на заблокированном экране). Секреты никогда не отображаются повторно в интерфейсе, не попадают в логи (используется redacting-логгер) и исключены из резервных копий (`allowBackup="false"`).
+* **Резервное копирование:** экспорт сообщает об ошибке, если данные превышают ограничения формата; содержимое копии при этом не записывается. Лимит циклов инструментов сохраняется, а для старых копий без него используется значение по умолчанию.
 * **Импорт настроек** заменяет сохраняемые в копии настройки: отсутствующие режимы сбрасываются к значениям по умолчанию, отсутствующие каталоги удаляются. При ошибке или прерывании возможна частичная замена. Предупреждение остаётся в настройках: выберите тот же файл повторно и после успешного импорта введите секреты заново.
 
 
@@ -361,6 +362,7 @@ Android SDK и command-line tools явно подготавливает `android
 * **50+ built-in tools** across three privilege tiers: system intents (calls, SMS, alarms, calendar, apps, notifications, media, web search/fetch), Accessibility UI automation (screen snapshot, taps, text input, scrolling, screenshots, hidden node actions) and privileged shell commands via Shizuku / Root. Plus an MCP client, long-term memory and Markdown skills.
 * **Accessibility-first** — full TalkBack support (WCAG 2.2), two independent speech streams (answer TTS or screen reader, work narration), audio focus handling, optional sound effects.
 * **Security** — secrets encrypted with Android Keystore (AES-256-GCM), excluded from backups and logs; category-based approval gate with per-action, per-session and persistent grants.
+* **Settings backup** reports an error when data exceeds the format limits, before writing backup contents. The tool round limit is preserved; older backups without it use the default.
 * **Settings import** replaces the backed-up settings; missing modes use defaults and missing catalogs are removed. If import fails or is interrupted, settings may be partly replaced. A warning remains in Settings: select the same backup again and re-enter secrets after a successful import.
 
 Requires Android 12+ and a JDK compatible with the project Gradle Wrapper and Android Gradle Plugin (minimum 17). Build with the included wrapper: `./gradlew assembleDebug` on Unix-like systems or `gradlew.bat assembleDebug` on Windows. Interface languages: Russian (default) and English.
