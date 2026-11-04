@@ -14,35 +14,41 @@ import androidx.appcompat.app.AppCompatActivity
 import androidx.core.net.toUri
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
+import ru.outsideproarts.oassist.core.agent.AssistSessionStore
+import ru.outsideproarts.oassist.core.model.ImagePart
 
 /**
- * Trampoline для assist-жеста: принимает AssistStructure (или готовый screen_context из VIS),
+ * Trampoline для assist-жеста: принимает AssistStructure или memory handle из VIS,
  * запрашивает спецдоступ «поверх окон» и микрофон, поднимает оверлей-сервис и закрывается —
  * пользователь остаётся в своём приложении.
  */
 class AssistActivity : AppCompatActivity() {
 
-    private var screenContext: String? = null
-    private var screenImage: String? = null
     private var overlayNeeded = true
-    private var contextAvailable = false
+    private lateinit var retained: AssistContextViewModel
+
+    private val contextAvailable: Boolean
+        get() = retained.initialized && retained.captureToken?.let(AssistSessionStore::isScreenCapturePending) == true
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        val retained = ViewModelProvider(this)[AssistContextViewModel::class.java]
+        retained = ViewModelProvider(this)[AssistContextViewModel::class.java]
         if (savedInstanceState != null) {
-            if (!retained.initialized) {
+            if (!contextAvailable) {
                 finish()
                 return
             }
-            screenContext = retained.screenContext
-            screenImage = retained.screenImage
             overlayNeeded = retained.overlayNeeded
-            contextAvailable = true
             return
         }
-        screenContext = extractScreenContext(intent)
-            ?: intent?.getStringExtra(AssistantOverlayService.EXTRA_SCREEN_CONTEXT)
+        val incomingToken = intent?.getStringExtra(AssistScreenHandoff.EXTRA_TOKEN)
+        if (intent?.hasExtra(AssistScreenHandoff.EXTRA_TOKEN) == true &&
+            (incomingToken == null || !AssistSessionStore.isScreenCapturePending(incomingToken))
+        ) {
+            finish()
+            return
+        }
+        val owner = if (incomingToken == null) AssistSessionStore.beginScreenCapture() else null
         overlayNeeded = kotlinx.coroutines.runBlocking {
             runCatching {
                 ru.outsideproarts.oassist.core.agent.AgentFactory.get()
@@ -55,16 +61,29 @@ class AssistActivity : AppCompatActivity() {
                 ru.outsideproarts.oassist.core.agent.AgentFactory.get()
                     .modeConfig(ru.outsideproarts.oassist.core.model.AssistMode.ASSISTANT)
                     .assistant?.attachScreenshot ?: true
-            }.getOrDefault(true)
+            }.getOrDefault(false)
         }
-        screenImage = intent?.getStringExtra(AssistantOverlayService.EXTRA_SCREEN_IMAGE)
-            ?: if (attachScreenshot) extractScreenImage(intent) else null
-
-        retained.screenContext = screenContext
-        retained.screenImage = screenImage
+        retained.captureToken = incomingToken ?: owner?.let {
+            val screenContext = extractScreenContext(intent)
+                ?: intent?.getStringExtra(AssistantOverlayService.EXTRA_SCREEN_CONTEXT)
+            val image = if (attachScreenshot) {
+                intent?.getStringExtra(AssistantOverlayService.EXTRA_SCREEN_IMAGE)
+                    ?.let { encoded -> ImagePart(imageBase64 = encoded) }
+                    ?: extractScreenImage(intent)
+            } else null
+            AssistScreenHandoff.publish(it, screenContext, image)
+        }
+        // Retain only the memory handle; neither recreation nor the next Binder hop carries pixels.
+        intent?.removeExtra(AssistantOverlayService.EXTRA_SCREEN_CONTEXT)
+        intent?.removeExtra(AssistantOverlayService.EXTRA_SCREEN_IMAGE)
+        intent?.removeExtra("android.app.assist.AssistStructure")
+        intent?.removeExtra("android.intent.extra.ASSIST_SCREENSHOT")
         retained.overlayNeeded = overlayNeeded
         retained.initialized = true
-        contextAvailable = true
+        if (!contextAvailable) {
+            finish()
+            return
+        }
 
         if (overlayNeeded && !Settings.canDrawOverlays(this)) {
             val overlayIntent = Intent(
@@ -136,6 +155,10 @@ class AssistActivity : AppCompatActivity() {
     }
 
     private fun ensureMicAndStart() {
+        if (!contextAvailable) {
+            finish()
+            return
+        }
         if (checkSelfPermission(Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED) {
             startServiceAndStartOverlay()
         } else {
@@ -144,24 +167,25 @@ class AssistActivity : AppCompatActivity() {
     }
 
     private fun startServiceAndStartOverlay() {
+        if (!contextAvailable) {
+            finish()
+            return
+        }
         val serviceIntent = Intent(this, AssistantOverlayService::class.java)
-        screenContext?.let {
-            serviceIntent.putExtra(AssistantOverlayService.EXTRA_SCREEN_CONTEXT, it)
+            .putExtra(AssistScreenHandoff.EXTRA_TOKEN, retained.captureToken)
+        if (runCatching { startForegroundService(serviceIntent) }.isSuccess) {
+            retained.handedOff = true
         }
-        screenImage?.let {
-            serviceIntent.putExtra(AssistantOverlayService.EXTRA_SCREEN_IMAGE, it)
-        }
-        startForegroundService(serviceIntent)
         finish()
     }
 
-    private fun extractScreenImage(intent: Intent?): String? {
+    private fun extractScreenImage(intent: Intent?): ImagePart? {
         val bitmap = runCatching {
             @Suppress("DEPRECATION")
             intent?.getParcelableExtra<Bitmap>("android.intent.extra.ASSIST_SCREENSHOT")
         }.getOrNull() ?: return null
         return runCatching {
-            ru.outsideproarts.oassist.core.provider.ImageCodec.fromBitmap(bitmap).imageBase64
+            ru.outsideproarts.oassist.core.provider.ImageCodec.fromBitmap(bitmap)
         }.getOrNull()
     }
 
@@ -200,7 +224,11 @@ class AssistActivity : AppCompatActivity() {
 /** Retains assist data across configuration changes without persisting screenshots. */
 class AssistContextViewModel : ViewModel() {
     var initialized = false
-    var screenContext: String? = null
-    var screenImage: String? = null
+    var captureToken: String? = null
+    var handedOff = false
     var overlayNeeded = true
+
+    override fun onCleared() {
+        if (!handedOff) captureToken?.let(AssistSessionStore::discardScreenCapture)
+    }
 }

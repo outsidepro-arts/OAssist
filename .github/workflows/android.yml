@@ -167,9 +167,10 @@ jobs:
           target: google_apis
           script: |
             set -e
-            ./gradlew --continue :app:connectedDebugAndroidTest -Pandroid.testInstrumentationRunnerArguments.verifyInternet=true -Pandroid.testInstrumentationRunnerArguments.notClass=ru.outsideproarts.oassist.permission.SystemPermissionLifecycleTest
+            ./gradlew --continue :app:connectedDebugAndroidTest -Pandroid.testInstrumentationRunnerArguments.verifyInternet=true -Pandroid.testInstrumentationRunnerArguments.notClass=ru.outsideproarts.oassist.permission.SystemPermissionLifecycleTest,ru.outsideproarts.oassist.vis.VoiceInteractionCaptureTest,ru.outsideproarts.oassist.vis.AssistHandoffLifecycleTest,ru.outsideproarts.oassist.vis.AssistServiceHandoffTest,ru.outsideproarts.oassist.vis.AssistTurnSnapshotTest
             adb install -r app/build/outputs/apk/debug/app-debug.apk
             adb install -r app/build/outputs/apk/androidTest/debug/app-debug-androidTest.apk
+            pwsh -NoProfile -File tools/run-assist-capture-tests.ps1 -Serial "$(adb get-serialno)"
             pwsh -NoProfile -File tools/run-system-permission-tests.ps1 -Serial "$(adb get-serialno)"
       - name: Require executed tests without skips
         if: ${{ !cancelled() && (steps.tests.outcome == 'success' || steps.tests.outcome == 'failure') }}
@@ -186,6 +187,7 @@ jobs:
           path: |
             app/build/outputs/androidTest-results/connected/**
             app/build/reports/androidTests/connected/**
+            app/build/outputs/androidTest-results/assist-capture/**
 
   apk:
     needs: [metadata, ci_tools, unit, lint_tests, checks, instrumentation]

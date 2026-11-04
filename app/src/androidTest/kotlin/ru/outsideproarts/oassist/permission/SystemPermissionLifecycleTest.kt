@@ -32,6 +32,9 @@ import ru.outsideproarts.oassist.core.agent.PermissionRequestOutcome
 import ru.outsideproarts.oassist.feature.assistant.ConsentActivity
 import ru.outsideproarts.oassist.feature.assistant.AssistActivity
 import ru.outsideproarts.oassist.feature.assistant.AssistContextViewModel
+import ru.outsideproarts.oassist.feature.assistant.AssistScreenHandoff
+import ru.outsideproarts.oassist.core.agent.AssistSessionStore
+import ru.outsideproarts.oassist.core.model.ImagePart
 
 @RunWith(AndroidJUnit4::class)
 class SystemPermissionLifecycleTest {
@@ -69,13 +72,19 @@ class SystemPermissionLifecycleTest {
     }
 
     @Test
-    fun overlaySettingsSurviveAssistRecreationAndReturnWithoutGrant() {
+    fun overlaySettingsSurviveAssistRecreationAndReturnWithoutGrant() = verifyAssistRecreation(false)
+
+    @Test
+    fun largeSnapshotSurvivesAssistRecreationOnlyInMemory() = verifyAssistRecreation(true)
+
+    private fun verifyAssistRecreation(verifyPayload: Boolean) {
         val instrumentation = InstrumentationRegistry.getInstrumentation()
         val context = instrumentation.targetContext
         assertFalse("Fixture requires overlay access to be off", Settings.canDrawOverlays(context))
         val activity = AtomicReference<AssistActivity>()
         val created = CountDownLatch(2)
         val finished = CountDownLatch(1)
+        val token = AtomicReference<String>()
         val callback = ActivityLifecycleCallback { instance, stage ->
             if (instance is AssistActivity) {
                 if (stage == Stage.CREATED) {
@@ -90,17 +99,21 @@ class SystemPermissionLifecycleTest {
             ActivityLifecycleMonitorRegistry.getInstance().addLifecycleCallback(callback)
         }
         try {
-            context.startActivity(Intent(context, AssistActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+            instrumentation.runOnMainSync {
+                token.set(AssistScreenHandoff.publish(
+                    AssistSessionStore.beginScreenCapture(),
+                    "unique-assist-context",
+                    ImagePart(imageBase64 = "image-data-".repeat(200_000)),
+                ))
+            }
+            context.startActivity(Intent(context, AssistActivity::class.java)
+                .putExtra(AssistScreenHandoff.EXTRA_TOKEN, token.get())
+                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
             waitForPackage(instrumentation, "com.android.settings")
-            val contextValue = "unique-assist-context"
-            val imageValue = "image-data-".repeat(200_000)
             instrumentation.runOnMainSync {
                 val owner = activity.get()
                 val retained = ViewModelProvider(owner)[AssistContextViewModel::class.java]
-                retained.screenContext = contextValue
-                retained.screenImage = imageValue
-                setActivityField(owner, "screenContext", contextValue)
-                setActivityField(owner, "screenImage", imageValue)
+                assertEquals(token.get(), retained.captureToken)
                 val state = Bundle()
                 instrumentation.callActivityOnSaveInstanceState(owner, state)
                 val parcel = Parcel.obtain()
@@ -115,20 +128,25 @@ class SystemPermissionLifecycleTest {
             assertTrue("AssistActivity was not recreated", created.await(10, TimeUnit.SECONDS))
             instrumentation.runOnMainSync {
                 val retained = ViewModelProvider(activity.get())[AssistContextViewModel::class.java]
-                assertEquals(contextValue, retained.screenContext)
-                assertEquals(imageValue, retained.screenImage)
-                assertEquals(contextValue, getActivityField(activity.get(), "screenContext"))
-                assertEquals(imageValue, getActivityField(activity.get(), "screenImage"))
+                assertEquals(token.get(), retained.captureToken)
+                assertTrue(AssistSessionStore.isScreenCapturePending(token.get()))
             }
             waitForPackage(instrumentation, "com.android.settings")
+            if (verifyPayload) {
+                val snapshot = requireNotNull(AssistSessionStore.consumeScreenCapture(token.get(), true))
+                assertEquals("unique-assist-context", snapshot.screenContext)
+                assertEquals("image-data-".repeat(200_000), snapshot.screenImage?.imageBase64)
+            }
             assertTrue(instrumentation.uiAutomation.performGlobalAction(AccessibilityService.GLOBAL_ACTION_BACK))
             assertTrue("AssistActivity did not finish after return", finished.await(10, TimeUnit.SECONDS))
             assertFalse(Settings.canDrawOverlays(context))
+            assertFalse(AssistSessionStore.isScreenCapturePending(token.get()))
         } finally {
             instrumentation.runOnMainSync {
                 ActivityLifecycleMonitorRegistry.getInstance().removeLifecycleCallback(callback)
                 activity.get()?.finish()
             }
+            if (verifyPayload) AssistSessionStore.clear()
         }
     }
 
@@ -218,10 +236,4 @@ class SystemPermissionLifecycleTest {
         throw AssertionError("System window not found: $name")
     }
 
-    private fun setActivityField(activity: AssistActivity, name: String, value: String) {
-        AssistActivity::class.java.getDeclaredField(name).apply { isAccessible = true }.set(activity, value)
-    }
-
-    private fun getActivityField(activity: AssistActivity, name: String): Any? =
-        AssistActivity::class.java.getDeclaredField(name).apply { isAccessible = true }.get(activity)
 }

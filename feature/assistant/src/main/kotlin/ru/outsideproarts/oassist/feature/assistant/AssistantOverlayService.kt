@@ -130,6 +130,8 @@ private val sessionTurns = mutableListOf<ru.outsideproarts.oassist.core.model.St
     private var showOverlay: Boolean = true
     private var soundEnabled: Boolean = true
     private var sessionActive = false
+    private var ownedSession: ru.outsideproarts.oassist.core.agent.AssistSession? = null
+    private var attachScreenshot = false
     private var pendingBye = false
     /** Ход, отложенный до появления сети (пре-чек или ранний обрыв без сети). */
     private var pendingRetryText: String? = null
@@ -232,7 +234,20 @@ private val sessionTurns = mutableListOf<ru.outsideproarts.oassist.core.model.St
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         super.onStartCommand(intent, flags, startId)
+        val hasCapture = intent?.hasExtra(AssistScreenHandoff.EXTRA_TOKEN) == true
+        val captureToken = intent?.getStringExtra(AssistScreenHandoff.EXTRA_TOKEN)
+        if (hasCapture && (captureToken == null || !AssistSessionStore.isScreenCapturePending(captureToken))) {
+            if (!sessionActive) stopSelf(startId)
+            return START_NOT_STICKY
+        }
         kotlinx.coroutines.runBlocking { loadModeConfig() }
+        val capturedSession = if (hasCapture) {
+            AssistSessionStore.consumeScreenCapture(requireNotNull(captureToken), attachScreenshot)
+                ?: run {
+                    if (!sessionActive) stopSelf(startId)
+                    return START_NOT_STICKY
+                }
+        } else null
         startForegroundCompat()
         when (intent?.getStringExtra(EXTRA_CMD)) {
             CMD_MIC -> {
@@ -250,11 +265,8 @@ private val sessionTurns = mutableListOf<ru.outsideproarts.oassist.core.model.St
                 return START_NOT_STICKY
             }
         }
-        val session = AssistSessionStore.getOrCreate()
-        intent?.getStringExtra(EXTRA_SCREEN_CONTEXT)?.let { session.screenContext = it }
-        intent?.getStringExtra(EXTRA_SCREEN_IMAGE)?.let {
-            session.screenImage = ru.outsideproarts.oassist.core.model.ImagePart(imageBase64 = it)
-        }
+        val session = capturedSession ?: AssistSessionStore.getOrCreate()
+        ownedSession = session
         if (!sessionActive) {
             if (showOverlay && !Settings.canDrawOverlays(this)) {
                 hintText = getString(R.string.assistant_no_overlay)
@@ -287,7 +299,7 @@ private val sessionTurns = mutableListOf<ru.outsideproarts.oassist.core.model.St
         sounds?.playIfEnabled(AgentSound.OVERLAY_STOP, soundEnabled)
         mediaRouter?.release()
         mediaRouter = null
-        AssistSessionStore.clear()
+        ownedSession?.let(AssistSessionStore::clear)
         runCatching { AgentFactory.get().clearSessionApprovals(AssistMode.ASSISTANT) }
         // Сессия оверлея кончилась — итоги использования не переживают закрытие.
         runCatching { AgentFactory.get().resetUsageTotals() }
@@ -299,6 +311,7 @@ private val sessionTurns = mutableListOf<ru.outsideproarts.oassist.core.model.St
     }
 
     private suspend fun loadModeConfig() {
+        attachScreenshot = false
         val config = runCatching {
             AgentFactory.get().modeConfig(AssistMode.ASSISTANT)
         }.getOrNull() ?: return
@@ -306,6 +319,7 @@ private val sessionTurns = mutableListOf<ru.outsideproarts.oassist.core.model.St
         sttRecognizerComponent = config.effectiveStt().recognizerComponent
         sttBluetoothInput = config.effectiveStt().bluetoothInput
         continueDialog = config.assistant?.continueDialog ?: false
+        attachScreenshot = config.assistant?.attachScreenshot ?: true
         // showOverlay фиксируется при старте сессии: решение «окно или уведомление» структурное,
         // переключение посреди сессии смешивало бы два UI (панель + живое уведомление).
         showOverlay = config.assistant?.showOverlay ?: true
@@ -581,6 +595,7 @@ private val sessionTurns = mutableListOf<ru.outsideproarts.oassist.core.model.St
 
     private fun startTurn(text: String) {
         val session = AssistSessionStore.getOrCreate()
+        ownedSession = session
         val net = ru.outsideproarts.oassist.core.net.NetworkHandle.get()
         if (net != null && !net.isOnline.value) {
             // Оффлайн: состояние не трогаем, ход повторится фронтом сети.
@@ -663,11 +678,12 @@ private val sessionTurns = mutableListOf<ru.outsideproarts.oassist.core.model.St
                     speak = { if (autoSpeak) speech?.speak(it) },
                 )
                 val screenImage = session.screenImage
+                val screenContext = session.screenContext
                 session.screenImage = null
                 val agent = factory.agentFor(profile, AssistMode.ASSISTANT)
                 val prompt = factory.systemPromptFor(
                     AssistMode.ASSISTANT,
-                    screenContext = session.screenContext,
+                    screenContext = screenContext,
                 )
                 val agentSession = AgentSession(
                     chunks = agent.stream(

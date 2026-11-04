@@ -6,6 +6,8 @@ import android.graphics.Bitmap
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.os.Bundle
+import android.os.Handler
+import android.os.Looper
 import android.provider.Settings
 import android.service.voice.VoiceInteractionSession
 import android.service.voice.VoiceInteractionSessionService
@@ -14,6 +16,9 @@ import android.widget.FrameLayout
 import ru.outsideproarts.oassist.feature.assistant.AssistActivity
 import ru.outsideproarts.oassist.core.provider.ImageCodec
 import ru.outsideproarts.oassist.feature.assistant.AssistantOverlayService
+import ru.outsideproarts.oassist.feature.assistant.AssistScreenHandoff
+import ru.outsideproarts.oassist.core.agent.AssistSessionStore
+import ru.outsideproarts.oassist.core.model.ImagePart
 
 class OAssistVoiceInteractionSessionService : VoiceInteractionSessionService() {
     override fun onNewSession(args: Bundle?): VoiceInteractionSession {
@@ -29,27 +34,93 @@ class OAssistVoiceInteractionSessionService : VoiceInteractionSessionService() {
 class OAssistVoiceInteractionSession(
     service: VoiceInteractionSessionService,
 ) : VoiceInteractionSession(service) {
+    private val handler = Handler(Looper.getMainLooper())
+    private val capture = AssistCapture<ImagePart>(::deliver)
+    private val deadline = Runnable { capture.timeout() }
+    private var shown = false
+    private var closed = false
+    private var owner: AssistSessionStore.ScreenCaptureOwner? = null
+    private var handoffToken: String? = null
 
     override fun onCreateContentView(): View = FrameLayout(context)
 
+    override fun onShow(args: Bundle?, showFlags: Int) {
+        super.onShow(args, showFlags)
+        // Neither assist nor screenshot callbacks carry a show ID. Never reuse this collector.
+        if (shown || closed) {
+            handoffToken?.let(AssistSessionStore::discardScreenCapture)
+            cancelCapture()
+            finish()
+            return
+        }
+        shown = true
+        owner = AssistSessionStore.beginScreenCapture()
+        handler.postDelayed(deadline, 1_500L)
+        capture.start(
+            expectContext = showFlags and SHOW_WITH_ASSIST != 0,
+            expectScreenshot = showFlags and SHOW_WITH_SCREENSHOT != 0,
+            screenshotEnabled = {
+                kotlinx.coroutines.runBlocking {
+                    ru.outsideproarts.oassist.core.agent.AgentFactory.get()
+                        .modeConfig(ru.outsideproarts.oassist.core.model.AssistMode.ASSISTANT)
+                        .assistant?.attachScreenshot ?: true
+                }
+            },
+        )
+    }
+
     override fun onHandleAssist(state: AssistState) {
         super.onHandleAssist(state)
-        val structure = try {
-            state::class.java.getMethod("getStructure").invoke(state) as? AssistStructure
-        } catch (e: Exception) {
-            null
+        if (state.index == 0 && capture.acceptsContext) {
+            capture.context(extractScreenContext(state.assistStructure))
         }
-        val screenContext = extractScreenContext(structure)
-        val screenImage = extractScreenImage(state)
-        if (!startOverlay(screenContext, screenImage)) {
-            val intent = Intent(context, AssistActivity::class.java).apply {
-                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-                screenContext?.let { putExtra(AssistantOverlayService.EXTRA_SCREEN_CONTEXT, it) }
-                screenImage?.let { putExtra(AssistantOverlayService.EXTRA_SCREEN_IMAGE, it) }
+    }
+
+    override fun onHandleScreenshot(screenshot: Bitmap?) {
+        super.onHandleScreenshot(screenshot)
+        if (capture.acceptsScreenshot) {
+            capture.screenshot(screenshot?.let { runCatching { ImageCodec.fromBitmap(it) }.getOrNull() })
+        }
+    }
+
+    override fun onHide() {
+        super.onHide()
+        if (!closed) {
+            cancelCapture()
+            finish()
+        }
+    }
+
+    override fun onDestroy() {
+        cancelCapture()
+        super.onDestroy()
+    }
+
+    private fun cancelCapture() {
+        closed = true
+        handler.removeCallbacks(deadline)
+        capture.cancel()
+        owner?.let(AssistSessionStore::cancelScreenCapture)
+    }
+
+    private fun deliver(screenContext: String?, image: ImagePart?) {
+        closed = true
+        handler.removeCallbacks(deadline)
+        try {
+            val token = owner?.let { AssistScreenHandoff.publish(it, screenContext, image) } ?: return
+            handoffToken = token
+            if (!startOverlay(token)) {
+                val intent = Intent(context, AssistActivity::class.java).apply {
+                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                    putExtra(AssistScreenHandoff.EXTRA_TOKEN, token)
+                }
+                if (runCatching { context.startActivity(intent) }.isFailure) {
+                    AssistSessionStore.discardScreenCapture(token)
+                }
             }
-            runCatching { context.startActivity(intent) }
+        } finally {
+            finish()
         }
-        hide()
     }
 
     /**
@@ -57,7 +128,7 @@ class OAssistVoiceInteractionSession(
      * изолированный таск). При выданных разрешениях стартуем сервис напрямую — так таск
      * приложения вообще не трогается; исключение FGS-старта откатывает на трамплин.
      */
-    private fun startOverlay(screenContext: String?, screenImage: String? = null): Boolean {
+    private fun startOverlay(token: String): Boolean {
         val showOverlay = kotlinx.coroutines.runBlocking {
             runCatching {
                 ru.outsideproarts.oassist.core.agent.AgentFactory.get()
@@ -81,34 +152,11 @@ class OAssistVoiceInteractionSession(
             return false
         }
         val intent = Intent(context, AssistantOverlayService::class.java).apply {
-            screenContext?.let { putExtra(AssistantOverlayService.EXTRA_SCREEN_CONTEXT, it) }
-            screenImage?.let { putExtra(AssistantOverlayService.EXTRA_SCREEN_IMAGE, it) }
+            putExtra(AssistScreenHandoff.EXTRA_TOKEN, token)
         }
         return runCatching {
             context.startForegroundService(intent)
         }.isSuccess
-    }
-
-    /** Снимок экрана жеста (EXTRA_ASSIST_SCREENSHOT) — только при включённом attachScreenshot. */
-    private fun extractScreenImage(state: AssistState): String? {
-        val attachScreenshot = kotlinx.coroutines.runBlocking {
-            runCatching {
-                ru.outsideproarts.oassist.core.agent.AgentFactory.get()
-                    .modeConfig(ru.outsideproarts.oassist.core.model.AssistMode.ASSISTANT)
-                    .assistant?.attachScreenshot ?: true
-            }.getOrDefault(true)
-        }
-        if (!attachScreenshot) return null
-        val extras = try {
-            state::class.java.getMethod("getExtras").invoke(state) as? Bundle
-        } catch (e: Exception) {
-            null
-        } ?: return null
-        val bitmap = runCatching {
-            @Suppress("DEPRECATION")
-            extras.getParcelable<Bitmap>("android.intent.extra.ASSIST_SCREENSHOT")
-        }.getOrNull() ?: return null
-        return runCatching { ImageCodec.fromBitmap(bitmap).imageBase64 }.getOrNull()
     }
 
     private fun extractScreenContext(structure: AssistStructure?): String? {

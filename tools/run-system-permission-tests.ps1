@@ -55,7 +55,7 @@ try {
   foreach ($permission in $permissions) { Set-PermissionState $permission $user @{ Granted = $false; UserSet = $false; UserFixed = $false } }
   $output = Invoke-Adb @('shell', 'am', 'instrument', '--user', $user, '-w', '-e', 'systemPermissionFixture', 'true', '-e', 'class', $testClass, "$package.test/androidx.test.runner.AndroidJUnitRunner")
   Write-Output $output
-  if ($output -notmatch '(?m)^OK \(4 tests\)\s*$') { throw 'Instrumentation did not report four passing tests' }
+  if ($output -notmatch '(?m)^OK \(5 tests\)\s*$') { throw 'Instrumentation did not report five passing tests' }
 } catch { $failure = $_ }
 finally {
   foreach ($permission in $permissions) {

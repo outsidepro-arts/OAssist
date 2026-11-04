@@ -9,7 +9,7 @@
 OpenCode ниже применима только при подтверждённой проблеме с OpenCode; эти наблюдения
 не задают сборочные требования для других агентов.
 
-Исключение — `tools/ci/`: эти скрипты используют PowerShell 7 и на Windows, и на
+Исключение — `tools/ci/` и runners системных Android-тестов: они используют PowerShell 7 и на Windows, и на
 Linux runners. Настройка автоматического выпуска описана в
 [README](../README.md#автоматические-сборки-github). Проверки CI-скриптов запускаются
 командами `pwsh -NoProfile -Command './tools/ci/Test-OAssistCi.ps1'` и
@@ -25,8 +25,25 @@ Linux runners. Настройка автоматического выпуска 
 затем запустите `pwsh -NoProfile -File tools/run-system-permission-tests.ps1 -Serial emulator-5554`
 с фактическим serial. Скрипт временно меняет CAMERA и RECORD_AUDIO, затем восстанавливает
 их исходное состояние; доступ поверх окон должен быть выключен. Запускайте остальные
-instrumentation-тесты с `-Pandroid.testInstrumentationRunnerArguments.notClass=ru.outsideproarts.oassist.permission.SystemPermissionLifecycleTest`.
-Обе фазы обязательны в CI. При принудительном завершении скрипта восстановление не гарантируется.
+instrumentation-тесты с исключением этого класса и четырёх VIS-классов ниже, как в `.github/workflows/android.yml`.
+Все три фазы обязательны в CI. При принудительном завершении скрипта восстановление не гарантируется.
+
+## Контекст системного ассистента
+
+После установки app/debug и androidTest APK выполните
+`pwsh -NoProfile -File tools/run-assist-capture-tests.ps1 -Serial emulator-5554`.
+Runner предназначен только для эмулятора API 31+: он временно выбирает OAssist системным
+ассистентом, включает сбор контекста, подготавливает overlay/MIC и уведомления (API 33+),
+затем восстанавливает и проверяет роль, пять secure settings, appop и runtime permissions с flags.
+Неизвестное исходное состояние отклоняется до изменений. Runner не устанавливает APK,
+не создаёт AVD и не очищает данные. Для отдельных логов задайте `-OutputDirectory <каталог>`;
+по умолчанию результаты находятся в `app/build/outputs/androidTest-results/assist-capture`.
+
+Эта отдельная обязательная фаза выполняет `VoiceInteractionCaptureTest`,
+`AssistHandoffLifecycleTest`, `AssistServiceHandoffTest` и `AssistTurnSnapshotTest`
+из пакета `ru.outsideproarts.oassist.vis` (5 тестов). Только эти четыре класса,
+наряду с `SystemPermissionLifecycleTest`, исключены из общего запуска через `notClass`.
+Неподготовленный прямой запуск завершается ошибкой предусловия, а не пропуском тестов.
 
 ## Сборка и тесты
 
