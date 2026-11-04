@@ -12,6 +12,7 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.safeDrawingPadding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.text.KeyboardOptions
@@ -386,6 +387,7 @@ private fun ShareChatList(
     Column(
         modifier = Modifier
             .fillMaxSize()
+            .safeDrawingPadding()
             .padding(OAssistDimens.ScreenContentPadding),
         verticalArrangement = Arrangement.spacedBy(OAssistDimens.SectionSpacing),
     ) {
@@ -463,6 +465,7 @@ private fun ShareConversation(
     Column(
         modifier = Modifier
             .fillMaxSize()
+            .safeDrawingPadding()
             .padding(OAssistDimens.ScreenContentPadding),
         verticalArrangement = Arrangement.spacedBy(OAssistDimens.SectionSpacing),
     ) {
