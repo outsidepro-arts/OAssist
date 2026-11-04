@@ -7,6 +7,9 @@ import androidx.test.platform.app.InstrumentationRegistry
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicReference
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.withTimeout
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
@@ -39,6 +42,23 @@ class RecognitionServiceSelectionTest {
             override fun onFinal(text: String) = error("Refused owner received final")
             override fun onSttError(error: SttError) = error("Refused owner received error")
         }
+        fun awaitIdle() = runBlocking {
+            withTimeout(10_000) { voice.state.first { it == CaptureState.Idle } }
+        }
+        fun cancelRaw() {
+            voice.cancelRaw()
+            if (voice.state.value != CaptureState.Idle) {
+                assertEquals(CaptureError.BUSY, voice.startRaw(bluetoothInput = false))
+            }
+        }
+        var nextCaptureStarted = false
+        fun startNextCapture() {
+            assertEquals(CaptureState.Idle, voice.state.value)
+            assertNull(voice.startRaw(bluetoothInput = false))
+            nextCaptureStarted = true
+            voice.cancelStt()
+            assertEquals(CaptureError.BUSY, voice.startRaw(bluetoothInput = false))
+        }
         try {
             instrumentation.runOnMainSync {
                 assertNull(voice.startRaw(bluetoothInput = false))
@@ -51,15 +71,31 @@ class RecognitionServiceSelectionTest {
                 assertEquals(rawState, voice.state.value)
                 assertEquals(rawRoute, voice.route.value)
                 assertEquals(CaptureError.BUSY, voice.startRaw(bluetoothInput = false))
-                voice.cancelRaw()
-                assertEquals(CaptureState.Idle, voice.state.value)
-                assertNull(voice.startRaw(bluetoothInput = false))
-                voice.cancelStt()
+                cancelRaw()
+                if (voice.state.value == CaptureState.Idle) {
+                    // Restart before the previous worker's posted completion can run.
+                    startNextCapture()
+                }
+            }
+            // The recorder may outlive cancelRaw's join timeout. Let its main-thread callback run.
+            if (!nextCaptureStarted) {
+                awaitIdle()
+                instrumentation.runOnMainSync { startNextCapture() }
+            }
+            instrumentation.waitForIdleSync()
+            instrumentation.runOnMainSync {
+                // A queued completion from the previous recorder must not reset the new capture.
                 assertEquals(CaptureError.BUSY, voice.startRaw(bluetoothInput = false))
-                voice.cancelRaw()
+                cancelRaw()
+            }
+            awaitIdle()
+            instrumentation.runOnMainSync {
                 assertEquals(CaptureState.Idle, voice.state.value)
             }
-        } finally { instrumentation.runOnMainSync { voice.cancelRaw() } }
+        } finally {
+            instrumentation.runOnMainSync { voice.cancelRaw() }
+            awaitIdle()
+        }
     }
 
     @Test

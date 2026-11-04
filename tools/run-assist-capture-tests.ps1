@@ -16,7 +16,41 @@ function Invoke-Adb([string[]]$Arguments) {
   return ($output -join "`n")
 }
 
+function ConvertFrom-RoleDump([string]$Dump, [string]$UserId, [string]$RoleName) {
+  # Accept the API 31 dumpsys structure only in full: partial matches could silently lose holders.
+  $rolePattern = '\{\s*name=(?<name>[A-Za-z0-9_.]+)\s*(?:holders=(?<holder>[A-Za-z0-9_]+(?:\.[A-Za-z0-9_]+)+)\s*)*\}'
+  $userPattern = "user_id=(?<id>\d+)\s*version=-?\d+\s*packages_hash=[^\r\n]*\s*roles=\[\s*(?:(?<role>$rolePattern)\s*)*\]"
+  $match = [regex]::Match($Dump, "\AROLE STATE \(dumpsys role\):\s*\{\s*user_states=\{\s*(?:(?<user>$userPattern)\s*)*\}\s*\}\s*\z")
+  if (-not $match.Success) { throw 'Unparseable role state dump' }
+  $users = [System.Collections.Generic.Dictionary[string, bool]]::new([StringComparer]::Ordinal)
+  $result = $null
+  foreach ($userBlock in $match.Groups['user'].Captures) {
+    $parsedUser = [regex]::Match($userBlock.Value, "\A$userPattern\z")
+    $id = $parsedUser.Groups['id'].Value
+    if ($users.ContainsKey($id)) { throw "Duplicate role state for user $id" }
+    $users[$id] = $true
+    $roles = [System.Collections.Generic.Dictionary[string, string[]]]::new([StringComparer]::Ordinal)
+    foreach ($roleBlock in $parsedUser.Groups['role'].Captures) {
+      $parsedRole = [regex]::Match($roleBlock.Value, "\A$rolePattern\z")
+      $name = $parsedRole.Groups['name'].Value
+      if ($roles.ContainsKey($name)) { throw "Duplicate role $name for user $id" }
+      $holders = @($parsedRole.Groups['holder'].Captures | ForEach-Object { $_.Value })
+      if (@($holders | Sort-Object -Unique).Count -ne $holders.Count) { throw "Duplicate holder for role $name and user $id" }
+      $roles[$name] = $holders
+    }
+    if ($id -ceq $UserId) {
+      if (-not $roles.ContainsKey($RoleName)) { throw "Missing role $RoleName for user $UserId" }
+      $result = @($roles[$RoleName] | Sort-Object)
+    }
+  }
+  if (-not $users.ContainsKey($UserId)) { throw "Missing role state for user $UserId" }
+  return $result
+}
+
 function Get-Roles {
+  if (-not $roleGetSupported) {
+    return @(ConvertFrom-RoleDump (Invoke-Adb @('shell', 'dumpsys', 'role')) $user $role)
+  }
   return @((Invoke-Adb @('shell', 'cmd', 'role', 'get-role-holders', '--user', $user, $role)) -split '\r?\n' |
     ForEach-Object { $_.Trim() } | Where-Object { $_ } | Sort-Object)
 }
@@ -49,12 +83,27 @@ function Get-PermissionState([string]$Permission) {
   return @{ Granted = $line.Groups[1].Value -eq 'true'; UserSet = 'USER_SET' -in $flags; UserFixed = 'USER_FIXED' -in $flags; Flags = ($flags -join '|') }
 }
 
-function Set-PermissionState([string]$Permission, [hashtable]$State) {
+function Set-UserPermissionFlags([string]$Permission, [bool]$UserSet, [bool]$UserFixed) {
+  if ([int]$sdkText -lt 33) {
+    $output = Invoke-Adb @('shell', 'am', 'instrument', '--user', $user, '-w',
+      '-e', 'class', "$package.permission.PermissionFlagsFixture", '-e', 'permissionFlagsFixture', 'true',
+      '-e', 'permission', $Permission, '-e', 'userSet', $UserSet.ToString().ToLowerInvariant(),
+      '-e', 'userFixed', $UserFixed.ToString().ToLowerInvariant(), "$package.test/androidx.test.runner.AndroidJUnitRunner")
+    if ($output -notmatch '(?m)^OK \(1 test\)\s*$' -or $output -match '(?i)FAILURES!!!|INSTRUMENTATION_FAILED|ignored|skipped') {
+      throw "Could not update permission flags for ${Permission}: $output"
+    }
+    return
+  }
   Invoke-Adb @('shell', 'pm', 'clear-permission-flags', '--user', $user, $package, $Permission, 'user-set', 'user-fixed') | Out-Null
+  if ($UserSet) { Invoke-Adb @('shell', 'pm', 'set-permission-flags', '--user', $user, $package, $Permission, 'user-set') | Out-Null }
+  if ($UserFixed) { Invoke-Adb @('shell', 'pm', 'set-permission-flags', '--user', $user, $package, $Permission, 'user-fixed') | Out-Null }
+}
+
+function Set-PermissionState([string]$Permission, [hashtable]$State) {
+  Set-UserPermissionFlags $Permission $false $false
   $action = if ($State.Granted) { 'grant' } else { 'revoke' }
   Invoke-Adb @('shell', 'pm', $action, '--user', $user, $package, $Permission) | Out-Null
-  if ($State.UserSet) { Invoke-Adb @('shell', 'pm', 'set-permission-flags', '--user', $user, $package, $Permission, 'user-set') | Out-Null }
-  if ($State.UserFixed) { Invoke-Adb @('shell', 'pm', 'set-permission-flags', '--user', $user, $package, $Permission, 'user-fixed') | Out-Null }
+  if ($State.UserSet -or $State.UserFixed) { Set-UserPermissionFlags $Permission $State.UserSet $State.UserFixed }
 }
 
 function Get-FixtureState {
@@ -80,6 +129,11 @@ $user = (Invoke-Adb @('shell', 'am', 'get-current-user')).Trim()
 if ($user -notmatch '^\d+$') { throw "Cannot identify current user: $user" }
 $sdkText = (Invoke-Adb @('shell', 'getprop', 'ro.build.version.sdk')).Trim()
 if ($sdkText -notmatch '^\d+$' -or [int]$sdkText -lt 31) { throw "Unsupported Android API: $sdkText" }
+# API 31 prints valid help with exit code 255. Accept that status only for this read-only probe.
+$roleHelp = (@(& adb -s $Serial shell cmd role help 2>&1) -join "`n")
+if ($LASTEXITCODE -notin @(0, 255) -or $roleHelp -notmatch '\ARole \(role\) commands:' -or
+    $roleHelp -notmatch '(?m)^\s*add-role-holder\s' -or $roleHelp -notmatch '(?m)^\s*remove-role-holder\s') { throw 'Unrecognized role command help' }
+$roleGetSupported = $roleHelp -match '(?m)^\s*get-role-holders\s'
 foreach ($installed in @($package, "$package.test")) {
   if ((Invoke-Adb @('shell', 'pm', 'path', $installed)) -notmatch '(?m)^package:') { throw "Install $installed before running this script" }
 }

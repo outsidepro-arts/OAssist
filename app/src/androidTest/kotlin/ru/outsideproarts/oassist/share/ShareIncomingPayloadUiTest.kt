@@ -85,6 +85,7 @@ class ShareIncomingPayloadUiTest {
             try { bitmap.compress(Bitmap.CompressFormat.PNG, 100, out) } finally { bitmap.recycle() }
             out.toByteArray()
         }
+        val oldDiagnostics = Diagnostics.swapForTest(null)
         try {
             AgentFactory.register(factory)
             ChatHandle.register(repository)
@@ -104,26 +105,26 @@ class ShareIncomingPayloadUiTest {
                 launch(streams).use { scenario ->
                     compose.dismissShareKeyboard(scenario)
                     compose.onNode(hasScrollToIndexAction()).performScrollToIndex(0)
-                    val label = context.getString(ru.outsideproarts.oassist.feature.share.R.string.share_unsupported_file)
+                    val label = scenario.getString(ru.outsideproarts.oassist.feature.share.R.string.share_unsupported_file)
                     compose.waitUntil(10_000) { compose.onAllNodesWithText(label).fetchSemanticsNodes().isNotEmpty() }
                     compose.onNode(hasScrollAction()).performScrollToNode(hasText(label))
                     compose.onNodeWithText(label).assertIsDisplayed()
                     if (caseIndex == 3) {
-                        val close = context.getString(ru.outsideproarts.oassist.feature.share.R.string.share_close)
+                        val close = scenario.getString(ru.outsideproarts.oassist.feature.share.R.string.share_close)
                         compose.onNode(hasScrollAction()).performScrollToNode(hasText(close))
                         compose.onNodeWithText(close).assertIsDisplayed()
                         compose.onNode(hasScrollAction()).performScrollToNode(hasText(label))
                         compose.onNodeWithText(label).assertIsDisplayed()
-                        val image = context.getString(ru.outsideproarts.oassist.feature.share.R.string.share_image_attached)
+                        val image = scenario.getString(ru.outsideproarts.oassist.feature.share.R.string.share_image_attached)
                         compose.waitUntil(10_000) { compose.onAllNodesWithContentDescription(image).fetchSemanticsNodes().size == 4 }
                     }
-                    val newChat = context.getString(ru.outsideproarts.oassist.core.ui.R.string.chats_new)
+                    val newChat = scenario.getString(ru.outsideproarts.oassist.core.ui.R.string.chats_new)
                     compose.onNode(hasScrollAction()).performScrollToNode(hasText(newChat))
                     compose.onNodeWithText(newChat).assertIsDisplayed().performClick()
-                    val question = compose.onNodeWithText(context.getString(ru.outsideproarts.oassist.feature.share.R.string.share_ask_label))
+                    val question = compose.onNodeWithText(scenario.getString(ru.outsideproarts.oassist.feature.share.R.string.share_ask_label))
                     question.performTextInput("editable question")
                     compose.onNodeWithText("editable question").assertExists()
-                    compose.onNodeWithContentDescription(context.getString(ru.outsideproarts.oassist.feature.share.R.string.share_send)).assertIsNotEnabled()
+                    compose.onNodeWithContentDescription(scenario.getString(ru.outsideproarts.oassist.feature.share.R.string.share_send)).assertIsNotEnabled()
                     compose.onNode(hasScrollAction()).performScrollToNode(hasText(label))
                     compose.onNodeWithText(label).assertIsDisplayed()
                     scenario.onActivity { assertTrue(ViewModelProvider(it)[ShareSessionViewModel::class.java].turns.isEmpty()) }
@@ -132,11 +133,11 @@ class ShareIncomingPayloadUiTest {
             }
             launch(listOf(image)).use { scenario ->
                 compose.dismissShareKeyboard(scenario)
-                val newChat = context.getString(ru.outsideproarts.oassist.core.ui.R.string.chats_new)
+                val newChat = scenario.getString(ru.outsideproarts.oassist.core.ui.R.string.chats_new)
                 compose.onNode(hasScrollAction()).performScrollToNode(hasText(newChat))
                 compose.onNodeWithText(newChat).assertIsDisplayed().performClick()
-                compose.onNodeWithText(context.getString(ru.outsideproarts.oassist.feature.share.R.string.share_ask_label)).performTextInput("fixture question")
-                val send = compose.onNodeWithContentDescription(context.getString(ru.outsideproarts.oassist.feature.share.R.string.share_send))
+                compose.onNodeWithText(scenario.getString(ru.outsideproarts.oassist.feature.share.R.string.share_ask_label)).performTextInput("fixture question")
+                val send = compose.onNodeWithContentDescription(scenario.getString(ru.outsideproarts.oassist.feature.share.R.string.share_send))
                 compose.waitUntil(10_000) { runCatching { send.assertIsEnabled(); true }.getOrDefault(false) }
                 send.performClick()
                 compose.waitUntil(20_000) { requests.isNotEmpty() }
@@ -172,9 +173,9 @@ class ShareIncomingPayloadUiTest {
                 compose.onNodeWithText("Saved fixture question").assertIsDisplayed()
                 compose.onNode(hasScrollAction()).performScrollToNode(hasText(longText.take(500)))
                 compose.onNodeWithText(longText.take(500)).assertExists()
-                compose.onNodeWithText(context.getString(ru.outsideproarts.oassist.feature.share.R.string.share_ask_label))
+                compose.onNodeWithText(scenario.getString(ru.outsideproarts.oassist.feature.share.R.string.share_ask_label))
                     .performTextInput("existing chat question")
-                val send = compose.onNodeWithContentDescription(context.getString(ru.outsideproarts.oassist.feature.share.R.string.share_send))
+                val send = compose.onNodeWithContentDescription(scenario.getString(ru.outsideproarts.oassist.feature.share.R.string.share_send))
                 compose.waitUntil(10_000) { runCatching { send.assertIsEnabled(); true }.getOrDefault(false) }
                 send.performClick()
                 compose.waitUntil(20_000) { requests.size == 2 }
@@ -185,6 +186,7 @@ class ShareIncomingPayloadUiTest {
                 assertEquals(4, body.split(encoded.imageBase64).size - 1)
             }
         } finally {
+            Diagnostics.swapForTest(oldDiagnostics)
             uris.forEach { context.contentResolver.delete(it, null, null) }
             AgentFactory.register(oldFactory); ChatHandle.register(oldRepository); NetworkHandle.register(oldNetwork)
             http.close(); db.close(); mediaRoot.deleteRecursively()

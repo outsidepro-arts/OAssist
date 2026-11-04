@@ -92,10 +92,10 @@ class ShareInsetsGeometryTest {
                         if (ime) assertTrue("IME must be visible with nonzero inset", insets.isVisible(WindowInsets.Type.ime()) && insets.getInsets(WindowInsets.Type.ime()).bottom > insets.getInsets(WindowInsets.Type.systemBars()).bottom)
                     }
                 }
-                val title = context.getString(ShareR.string.share_title)
-                val open = context.getString(ShareR.string.share_open_chat)
-                val close = context.getString(ShareR.string.share_close)
-                val newChat = context.getString(UiR.string.chats_new)
+                val title = scenario.getString(ShareR.string.share_title)
+                val open = scenario.getString(ShareR.string.share_open_chat)
+                val close = scenario.getString(ShareR.string.share_close)
+                val newChat = scenario.getString(UiR.string.chats_new)
                 fun scrollTo(label: String) {
                     compose.onNode(hasScrollToNodeAction()).performScrollToNode(hasText(label))
                     compose.onNodeWithText(label).assertIsDisplayed()
@@ -116,9 +116,9 @@ class ShareInsetsGeometryTest {
                 scrollTo(newChat)
                 checkBounds("list new chat", rect(newChat))
                 compose.onNodeWithText(newChat).performClick()
-                val back = context.getString(ShareR.string.share_back)
-                val question = context.getString(ShareR.string.share_ask_label)
-                val send = context.getString(ShareR.string.share_send)
+                val back = scenario.getString(ShareR.string.share_back)
+                val question = scenario.getString(ShareR.string.share_ask_label)
+                val send = scenario.getString(ShareR.string.share_send)
                 compose.waitUntil(10_000) { compose.onAllNodesWithContentDescription(back).fetchSemanticsNodes().isNotEmpty() }
                 compose.dismissShareKeyboard(scenario)
                 checkBounds("conversation back", rect(back, true))
@@ -184,9 +184,9 @@ class ShareInsetsGeometryTest {
                             bounds.right + loc[0] <= metrics.right - safe.right + 1 && bounds.bottom + loc[1] <= metrics.bottom - safe.bottom + 1)
                     }
                 }
-                val emptyOpen = context.getString(ShareR.string.share_open_chat)
-                val emptyClose = context.getString(ShareR.string.share_close)
-                val emptyNewChat = context.getString(UiR.string.chats_new)
+                val emptyOpen = scenario.getString(ShareR.string.share_open_chat)
+                val emptyClose = scenario.getString(ShareR.string.share_close)
+                val emptyNewChat = scenario.getString(UiR.string.chats_new)
                 scrollTo(emptyOpen)
                 checkEmpty(emptyOpen)
                 scrollTo(emptyClose)
@@ -194,11 +194,11 @@ class ShareInsetsGeometryTest {
                 scrollTo(emptyNewChat)
                 checkEmpty(emptyNewChat)
                 compose.onNodeWithText(emptyNewChat).performClick()
-                val back = context.getString(ShareR.string.share_back)
+                val back = scenario.getString(ShareR.string.share_back)
                 compose.waitUntil(10_000) { compose.onAllNodesWithContentDescription(back).fetchSemanticsNodes().isNotEmpty() }
                 compose.dismissShareKeyboard(scenario)
                 checkEmpty(back, true)
-                val emptyQuestion = context.getString(ShareR.string.share_ask_label)
+                val emptyQuestion = scenario.getString(ShareR.string.share_ask_label)
                 checkEmpty(emptyQuestion)
                 val questionBounds = compose.onNodeWithText(emptyQuestion).fetchSemanticsNode().boundsInWindow
                 scenario.onActivity {
@@ -206,7 +206,7 @@ class ShareInsetsGeometryTest {
                     val expected = it.windowManager.currentWindowMetrics.bounds.bottom - safe.bottom - 16 * it.resources.displayMetrics.density
                     assertTrue("empty question bottom gap: $questionBounds expected=$expected", kotlin.math.abs(questionBounds.bottom - expected) <= 3f)
                 }
-                checkEmpty(context.getString(ShareR.string.share_send), true)
+                checkEmpty(scenario.getString(ShareR.string.share_send), true)
             }
         } finally {
             try {

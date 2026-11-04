@@ -1,6 +1,8 @@
 param([string]$ReferenceApk = '', [string]$BuildToolsDirectory = '')
 $ErrorActionPreference = 'Stop'
 Import-Module (Join-Path $PSScriptRoot 'OAssistCi.psm1') -Force
+& (Join-Path $PSScriptRoot 'Test-AssistRoleDump.ps1')
+& (Join-Path $PSScriptRoot 'Test-PermissionFlags.ps1')
 
 function Assert-True([bool]$Condition, [string]$Message) { if (-not $Condition) { throw $Message } }
 function Assert-Throws([scriptblock]$Action, [string]$Message) {

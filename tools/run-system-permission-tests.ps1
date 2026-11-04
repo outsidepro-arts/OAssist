@@ -34,12 +34,28 @@ function Get-PermissionState([string]$Permission, [string]$User, [string]$Packag
   return @{ Granted = $line.Groups[1].Value -eq 'true'; UserSet = 'USER_SET' -in $flags; UserFixed = 'USER_FIXED' -in $flags; Flags = ($flags | Sort-Object) -join '|' }
 }
 
-function Set-PermissionState([string]$Permission, [string]$User, [hashtable]$State, [string]$PackageName = $package) {
+function Set-UserPermissionFlags([string]$Permission, [string]$User, [bool]$UserSet, [bool]$UserFixed, [string]$PackageName) {
+  if ($sdk -lt 33) {
+    if ($PackageName -cne $package) { throw "Unsupported permission flags target: $PackageName" }
+    $output = Invoke-Adb @('shell', 'am', 'instrument', '--user', $User, '-w',
+      '-e', 'class', "$package.permission.PermissionFlagsFixture", '-e', 'permissionFlagsFixture', 'true',
+      '-e', 'permission', $Permission, '-e', 'userSet', $UserSet.ToString().ToLowerInvariant(),
+      '-e', 'userFixed', $UserFixed.ToString().ToLowerInvariant(), "$package.test/androidx.test.runner.AndroidJUnitRunner")
+    if ($output -notmatch '(?m)^OK \(1 test\)\s*$' -or $output -match '(?i)FAILURES!!!|INSTRUMENTATION_FAILED|ignored|skipped') {
+      throw "Could not update permission flags for ${Permission}: $output"
+    }
+    return
+  }
   Invoke-Adb @('shell', 'pm', 'clear-permission-flags', '--user', $User, $PackageName, $Permission, 'user-set', 'user-fixed') | Out-Null
+  if ($UserSet) { Invoke-Adb @('shell', 'pm', 'set-permission-flags', '--user', $User, $PackageName, $Permission, 'user-set') | Out-Null }
+  if ($UserFixed) { Invoke-Adb @('shell', 'pm', 'set-permission-flags', '--user', $User, $PackageName, $Permission, 'user-fixed') | Out-Null }
+}
+
+function Set-PermissionState([string]$Permission, [string]$User, [hashtable]$State, [string]$PackageName = $package) {
+  Set-UserPermissionFlags $Permission $User $false $false $PackageName
   $action = if ($State.Granted) { 'grant' } else { 'revoke' }
   Invoke-Adb @('shell', 'pm', $action, '--user', $User, $PackageName, $Permission) | Out-Null
-  if ($State.UserSet) { Invoke-Adb @('shell', 'pm', 'set-permission-flags', '--user', $User, $PackageName, $Permission, 'user-set') | Out-Null }
-  if ($State.UserFixed) { Invoke-Adb @('shell', 'pm', 'set-permission-flags', '--user', $User, $PackageName, $Permission, 'user-fixed') | Out-Null }
+  if ($State.UserSet -or $State.UserFixed) { Set-UserPermissionFlags $Permission $User $State.UserSet $State.UserFixed $PackageName }
   $actual = Get-PermissionState $Permission $User $PackageName
   foreach ($key in @('Granted', 'UserSet', 'UserFixed')) {
     if ($actual[$key] -ne $State[$key]) { throw "Failed to restore $Permission $key" }

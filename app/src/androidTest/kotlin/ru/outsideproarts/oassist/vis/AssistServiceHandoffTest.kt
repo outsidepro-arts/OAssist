@@ -20,6 +20,7 @@ import org.junit.runner.RunWith
 import ru.outsideproarts.oassist.core.agent.AgentFactory
 import ru.outsideproarts.oassist.core.agent.AssistSessionStore
 import ru.outsideproarts.oassist.core.model.*
+import ru.outsideproarts.oassist.core.model.diagnostics.Diagnostics
 import ru.outsideproarts.oassist.core.net.NetworkHandle
 import ru.outsideproarts.oassist.core.speech.*
 import ru.outsideproarts.oassist.feature.assistant.AssistActivity
@@ -40,6 +41,7 @@ class AssistServiceHandoffTest {
             context.checkSelfPermission(Manifest.permission.RECORD_AUDIO))
         val previousFactory = AgentFactory.get()
         val previousVoice = requireNotNull(VoiceHandle.get())
+        val previousSpeech = requireNotNull(SpeechHandle.get())
         val previousNetwork = requireNotNull(NetworkHandle.get())
         val desiredOverlay = AtomicBoolean(false)
         val starts = AtomicInteger()
@@ -62,6 +64,7 @@ class AssistServiceHandoffTest {
             }
             return requireNotNull(token.get())
         }
+        val previousDiagnostics = Diagnostics.swapForTest(null)
         try {
             AssistSessionStore.clear()
             AgentFactory.register(object : AgentFactory by previousFactory {
@@ -71,6 +74,7 @@ class AssistServiceHandoffTest {
                 )
             })
             NetworkHandle.register(object : NetworkHandle { override val isOnline = MutableStateFlow(false) })
+            SpeechHandle.register(QuietAssistSpeechHandle(previousSpeech))
             VoiceHandle.register(object : VoiceHandle by previousVoice {
                 private var sttOwner: SttListener? = null
                 override fun cancelStt(owner: SttListener): Boolean {
@@ -164,12 +168,17 @@ class AssistServiceHandoffTest {
             context.stopService(service)
             await { AssistSessionStore.current() == null }
         } finally {
-            context.stopService(service)
-            instrumentation.waitForIdleSync()
-            VoiceHandle.register(previousVoice)
-            NetworkHandle.register(previousNetwork)
-            AgentFactory.register(previousFactory)
-            AssistSessionStore.clear()
+            try {
+                context.stopService(service)
+                instrumentation.waitForIdleSync()
+                VoiceHandle.register(previousVoice)
+                SpeechHandle.register(previousSpeech)
+                NetworkHandle.register(previousNetwork)
+                AgentFactory.register(previousFactory)
+                AssistSessionStore.clear()
+            } finally {
+                Diagnostics.swapForTest(previousDiagnostics)
+            }
         }
     }
 

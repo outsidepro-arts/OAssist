@@ -58,6 +58,7 @@ class AssistTurnSnapshotTest {
         assertEquals(PackageManager.PERMISSION_GRANTED, context.checkSelfPermission(Manifest.permission.RECORD_AUDIO))
         val previousFactory = AgentFactory.get()
         val previousVoice = requireNotNull(VoiceHandle.get())
+        val previousSpeech = requireNotNull(SpeechHandle.get())
         val previousNetwork = requireNotNull(NetworkHandle.get())
         val previousRepository = requireNotNull(ChatHandle.get())
         val database = Room.inMemoryDatabaseBuilder(context, OAssistDatabase::class.java).build()
@@ -99,10 +100,12 @@ class AssistTurnSnapshotTest {
                 Bundle().apply { putCharSequence(AssistantOverlayService.EXTRA_REPLY, text) })
             context.startService(command)
         }
+        val previousDiagnostics = Diagnostics.swapForTest(null)
         try {
             AssistSessionStore.clear()
             ChatHandle.register(repository)
             NetworkHandle.register(object : NetworkHandle { override val isOnline = MutableStateFlow(true) })
+            SpeechHandle.register(QuietAssistSpeechHandle(previousSpeech))
             VoiceHandle.register(object : VoiceHandle by previousVoice {
                 private var sttOwner: SttListener? = null
                 override fun cancelStt(owner: SttListener): Boolean {
@@ -166,17 +169,22 @@ class AssistTurnSnapshotTest {
             context.stopService(service)
             await { AssistSessionStore.current() == null }
         } finally {
-            releaseFactory.complete(Unit)
-            context.stopService(service)
-            instrumentation.waitForIdleSync()
-            AgentFactory.register(previousFactory)
-            VoiceHandle.register(previousVoice)
-            NetworkHandle.register(previousNetwork)
-            ChatHandle.register(previousRepository)
-            AssistSessionStore.clear()
-            database.close()
-            check(media.canonicalFile.parentFile == context.cacheDir.canonicalFile)
-            media.deleteRecursively()
+            try {
+                releaseFactory.complete(Unit)
+                context.stopService(service)
+                instrumentation.waitForIdleSync()
+                AgentFactory.register(previousFactory)
+                VoiceHandle.register(previousVoice)
+                SpeechHandle.register(previousSpeech)
+                NetworkHandle.register(previousNetwork)
+                ChatHandle.register(previousRepository)
+                AssistSessionStore.clear()
+                database.close()
+                check(media.canonicalFile.parentFile == context.cacheDir.canonicalFile)
+                media.deleteRecursively()
+            } finally {
+                Diagnostics.swapForTest(previousDiagnostics)
+            }
         }
     }
 
