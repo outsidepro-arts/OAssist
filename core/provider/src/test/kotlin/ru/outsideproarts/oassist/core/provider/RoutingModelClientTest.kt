@@ -2,14 +2,23 @@ package ru.outsideproarts.oassist.core.provider
 
 import io.ktor.client.HttpClient
 import io.ktor.client.engine.mock.MockEngine
+import io.ktor.client.engine.mock.MockEngineConfig
+import io.ktor.client.engine.HttpClientEngineCapability
 import io.ktor.client.engine.mock.MockRequestHandleScope
 import io.ktor.client.engine.mock.respond
 import io.ktor.client.request.HttpRequestData
 import io.ktor.client.request.HttpResponseData
+import io.ktor.client.request.ResponseAdapterAttributeKey
+import io.ktor.client.plugins.sse.SSECapability
 import io.ktor.http.HttpStatusCode
 import io.ktor.http.headersOf
 import io.ktor.serialization.kotlinx.json.json
+import io.ktor.utils.io.ByteReadChannel
+import io.ktor.utils.io.InternalAPI
 import kotlinx.coroutines.test.runTest
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.async
+import kotlinx.coroutines.flow.toList
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
@@ -53,8 +62,24 @@ class RoutingModelClientTest {
         protocol = protocol,
     )
 
+    private class SseMockEngine(config: MockEngineConfig) : MockEngine(config) {
+        override val supportedCapabilities: Set<HttpClientEngineCapability<out Any>> =
+            super.supportedCapabilities + SSECapability
+
+        @OptIn(InternalAPI::class)
+        override suspend fun execute(data: HttpRequestData): HttpResponseData {
+            val response = super.execute(data)
+            val body = response.body as? ByteReadChannel ?: return response
+            val adapted = data.attributes.getOrNull(ResponseAdapterAttributeKey)?.adapt(
+                data, response.statusCode, response.headers, body, data.body, response.callContext,
+            ) ?: return response
+            return HttpResponseData(response.statusCode, response.requestTime, response.headers,
+                response.version, adapted, response.callContext)
+        }
+    }
+
     private fun http(handler: suspend MockRequestHandleScope.(HttpRequestData) -> HttpResponseData): HttpClient =
-        HttpClient(MockEngine { request -> handler(request) }) {
+        HttpClient(SseMockEngine(MockEngineConfig().apply { requestHandlers.add(handler) })) {
             expectSuccess = true
             install(io.ktor.client.plugins.contentnegotiation.ContentNegotiation) { json(ProviderJson) }
             install(io.ktor.client.plugins.sse.SSE)
@@ -101,6 +126,77 @@ class RoutingModelClientTest {
             assertEquals(setOf(ModelCapability.TOOLS), client.probeCapabilities("custom-model"))
             assertEquals(1, requests)
         } finally {
+            engine.close()
+        }
+    }
+
+    @Test
+    fun manualOverride_afterLearning_controlsProbeAndStream() = runTest {
+        var manual: ModelProtocol? = null
+        val paths = mutableListOf<String>()
+        val engine = http { request ->
+            paths += request.url.encodedPath
+            when {
+                paths.size == 1 -> respond("missing", status = HttpStatusCode.NotFound)
+                request.url.encodedPath == "/messages" -> respond(
+                    anthropicProbeOk, status = HttpStatusCode.OK,
+                    headers = headersOf("Content-Type", "application/json"),
+                )
+                paths.size == 3 -> respond("tools not accepted", status = HttpStatusCode.BadRequest)
+                else -> respond(
+                    "data: {\"choices\":[{\"index\":0,\"delta\":{\"content\":\"hi\"}}]}\n\ndata: [DONE]\n\n",
+                    status = HttpStatusCode.OK, headers = headersOf("Content-Type", "text/event-stream"),
+                )
+            }
+        }
+        try {
+            val client = ModelClient.create(ru.outsideproarts.oassist.core.model.diagnostics.Diagnostics,
+                profile(null), emptySecrets, engine, protocolOverride = { manual })
+            client.probeCapabilities("custom-model")
+            manual = ModelProtocol.OPENAI_COMPLETIONS
+            client.probeCapabilities("custom-model")
+            assertTrue(client.chatCompletionStream("custom-model", emptyList()).toList().isNotEmpty())
+            assertEquals(listOf("/chat/completions", "/messages", "/chat/completions", "/chat/completions"), paths)
+            manual = null
+            client.probeCapabilities("custom-model")
+            assertEquals("/messages", paths.last())
+        } finally {
+            engine.close()
+        }
+    }
+
+    @Test
+    fun lateAutomaticProbe_cannotOverrideManualChoice() = runTest {
+        var manual: ModelProtocol? = null
+        val started = CompletableDeferred<Unit>()
+        val release = CompletableDeferred<Unit>()
+        val paths = mutableListOf<String>()
+        val engine = http { request ->
+            paths += request.url.encodedPath
+            when (paths.size) {
+                1 -> respond("missing", status = HttpStatusCode.NotFound)
+                2 -> {
+                    started.complete(Unit)
+                    release.await()
+                    respond(anthropicProbeOk, status = HttpStatusCode.OK,
+                        headers = headersOf("Content-Type", "application/json"))
+                }
+                else -> respond("tools not accepted", status = HttpStatusCode.BadRequest)
+            }
+        }
+        try {
+            val client = ModelClient.create(ru.outsideproarts.oassist.core.model.diagnostics.Diagnostics,
+                profile(null), emptySecrets, engine, protocolOverride = { manual })
+            val oldProbe = async { client.probeCapabilities("custom-model") }
+            started.await()
+            manual = ModelProtocol.OPENAI_COMPLETIONS
+            client.probeCapabilities("custom-model")
+            release.complete(Unit)
+            oldProbe.await()
+            client.probeCapabilities("custom-model")
+            assertEquals(listOf("/chat/completions", "/messages", "/chat/completions", "/chat/completions"), paths)
+        } finally {
+            release.complete(Unit)
             engine.close()
         }
     }

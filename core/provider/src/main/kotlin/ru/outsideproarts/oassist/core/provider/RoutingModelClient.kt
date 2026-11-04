@@ -64,12 +64,13 @@ class RoutingModelClient internal constructor(
     /**
      * Выученные маршруты моделей: сигнал «не тот протокол» и фолбэк запоминают
      * рабочий путь на жизнь клиента (сессию). В каталог не пишется:
-     * `ModelInfo.protocol` — только ручной override.
+     * `ModelInfo.protocol` — только ручной override. Кеш относится только к
+     * автоматическому выбору: override его обходит и не меняет, а после снятия
+     * override автоматический маршрут снова доступен.
      */
     private val learned = java.util.concurrent.ConcurrentHashMap<String, ModelProtocol>()
 
-    private suspend fun resolveProtocol(modelId: String): ModelProtocol {
-        val override = protocolOverride(modelId)
+    private suspend fun resolveProtocol(modelId: String, override: ModelProtocol?): ModelProtocol {
         fixedProtocol?.let { return override ?: it }
         val key = catalogKey(template.baseUrl)
         return ProtocolResolution.resolve(
@@ -84,9 +85,9 @@ class RoutingModelClient internal constructor(
      * «не тот протокол». Фиксированный протокол профиля — одна попытка:
      * перепробовка противоречила бы явному выбору пользователя.
      */
-    private suspend fun protocolsFor(modelId: String): List<ModelProtocol> {
-        if (fixedProtocol != null) return listOf(resolveProtocol(modelId))
-        val primary = learned[modelId] ?: resolveProtocol(modelId)
+    private suspend fun protocolsFor(modelId: String, override: ModelProtocol?): List<ModelProtocol> {
+        if (fixedProtocol != null) return listOf(resolveProtocol(modelId, override))
+        val primary = override ?: learned[modelId] ?: resolveProtocol(modelId, null)
         return listOf(primary) + FALLBACK_ORDER.filter { it != primary }.take(MAX_ATTEMPTS - 1)
     }
 
@@ -110,13 +111,14 @@ class RoutingModelClient internal constructor(
         diagnostics.emit(DiagnosticKind.OPERATION_START, operation, parentOperationId = parent,
             attributes = mapOf("operation" to "probe", "model" to modelId))
         var lastError: Throwable? = null
-        for (protocol in protocolsFor(modelId)) {
+        val override = protocolOverride(modelId)
+        for (protocol in protocolsFor(modelId, override)) {
             diagnostics.emit(DiagnosticKind.ROUTING, operation, attributes = mapOf("protocol" to protocol.name))
             try {
                 val result = withContext(DiagnosticContext(operation, parent, context?.secrets.orEmpty())) {
                     clients.getValue(protocol).probeCapabilities(modelId)
                 }
-                learned[modelId] = protocol
+                if (override == null) learned[modelId] = protocol
                 diagnostics.emit(DiagnosticKind.OPERATION_END, operation, attributes = mapOf("protocol" to protocol.name))
                 return result
             } catch (e: CancellationException) {
@@ -150,7 +152,8 @@ class RoutingModelClient internal constructor(
             parentOperationId = parent,
             attributes = mapOf("operation" to "model_stream", "model" to modelId), secrets = context?.secrets.orEmpty())
         var lastError: Throwable? = null
-        for (protocol in protocolsFor(modelId)) {
+        val override = protocolOverride(modelId)
+        for (protocol in protocolsFor(modelId, override)) {
             diagnostics.emit(DiagnosticKind.ROUTING, operation, attributes = mapOf("protocol" to protocol.name))
             var emittedAny = false
             try {
@@ -161,7 +164,7 @@ class RoutingModelClient internal constructor(
                         emittedAny = true
                         emit(chunk)
                     }
-                learned[modelId] = protocol
+                if (override == null) learned[modelId] = protocol
                 diagnostics.emit(DiagnosticKind.OPERATION_END, operation,
                     attributes = mapOf("protocol" to protocol.name))
                 return@flow
