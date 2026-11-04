@@ -45,6 +45,7 @@ class VoiceInteractionCaptureTest {
         )
         val previousFactory = AgentFactory.get()
         val activity = AtomicReference<AssistActivity>()
+        val captureToken = AtomicReference<String>()
         val result = AtomicReference<AssistSession>()
         val failure = AtomicReference<Throwable>()
         var delivered = CountDownLatch(1)
@@ -58,7 +59,8 @@ class VoiceInteractionCaptureTest {
                 try {
                     assertTrue("System did not enter through VIS", instance.intent.hasExtra(AssistScreenHandoff.EXTRA_TOKEN))
                     val token = requireNotNull(ViewModelProvider(instance)[AssistContextViewModel::class.java].captureToken)
-                    result.set(requireNotNull(AssistSessionStore.consumeScreenCapture(token, true)))
+                    assertTrue("Capture token was not pending at Activity creation", AssistSessionStore.isScreenCapturePending(token))
+                    captureToken.set(token)
                 } catch (error: Throwable) {
                     failure.set(error)
                 } finally {
@@ -75,6 +77,7 @@ class VoiceInteractionCaptureTest {
                 delivered = CountDownLatch(1)
                 dismissed = CountDownLatch(1)
                 result.set(null)
+                captureToken.set(null)
                 failure.set(null)
                 AgentFactory.register(object : AgentFactory by previousFactory {
                     override suspend fun modeConfig(mode: AssistMode): ModeConfig {
@@ -114,7 +117,18 @@ class VoiceInteractionCaptureTest {
                 assertFalse(output, output.contains("Error", ignoreCase = true))
                 assertTrue("No VIS handoff for $scenario", delivered.await(10, TimeUnit.SECONDS))
                 failure.get()?.let { throw AssertionError("Handoff failed for $scenario", it) }
-                val captured = requireNotNull(result.get())
+                // Keep the permission Activity's token valid until its Settings launch completes.
+                val settingsBy = SystemClock.uptimeMillis() + 10_000
+                while (instrumentation.uiAutomation.rootInActiveWindow?.packageName?.toString() != "com.android.settings") {
+                    check(SystemClock.uptimeMillis() < settingsBy) { "Permission screen not shown for $scenario" }
+                    SystemClock.sleep(50)
+                }
+                instrumentation.uiAutomation.waitForIdle(500, 5_000)
+                val token = requireNotNull(captureToken.get())
+                instrumentation.runOnMainSync {
+                    result.set(AssistSessionStore.consumeScreenCapture(token, true))
+                }
+                val captured = requireNotNull(result.get()) { "Capture token expired before inspection for $scenario" }
                 if (scenario != "secure") assertTrue("Missing tree for $scenario", captured.screenContext.orEmpty().contains(marker))
                 if (scenario == "disabled" || scenario == "settingsFailure") {
                     assertNull(captured.screenImage)
@@ -130,12 +144,6 @@ class VoiceInteractionCaptureTest {
                 }
                 // Complete the real permission Activity lifecycle before launching the next fixture.
                 // Settings may redirect to a second Activity after its original launch returned.
-                val settingsBy = SystemClock.uptimeMillis() + 10_000
-                while (instrumentation.uiAutomation.rootInActiveWindow?.packageName?.toString() != "com.android.settings") {
-                    check(SystemClock.uptimeMillis() < settingsBy) { "Permission screen not shown for $scenario" }
-                    SystemClock.sleep(50)
-                }
-                instrumentation.uiAutomation.waitForIdle(500, 5_000)
                 assertTrue(instrumentation.uiAutomation.performGlobalAction(AccessibilityService.GLOBAL_ACTION_BACK))
                 assertTrue("Permission Activity not dismissed for $scenario", dismissed.await(10, TimeUnit.SECONDS))
             }
