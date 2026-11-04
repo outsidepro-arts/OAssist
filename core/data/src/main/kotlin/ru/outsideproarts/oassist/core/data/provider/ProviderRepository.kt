@@ -35,9 +35,17 @@ class ProviderRepository(
 
     /** Удаляет профиль вместе со всеми его секретами. */
     suspend fun deleteProvider(id: String) {
+        clearSecrets(id)
+        store.deleteProviderProfile(id)
+    }
+
+    /** Clears credentials using only the current local profile, before backup replacement. */
+    suspend fun clearSecrets(id: String) {
         val profile = getProvider(id)
         profile?.let { p ->
             p.apiKeyRef?.let { secrets.delete(it) }
+            p.basicUserRef?.let { secrets.delete(it) }
+            p.basicPasswordRef?.let { secrets.delete(it) }
             p.extraHeaders.values.forEach { secrets.delete(it) }
         }
         secrets.delete(aliasForApiKey(id))
@@ -45,7 +53,9 @@ class ProviderRepository(
         // и легаси-конфигов без текущих ссылок в профиле.
         secrets.delete(aliasForBasicUser(id))
         secrets.delete(aliasForBasicPassword(id))
-        store.deleteProviderProfile(id)
+        updateProvider(id) {
+            it.copy(apiKeyRef = null, basicUserRef = null, basicPasswordRef = null, extraHeaders = emptyMap())
+        }
     }
 
     suspend fun hasApiKey(providerId: String): Boolean =

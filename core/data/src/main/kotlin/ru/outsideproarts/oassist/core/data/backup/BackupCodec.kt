@@ -55,7 +55,7 @@ data class SkillBackup(
 fun SkillInfo.toBackup(): SkillBackup = SkillBackup(name, title, body, enabled)
 
 /**
- * Стереть ссылки на секреты перед экспортом: значения остаются в Keystore
+ * Стереть ссылки на секреты на границе экспорта и импорта: значения остаются в Keystore
  * устройства и в бэкап не попадают. Имена extra-заголовков тоже не уходят
  * (без значений они лишь вводят в заблуждение).
  */
@@ -89,7 +89,12 @@ fun decodeBackup(raw: String): Result<BackupV1> = runCatching {
     parsed.catalogs.forEach {
         require(it.models.size <= MAX_MODELS) { "Слишком много моделей в каталоге" }
     }
-    parsed
+    // Backup aliases are untrusted: even a known id must not authorize access to
+    // credentials already on this device (possibly for a different endpoint).
+    parsed.copy(
+        providers = parsed.providers.map { it.scrubbed() },
+        mcpServers = parsed.mcpServers.map { it.scrubbed() },
+    )
 }
 
 fun encodeBackup(backup: BackupV1): String = BackupJson.encodeToString(backup)

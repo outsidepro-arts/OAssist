@@ -20,33 +20,35 @@ private val Context.mcpConfigDataStore: DataStore<Preferences> by preferencesDat
  * Конфигурация MCP-серверов (JSON в device-protected DataStore).
  * Секреты сюда не попадают: только alias-ссылки на SecretStore.
  */
-class McpConfigStore(private val context: Context) {
+class McpConfigStore(private val dataStore: DataStore<Preferences>) {
+
+    constructor(context: Context) : this(context.mcpConfigDataStore)
 
     private val json = Json {
         ignoreUnknownKeys = true
         encodeDefaults = true
     }
 
-    val servers: Flow<List<McpServerConfig>> = context.mcpConfigDataStore.data.map { prefs ->
+    val servers: Flow<List<McpServerConfig>> = dataStore.data.map { prefs ->
         read(prefs)
     }
 
     suspend fun snapshot(): List<McpServerConfig> = servers.first()
 
     suspend fun upsert(config: McpServerConfig) {
-        context.mcpConfigDataStore.edit { prefs ->
+        dataStore.edit { prefs ->
             prefs[KEY_SERVERS] = json.encodeToString(read(prefs).filterNot { it.id == config.id } + config)
         }
     }
 
     suspend fun delete(id: String) {
-        context.mcpConfigDataStore.edit { prefs ->
+        dataStore.edit { prefs ->
             prefs[KEY_SERVERS] = json.encodeToString(read(prefs).filterNot { it.id == id })
         }
     }
 
     suspend fun setEnabled(id: String, enabled: Boolean) {
-        context.mcpConfigDataStore.edit { prefs ->
+        dataStore.edit { prefs ->
             prefs[KEY_SERVERS] = json.encodeToString(
                 read(prefs).map { if (it.id == id) it.copy(enabled = enabled) else it },
             )

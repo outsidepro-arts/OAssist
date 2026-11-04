@@ -21,12 +21,20 @@ class McpServerRepository(
 
     /** Удаляет сервер вместе с его секретами. */
     suspend fun delete(id: String) {
+        clearSecrets(id)
+        store.delete(id)
+    }
+
+    /** Clears credentials using only the current local config, before backup replacement. */
+    suspend fun clearSecrets(id: String) {
         snapshot().find { it.id == id }?.let { config ->
             config.bearerRef?.let { secrets.delete(it) }
             config.extraHeaders.values.forEach { secrets.delete(it) }
         }
         secrets.delete(aliasForBearer(id))
-        store.delete(id)
+        snapshot().find { it.id == id }?.let {
+            store.upsert(it.copy(bearerRef = null, extraHeaders = emptyMap()))
+        }
     }
 
     suspend fun setEnabled(id: String, enabled: Boolean) = store.setEnabled(id, enabled)

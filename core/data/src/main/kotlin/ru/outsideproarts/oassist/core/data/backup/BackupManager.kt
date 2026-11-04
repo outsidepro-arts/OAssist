@@ -2,6 +2,10 @@ package ru.outsideproarts.oassist.core.data.backup
 
 import kotlinx.coroutines.flow.first
 import ru.outsideproarts.oassist.core.data.DataContainer
+import ru.outsideproarts.oassist.core.data.provider.ProviderRepository
+import ru.outsideproarts.oassist.core.data.mcp.McpServerRepository
+import ru.outsideproarts.oassist.core.model.ProviderProfile
+import ru.outsideproarts.oassist.core.model.McpServerConfig
 import ru.outsideproarts.oassist.core.model.AppLanguage
 import ru.outsideproarts.oassist.core.model.ApprovalState
 import ru.outsideproarts.oassist.core.model.AssistMode
@@ -41,21 +45,12 @@ class BackupManager(private val data: DataContainer) {
         val backup = decodeBackup(raw).getOrElse { return Result.failure(it) }
         return runCatching {
             // Провайдеры: replace (лишние удалить вместе с секретами).
-            val currentProviders = data.providers.observeProviders().first().map { it.id }.toSet()
-            backup.providers.forEach { data.providers.upsertProvider(it) }
-            (currentProviders - backup.providers.map { it.id }.toSet())
-                .forEach { data.providers.deleteProvider(it) }
+            data.providers.importProfiles(backup.providers)
             backup.modes.forEach { data.providers.setModeConfig(it) }
             backup.catalogs.forEach { data.providers.saveModelCatalog(it.providerId, it.models) }
             data.toolConfigs.replace(backup.toolPrefs.toDomain())
             // MCP: replace; секреты не импортируются — сбросить ссылки на них.
-            val currentMcp = data.mcpServers.snapshot().map { it.id }.toSet()
-            backup.mcpServers.forEach {
-                data.mcpServers.upsert(it)
-                data.mcpServers.clearBearer(it.id)
-            }
-            (currentMcp - backup.mcpServers.map { it.id }.toSet())
-                .forEach { data.mcpServers.delete(it) }
+            data.mcpServers.importServers(backup.mcpServers)
             // Навыки: replace по имени.
             val currentSkills = data.skills.list().map { it.name }.toSet()
             backup.skills.forEach {
@@ -84,6 +79,25 @@ class BackupManager(private val data: DataContainer) {
         data.secretStore.clearAll()
         data.settings.setLanguage(AppLanguage.DEFAULT)
     }
+}
+
+internal suspend fun ProviderRepository.importProfiles(profiles: List<ProviderProfile>) {
+    val current = observeProviders().first().map { it.id }.toSet()
+    profiles.forEach {
+        // A new imported id is not authority to delete orphaned local aliases.
+        if (it.id in current) clearSecrets(it.id)
+        upsertProvider(it.scrubbed())
+    }
+    (current - profiles.map { it.id }.toSet()).forEach { deleteProvider(it) }
+}
+
+internal suspend fun McpServerRepository.importServers(servers: List<McpServerConfig>) {
+    val current = snapshot().map { it.id }.toSet()
+    servers.forEach {
+        if (it.id in current) clearSecrets(it.id)
+        upsert(it.scrubbed())
+    }
+    (current - servers.map { it.id }.toSet()).forEach { delete(it) }
 }
 
 private fun ToolPreferences.toBackup(): ToolPrefsBackup =
