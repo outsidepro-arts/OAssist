@@ -1,4 +1,13 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <string name="bye_fallback">See you!</string>
+    <string name="dnd_tool_description">Submit a Do Not Disturb request. Requires special access. On Android 15+ this changes only the OAssist rule: manual mode and other rules may retain restrictions. Success means request submission; observedGlobalFilter is a separate global filter snapshot, not confirmation that the request took effect.</string>
+    <string name="dnd_enabled_description">true — request no interruptions; false — withdraw the OAssist request (does not disable other rules on Android 15+)</string>
+    <string name="dnd_confirm_enable">Request Do Not Disturb on (the OAssist rule on Android 15+)</string>
+    <string name="dnd_confirm_disable">Request Do Not Disturb off (only the OAssist rule on Android 15+; global restrictions may remain)</string>
+    <string name="dnd_access_required">Do Not Disturb access is missing. Grant OAssist access in the system special access settings.</string>
+    <string name="dnd_request_unconfirmed">Could not confirm submission of the Do Not Disturb request. A change may have occurred; check the mode in system settings before retrying.</string>
+    <string name="dnd_request_submitted">Request submitted to Android. Global filter at read time: all — unrestricted, none — no interruptions, priority — priority interruptions, alarms — alarms only, unknown — unavailable. This snapshot does not confirm that the request took effect and may change later.</string>
+    <string name="dnd_app_rule_only">The request affects only the OAssist rule. Manual mode and rules owned by others may keep Do Not Disturb active.</string>
+    <string name="dnd_check_settings">Check Do Not Disturb in system settings (open_settings, section=sound). Do not retry automatically: the snapshot may precede application of the request or reflect other rules.</string>
 </resources>

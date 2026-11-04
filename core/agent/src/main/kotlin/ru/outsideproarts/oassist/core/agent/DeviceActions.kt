@@ -731,23 +731,20 @@ class DeviceActions(
         }.getOrElse { ToolResult(false, "Не удалось задать громкость: ${it.message}") }
     }
 
-    /** Режим «Не беспокоить»: вкл/выкл. Требует спецдоступ (не runtime-разрешение). */
+    internal fun dndText(id: Int): String = context.getString(id)
+
+    /** Sends one DND request; the observed global filter is not an acknowledgement of it. */
     fun setDnd(enabled: Boolean): ToolResult {
         val manager = context.getSystemService(android.app.NotificationManager::class.java)
             ?: return ToolResult(false, "Сервис уведомлений недоступен")
-        if (!manager.isNotificationPolicyAccessGranted) {
-            return ToolResult(false, DND_ACCESS_MESSAGE)
-        }
-        return runCatching {
-            manager.setInterruptionFilter(
-                if (enabled) {
-                    android.app.NotificationManager.INTERRUPTION_FILTER_NONE
-                } else {
-                    android.app.NotificationManager.INTERRUPTION_FILTER_ALL
-                },
-            )
-            ToolResult(true, if (enabled) "«Не беспокоить» включён" else "«Не беспокоить» выключен")
-        }.getOrElse { ToolResult(false, "Не удалось переключить режим: ${it.message}") }
+        return sendDndRequest(
+            enabled = enabled,
+            appRuleOnly = Build.VERSION.SDK_INT >= 35 && context.applicationInfo.targetSdkVersion >= 35,
+            hasAccess = { manager.isNotificationPolicyAccessGranted },
+            setFilter = manager::setInterruptionFilter,
+            readFilter = { manager.currentInterruptionFilter },
+            text = ::dndText,
+        )
     }
 
     /** Яркость экрана процентами 0–100 (переводит в ручной режим). Требует спецдоступ. */

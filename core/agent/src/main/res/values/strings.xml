@@ -1,4 +1,13 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <string name="bye_fallback">До встречи!</string>
+    <string name="dnd_tool_description">Отправить запрос режима «Не беспокоить». Требует спецдоступ. На Android 15+ меняет только правило OAssist: ручной режим и другие правила могут сохранить ограничения. Успех означает передачу запроса; observedGlobalFilter — отдельный снимок общего фильтра, не подтверждение применения.</string>
+    <string name="dnd_enabled_description">true — запросить запрет прерываний; false — снять запрос OAssist (на Android 15+ не отключает чужие правила)</string>
+    <string name="dnd_confirm_enable">Запросить включение «Не беспокоить» (на Android 15+ — правило OAssist)</string>
+    <string name="dnd_confirm_disable">Запросить выключение «Не беспокоить» (на Android 15+ — только правило OAssist; общий режим может сохраниться)</string>
+    <string name="dnd_access_required">Нет доступа к режиму «Не беспокоить». Выдайте его OAssist в системных настройках специального доступа.</string>
+    <string name="dnd_request_unconfirmed">Не удалось подтвердить передачу запроса «Не беспокоить». Изменение могло произойти; проверьте режим в системных настройках перед повтором.</string>
+    <string name="dnd_request_submitted">Запрос передан Android. Общий фильтр указан на момент чтения: all — без ограничений, none — без прерываний, priority — приоритетные, alarms — будильники, unknown — неизвестен. Этот снимок не подтверждает применение запроса и может измениться позже.</string>
+    <string name="dnd_app_rule_only">Запрос относится только к правилу OAssist. Ручной режим и правила других владельцев могут сохранять «Не беспокоить».</string>
+    <string name="dnd_check_settings">Проверьте «Не беспокоить» в системных настройках (open_settings, section=sound). Не повторяйте запрос автоматически: снимок может предшествовать применению или отражать другие правила.</string>
 </resources>

@@ -47,13 +47,13 @@ class VolumeSetTool(private val actions: DeviceActions) : Tool {
 class DndSetTool(private val actions: DeviceActions) : Tool {
     override val schema = ToolSchema(
         name = "dnd_set",
-        description = "Включить/выключить «Не беспокоить». Требует спецдоступ (подсказка — в ответе).",
+        description = actions.dndText(R.string.dnd_tool_description),
         parameters = buildJsonObject {
             put("type", "object")
             put("properties", buildJsonObject {
                 put("enabled", buildJsonObject {
                     put("type", "boolean")
-                    put("description", "true — включить, false — выключить")
+                    put("description", actions.dndText(R.string.dnd_enabled_description))
                 })
             })
             put("required", kotlinx.serialization.json.buildJsonArray {
@@ -64,7 +64,7 @@ class DndSetTool(private val actions: DeviceActions) : Tool {
 
     override fun describeForConfirmation(arguments: JsonObject): String {
         val enabled = arguments["enabled"]?.jsonPrimitive?.content == "true"
-        return if (enabled) "Включить «Не беспокоить»" else "Выключить «Не беспокоить»"
+        return actions.dndText(if (enabled) R.string.dnd_confirm_enable else R.string.dnd_confirm_disable)
     }
 
     override suspend fun execute(arguments: JsonObject): ToolResult {
