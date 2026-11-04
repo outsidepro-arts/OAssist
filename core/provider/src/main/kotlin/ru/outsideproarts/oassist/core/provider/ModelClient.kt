@@ -58,6 +58,7 @@ sealed interface ChatChunk {
         val signature: String? = null,
         val replayJson: String? = null,
         val anthropicReplay: ru.outsideproarts.oassist.core.model.AnthropicReplay? = null,
+        val geminiReplay: ru.outsideproarts.oassist.core.model.GeminiReplay? = null,
     ) : ChatChunk
     data class ToolCall(
         val id: String,

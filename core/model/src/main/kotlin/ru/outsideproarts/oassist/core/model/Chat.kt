@@ -37,8 +37,10 @@ data class ReasoningBlock(
     val replayJson: String? = null,
     /** Complete Anthropic response blocks; separate from display text and Responses replay. */
     val anthropicReplay: AnthropicReplay? = null,
+    /** Ordered Gemini stream content; independent of the display text. */
+    val geminiReplay: GeminiReplay? = null,
 ) {
-    fun isEmpty(): Boolean = text.isEmpty() && signature == null && replayJson == null && anthropicReplay == null
+    fun isEmpty(): Boolean = text.isEmpty() && signature == null && replayJson == null && anthropicReplay == null && geminiReplay == null
 }
 
 /** Opaque, ordered assistant content. Only the originating Anthropic endpoint may replay it. */
@@ -46,6 +48,13 @@ data class ReasoningBlock(
 data class AnthropicReplay(
     val origin: String,
     val blocksJson: String,
+)
+
+/** Signed parts must retain their position and may only return to their originating model. */
+@Serializable
+data class GeminiReplay(
+    val origin: String,
+    val contentsJson: String,
 )
 
 /**

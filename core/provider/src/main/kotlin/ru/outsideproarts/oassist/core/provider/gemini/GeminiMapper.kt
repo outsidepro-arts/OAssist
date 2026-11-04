@@ -20,7 +20,7 @@ import ru.outsideproarts.oassist.core.provider.openai.ToolSchemaDto
  * ассистента (`toolCalls`: id → name); неизвестный id — fail-closed пустым
  * именем, дальше его ловит ASK-ветка реестра.
  */
-internal fun mapGeminiContents(messages: List<ChatMessage>): Pair<GeminiContentDto?, List<GeminiContentDto>> {
+internal fun mapGeminiContents(messages: List<ChatMessage>, replayOrigin: String? = null): Pair<GeminiContentDto?, List<GeminiContentDto>> {
     val idToName = messages
         .filter { it.role == ChatRole.ASSISTANT }
         .flatMap { it.toolCalls.orEmpty() }
@@ -54,6 +54,10 @@ internal fun mapGeminiContents(messages: List<ChatMessage>): Pair<GeminiContentD
                 },
             ))
             ChatRole.ASSISTANT -> {
+                val metadata = msg.reasoning?.geminiReplay
+                val replay = metadata?.takeIf { it.origin == replayOrigin }
+                    ?.let { completeGeminiReplay(msg, it.contentsJson) }
+                if (replay != null) return@flatMap replay
                 val parts = buildList {
                     if (msg.content.isNotEmpty()) add(GeminiPartDto(text = msg.content))
                     msg.toolCalls.orEmpty().forEach { call ->
@@ -62,7 +66,8 @@ internal fun mapGeminiContents(messages: List<ChatMessage>): Pair<GeminiContentD
                                 name = call.name,
                                 args = parseGeminiArgs(call.argumentsJson),
                             ),
-                            thoughtSignature = call.thoughtSignature,
+                            // A rejected replay snapshot must not leak signatures to another origin.
+                            thoughtSignature = call.thoughtSignature.takeIf { metadata == null },
                         ))
                     }
                 }
@@ -94,6 +99,23 @@ internal fun mapGeminiContents(messages: List<ChatMessage>): Pair<GeminiContentD
     }
     return system to contents
 }
+
+/** Runtime edits must not restore an older answer/tool call from a signed snapshot. */
+private fun completeGeminiReplay(message: ChatMessage, json: String): List<GeminiContentDto>? = runCatching {
+    val contents = ProviderJson.decodeFromString(kotlinx.serialization.builtins.ListSerializer(GeminiContentDto.serializer()), json)
+    if (contents.isEmpty() || contents.any { it.role != "model" || it.parts.isEmpty() }) return null
+    val parts = contents.flatMap { it.parts }
+    if (parts.filterNot { it.thought }.joinToString("") { it.text.orEmpty() } != message.content) return null
+    if (parts.filter { it.thought }.joinToString("") { it.text.orEmpty() } != message.reasoning?.text.orEmpty()) return null
+    val calls = parts.filter { it.functionCall != null }
+    if (calls.size != message.toolCalls.orEmpty().size) return null
+    if (!calls.zip(message.toolCalls.orEmpty()).all { (part, call) ->
+        part.functionCall!!.name == call.name &&
+            (part.functionCall.args ?: JsonObject(emptyMap())) == ProviderJson.parseToJsonElement(call.argumentsJson) &&
+            part.thoughtSignature == call.thoughtSignature
+    }) return null
+    contents
+}.getOrNull()
 
 /** Схемы OpenAI function calling → `function_declarations`. Пустой список — как null. */
 internal fun mapGeminiTools(tools: List<ToolSchemaDto>): List<GeminiToolsDto>? {

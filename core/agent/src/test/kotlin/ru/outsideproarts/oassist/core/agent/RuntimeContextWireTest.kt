@@ -52,6 +52,109 @@ class RuntimeContextWireTest {
     @get:Rule val temporaryFolder = TemporaryFolder()
 
     @Test
+    fun geminiSignedFragmentsSurviveToolRoundDiskReopenAndOriginChanges() = runBlocking {
+        withTimeout(30_000) {
+            val toolFragments = listOf(
+                """[{"text":"plan","thought":true,"thoughtSignature":"thinking+/="}]""",
+                """[{"text":"checking","thoughtSignature":"text+/="}]""",
+                """[{"text":"","thoughtSignature":"empty+/="},{"functionCall":{"name":"ping","args":{}},"thoughtSignature":"call+/="}]""",
+            )
+            val answerFragments = listOf("""[{"text":"do"}]""", """[{"text":"ne","thoughtSignature":"answer+/="}]""",
+                """[{"text":"","thoughtSignature":"trailing+/="}]""")
+            val unsigned = geminiSse(listOf("""[{"text":"ok"}]"""))
+            LoopbackSseServer(listOf(geminiSse(toolFragments), geminiSse(answerFragments)) + List(12) { unsigned }).use { server ->
+                httpClient().use { http ->
+                    val profile = ProviderProfile(id = "gemini-replay", name = "Gemini", preset = ProviderPreset.CUSTOM,
+                        protocol = ModelProtocol.GEMINI_GENERATE, baseUrl = server.baseUrl + "/v1beta")
+                    suspend fun agent(p: ProviderProfile = profile, enabled: Boolean = false) = AgentLoop(
+                        ModelClient.create(ru.outsideproarts.oassist.core.model.diagnostics.Diagnostics, p, secrets, http),
+                        ToolRegistry(listOf(PingTool())), reasoningEnabled = enabled)
+                    var transcript = emptyList<ChatMessage>()
+                    agent().stream("model", null, emptyList(), "ping", onTurnMessages = { transcript = it }).toList()
+                    val expectedToolParts = toolFragments.map { Json.parseToJsonElement(it).jsonArray }
+                    val expectedAllParts = (toolFragments + answerFragments).map { Json.parseToJsonElement(it).jsonArray }
+                    assertEquals(expectedToolParts, server.requestBodies[1].geminiModelParts())
+                    assertTrue(server.requestBodies[1].contains("first result"))
+                    val assistants = transcript.filter { it.role == ru.outsideproarts.oassist.core.model.ChatRole.ASSISTANT }
+                    assertEquals(listOf("checking", "done"), assistants.map { it.content })
+                    assertEquals("plan", assistants.first().reasoning!!.text)
+                    assertEquals(null, assistants.first().reasoning!!.signature)
+                    assertEquals(null, assistants.first().reasoning!!.anthropicReplay)
+
+                    val folder = temporaryFolder.newFolder()
+                    val file = java.io.File(folder, "turn.json")
+                    file.writeText(TurnCodec.encode(StoredTurn(userText = "ping", turn = transcript), "chat", "turn", ChatMediaStore(folder)))
+                    val restored = requireNotNull(TurnCodec.decode(file.readText(), ChatMediaStore(folder))).turn
+                    assertEquals(transcript, restored)
+                    agent(enabled = true).stream("model", null, restored, "continue").toList()
+                    assertEquals(expectedAllParts, server.requestBodies[2].geminiModelParts())
+                    agent(profile.copy(id = "other-profile")).stream("model", null, restored, "continue").toList()
+                    agent().stream("other-model", null, restored, "continue").toList()
+                    agent(profile.copy(baseUrl = server.baseUrl + "/other")).stream("model", null, restored, "continue").toList()
+                    agent(profile.copy(credentialRevision = "rotated")).stream("model", null, restored, "continue").toList()
+                    for (index in 3..6) assertFalse(server.requestBodies[index].contains("thoughtSignature"))
+                    // The original signed snapshot remains usable after switching back.
+                    agent().stream("models/model", null, restored, "continue").toList()
+                    assertEquals(expectedAllParts, server.requestBodies[7].geminiModelParts())
+                    val edited = restored.map { message ->
+                        if (message.role == ru.outsideproarts.oassist.core.model.ChatRole.ASSISTANT) message.copy(content = "edited") else message
+                    }
+                    agent().stream("model", null, edited, "continue").toList()
+                    assertFalse(server.requestBodies[8].contains("thoughtSignature"))
+                    assertFalse(server.requestBodies[8].contains("checking"))
+                    agent(profile.copy(protocol = ModelProtocol.OPENAI_COMPLETIONS)).stream("model", null, restored, "continue").toList()
+                    assertFalse(server.requestBodies[9].contains("+/="))
+                    var unsignedTranscript = emptyList<ChatMessage>()
+                    agent().stream("model", null, emptyList(), "plain", onTurnMessages = { unsignedTranscript = it }).toList()
+                    assertEquals(null, unsignedTranscript.last().reasoning)
+                    agent().stream("model", null, unsignedTranscript, "continue").toList()
+                    assertEquals(listOf(Json.parseToJsonElement("""[{"text":"ok"}]""").jsonArray), server.requestBodies[11].geminiModelParts())
+                }
+            }
+        }
+    }
+
+    @Test
+    fun geminiIncompleteErrorAndCancelledStreamsDoNotPublishReplay() = runBlocking {
+        withTimeout(30_000) {
+            val parts = listOf("""[{"text":"partial","thought":true,"thoughtSignature":"partial+/="}]""",
+                """[{"text":"answer","thoughtSignature":"answer+/="}]""")
+            val partial = geminiSse(parts, complete = false)
+            LoopbackSseServer(listOf(partial, partial + "data: {\"error\":{\"message\":\"failed\"}}\n\n", geminiSse(parts))).use { server ->
+                httpClient().use { http ->
+                    val profile = ProviderProfile(id = "partial-gemini", name = "Gemini", preset = ProviderPreset.CUSTOM,
+                        protocol = ModelProtocol.GEMINI_GENERATE, baseUrl = server.baseUrl)
+                    suspend fun agent() = AgentLoop(ModelClient.create(ru.outsideproarts.oassist.core.model.diagnostics.Diagnostics,
+                        profile, secrets, http), ToolRegistry(emptyList()))
+                    var saved = emptyList<ChatMessage>()
+                    val chunks = agent().stream("model", null, emptyList(), "hello", onTurnMessages = { saved = it }).toList()
+                    assertTrue(chunks.filterIsInstance<ru.outsideproarts.oassist.core.provider.ChatChunk.Finish>().last().abrupt)
+                    assertEquals("answer", saved.last().content)
+                    assertEquals("partial", saved.last().reasoning!!.text)
+                    assertEquals(null, saved.last().reasoning!!.geminiReplay)
+                    var published = false
+                    assertTrue(runCatching { agent().stream("model", null, emptyList(), "hello", onTurnMessages = { published = true }).toList() }.isFailure)
+                    assertFalse(published)
+                    val cancelled = agent().stream("model", null, emptyList(), "hello", onTurnMessages = { published = true }).take(1).toList()
+                    assertFalse(published)
+                    assertTrue(cancelled.filterIsInstance<ru.outsideproarts.oassist.core.provider.ChatChunk.Reasoning>().all { it.geminiReplay == null })
+                }
+            }
+        }
+    }
+
+    private fun geminiSse(fragments: List<String>, complete: Boolean = true): String = buildString {
+        fragments.forEach { append("data: {\"candidates\":[{\"content\":{\"role\":\"model\",\"parts\":$it}}]}\n\n") }
+        if (complete) append("data: {\"candidates\":[{\"finishReason\":\"STOP\"}]}\n\n")
+    }
+
+    private fun String.geminiModelParts(): List<JsonArray> = parseJsonObject()["contents"]!!.jsonArray
+        .filter { it.jsonObject["role"]?.jsonPrimitive?.content == "model" }
+        .map { content -> JsonArray(content.jsonObject["parts"]!!.jsonArray.map { part ->
+            JsonObject(part.jsonObject.filterNot { (key, value) -> key == "thought" && value == JsonPrimitive(false) })
+        }) }
+
+    @Test
     fun anthropicOpaqueBlocksSurviveToolRoundsDiskCodecAndReopen() = runBlocking {
         withTimeout(30_000) {
             val blocks = Json.parseToJsonElement("""[

@@ -92,7 +92,9 @@ class GeminiClient internal constructor(
         reasoningEnabled: Boolean,
     ): Flow<ChatChunk> = flow {
         val diagnosticParent = kotlinx.coroutines.currentCoroutineContext()[ru.outsideproarts.oassist.core.model.diagnostics.DiagnosticContext]
-        val (system, contents) = mapGeminiContents(messages)
+        val replayOrigin = ProviderJson.encodeToString(kotlinx.serialization.builtins.ListSerializer(kotlinx.serialization.serializer<String>()),
+            listOf("gemini_generate_content", endpoint.baseUrl.trimEnd('/'), endpoint.replayIdentity.orEmpty(), modelId.removePrefix(MODELS_PREFIX)))
+        val (system, contents) = mapGeminiContents(messages, replayOrigin)
         val requestDto = GeminiGenerateRequest(
             systemInstruction = system,
             contents = contents,
@@ -113,6 +115,7 @@ class GeminiClient internal constructor(
             var nextId = 0
             var finish: String? = null
             var usage: ProviderUsage? = null
+            val replayContents = mutableListOf<GeminiContentDto>()
             // «Сколько осталось до ограничения» — из заголовков ответа.
             val rateLimits = RateLimitHeaders.parse(call.response.headers)
             incoming.collect { event ->
@@ -139,11 +142,22 @@ class GeminiClient internal constructor(
                     return@collect
                 }
                 val extracted = extractGeminiChunk(chunk, nextId)
+                // Like google-genai chats.send_message_stream, retain each content fragment
+                // rather than merging text parts and changing signature placement.
+                chunk.candidates.firstOrNull()?.content?.takeIf { it.parts.isNotEmpty() }?.let {
+                    replayContents += it.copy(role = "model")
+                }
                 nextId = extracted.nextId
                 extracted.finishReason?.let { finish = it }
                 extracted.chunks.forEach { emit(it) }
             }
             // Без finish_reason соединение закрылось досрочно: ответ мог быть усечён.
+            if (finish != null && replayContents.any { content -> content.parts.any { it.thoughtSignature != null } }) {
+                emit(ChatChunk.Reasoning("", geminiReplay = ru.outsideproarts.oassist.core.model.GeminiReplay(
+                    replayOrigin,
+                    ProviderJson.encodeToString(kotlinx.serialization.builtins.ListSerializer(GeminiContentDto.serializer()), replayContents),
+                )))
+            }
             emit(ChatChunk.Finish(
                 reason = finish ?: "STOP",
                 abrupt = finish == null,

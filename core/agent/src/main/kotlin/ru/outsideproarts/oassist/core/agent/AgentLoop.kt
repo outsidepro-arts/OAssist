@@ -146,6 +146,7 @@ class AgentLoop(
             var reasoningSignature: String? = null
             val replayItems = mutableListOf<String>()
             var anthropicReplay: ru.outsideproarts.oassist.core.model.AnthropicReplay? = null
+            var geminiReplay: ru.outsideproarts.oassist.core.model.GeminiReplay? = null
 
             val budgetedMessages = enforceImageBudget(messages)
             val roundMessages = buildRuntimeMessages(
@@ -184,6 +185,7 @@ class AgentLoop(
                         chunk.signature?.let { reasoningSignature = it }
                         chunk.replayJson?.let { replayItems += it }
                         chunk.anthropicReplay?.let { anthropicReplay = it }
+                        chunk.geminiReplay?.let { geminiReplay = it }
                     }
                     is ChatChunk.ToolCall -> toolCalls.add(chunk)
                     is ChatChunk.Finish -> {
@@ -195,7 +197,7 @@ class AgentLoop(
                     is ChatChunk.ToolResult -> {}
                 }
             }
-            val reasoning = buildReasoningBlock(reasoningSb, reasoningSignature, replayItems, anthropicReplay)
+            val reasoning = buildReasoningBlock(reasoningSb, reasoningSignature, replayItems, anthropicReplay, geminiReplay)
             diagnostics.emit(DiagnosticKind.PROVIDER_RESPONSE, diagnosticOperation,
                 attributes = mapOf("round" to rounds.toString(), "abrupt" to streamAbrupt.toString()),
                 content = Json.encodeToString(ChatMessage(ChatRole.ASSISTANT, contentSb.toString(),
@@ -379,8 +381,9 @@ class AgentLoop(
         signature: String?,
         replayItems: List<String>,
         anthropicReplay: ru.outsideproarts.oassist.core.model.AnthropicReplay?,
+        geminiReplay: ru.outsideproarts.oassist.core.model.GeminiReplay?,
     ): ru.outsideproarts.oassist.core.model.ReasoningBlock? {
-        if (text.isEmpty() && signature == null && replayItems.isEmpty() && anthropicReplay == null) return null
+        if (text.isEmpty() && signature == null && replayItems.isEmpty() && anthropicReplay == null && geminiReplay == null) return null
         val replayJson = when (replayItems.size) {
             0 -> null
             1 -> replayItems.first()
@@ -391,6 +394,7 @@ class AgentLoop(
             signature = signature,
             replayJson = replayJson,
             anthropicReplay = anthropicReplay,
+            geminiReplay = geminiReplay,
         )
     }
 
