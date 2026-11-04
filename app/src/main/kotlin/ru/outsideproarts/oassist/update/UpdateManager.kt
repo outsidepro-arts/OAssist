@@ -22,7 +22,11 @@ import ru.outsideproarts.oassist.core.model.update.*
 import ru.outsideproarts.oassist.core.net.update.GitHubUpdateTransport
 import ru.outsideproarts.oassist.feature.settings.R as SettingsR
 
-class UpdateManager(private val context: Context, private val transport: GitHubUpdateTransport) {
+class UpdateManager internal constructor(
+    private val context: Context,
+    private val transport: GitHubUpdateTransport,
+    private val beforeMaintenance: suspend () -> Unit = {},
+) {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
     private val settings = UpdatePreferencesDataStore(context)
     private val cache = context.getSharedPreferences("update_state", Context.MODE_PRIVATE)
@@ -35,6 +39,16 @@ class UpdateManager(private val context: Context, private val transport: GitHubU
     private var downloadJob: Job? = null
     private var installRequested = false
     private val directory get() = File(context.cacheDir, "updates").apply { mkdirs() }
+    private val ownership = UpdateCacheOwnership(File(context.noBackupFilesDir, "update-cache-ownership.json"))
+    private val maintenanceStore = UpdateCacheMaintenance(
+        directory,
+        read = ownership::read,
+        write = ownership::write,
+    )
+    private val maintenance = scope.async(Dispatchers.IO, start = CoroutineStart.LAZY) {
+        beforeMaintenance()
+        runCatching { maintenanceStore.run() }
+    }
     val downloadedApk get() = state.value.candidate?.let { File(directory, it.manifest.apkName) }
 
     fun installed(): InstalledBuild {
@@ -49,6 +63,7 @@ class UpdateManager(private val context: Context, private val transport: GitHubU
         started = true
         scope.launch {
             try {
+                maintenance.await()
                 settings.preferences.collect { preferences ->
                     val previous = state.value.preferences
                     val channel = preferences.effectiveChannel(installed())
@@ -167,7 +182,8 @@ class UpdateManager(private val context: Context, private val transport: GitHubU
             try {
                 val file = File(directory, candidate.manifest.apkName)
                 if (!file.exists() || !withContext(Dispatchers.IO) { verifyApk(file, candidate) }) {
-                    transport.download(candidate, file) { bytes, total ->
+                    check(maintenanceStore.mayReplace(file.name))
+                    transport.download(candidate, file, commit = maintenanceStore::commitPart) { bytes, total ->
                         val progress = if (total > 0) (bytes * 100 / total).toInt().coerceIn(0, 100) else 0
                         mutableState.update { if (coordinator.isCurrent(token)) it.copy(progress = progress) else it }
                     }
@@ -193,6 +209,7 @@ class UpdateManager(private val context: Context, private val transport: GitHubU
     }
     fun isInstallCurrent(prepared: PreparedUpdate) = coordinator.isCurrent(prepared.generation) &&
         state.value.candidate?.manifest?.apkName == prepared.file.name
+    fun protectInstall(prepared: PreparedUpdate) = maintenanceStore.protect(prepared.file.name)
 
     private fun verifyApk(file: File, candidate: UpdateCandidate): Boolean {
         if (!file.isFile || file.length() != candidate.manifest.apkSize) return false

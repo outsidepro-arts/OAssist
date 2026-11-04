@@ -102,7 +102,14 @@ class GitHubUpdateTransport(client: HttpClient, private val now: () -> Long = Sy
         }
     }
 
-    suspend fun download(candidate: UpdateCandidate, destination: File, onProgress: (Long, Long) -> Unit = { _, _ -> }) {
+    suspend fun download(
+        candidate: UpdateCandidate,
+        destination: File,
+        commit: (File, File) -> Unit = { part, target ->
+            java.nio.file.Files.move(part.toPath(), target.toPath(), java.nio.file.StandardCopyOption.REPLACE_EXISTING)
+        },
+        onProgress: (Long, Long) -> Unit = { _, _ -> },
+    ) {
         val manifest = candidate.manifest
         validateManifest(manifest, manifest.versionCode, manifest.channel)
         requireReleaseUrl(candidate.apkUrl, manifest.apkName)
@@ -149,7 +156,7 @@ class GitHubUpdateTransport(client: HttpClient, private val now: () -> Long = Sy
                 requireDownloadRedirect(url)
             }
             withContext(Dispatchers.IO) {
-                java.nio.file.Files.move(part.toPath(), destination.toPath(), java.nio.file.StandardCopyOption.REPLACE_EXISTING)
+                commit(part, destination)
             }
         } finally { part.delete() }
     }

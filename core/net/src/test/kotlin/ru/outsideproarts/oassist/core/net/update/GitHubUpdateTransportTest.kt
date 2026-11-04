@@ -127,6 +127,43 @@ class GitHubUpdateTransportTest {
         } finally { dir.delete() }
         client.close()
     }
+    @Test fun rejectedCommitDoesNotReplaceDestinationAndRemovesPart() = runBlocking {
+        val digest = java.security.MessageDigest.getInstance("SHA-256").digest("data".toByteArray())
+            .joinToString("") { "%02x".format(it) }
+        val client = HttpClient(MockEngine { request ->
+            val url = request.url.toString()
+            respond(when {
+                url.contains("/releases?") -> "[${release()}]"
+                url.contains("/assets?") -> assets()
+                url.endsWith("update-2.json") -> manifest().replace("\"apkSha256\":\"$hash\"", "\"apkSha256\":\"$digest\"")
+                url.endsWith("app.apk") -> "data"
+                else -> error(url)
+            })
+        }) { install(HttpTimeout) }
+        val transport = GitHubUpdateTransport(client)
+        val candidate = transport.findCandidates(UpdateChannel.STABLE).single()
+        val dir = kotlin.io.path.createTempDirectory("oassist-update-commit").toFile()
+        val target = File(dir, "update.apk").apply { writeText("installer copy") }
+        var called = false
+        try {
+            try {
+                transport.download(candidate, target, commit = { part, destination ->
+                    called = true
+                    assertEquals("data", part.readText())
+                    assertEquals(target, destination)
+                    throw IllegalStateException("protected")
+                })
+                fail("expected rejected commit")
+            } catch (_: IllegalStateException) { }
+            assertTrue(called)
+            assertEquals("installer copy", target.readText())
+            assertEquals(listOf(target), dir.listFiles()!!.toList())
+        } finally {
+            target.delete()
+            dir.delete()
+            client.close()
+        }
+    }
     @Test fun loadsNewestManifestLazilyAndSkipsInstalledVersions() = runBlocking {
         val requested = mutableListOf<String>()
         val client = HttpClient(MockEngine { request ->

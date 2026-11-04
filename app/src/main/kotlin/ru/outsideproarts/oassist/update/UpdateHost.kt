@@ -41,6 +41,7 @@ fun UpdateHost(manager: UpdateManager, onOpenUpdates: () -> Unit) {
                 prepare = manager::prepareInstall,
                 current = manager::isInstallCurrent,
                 launch = { prepared ->
+                    check(manager.protectInstall(prepared))
                     val uri = FileProvider.getUriForFile(context, "${context.packageName}.updates", prepared.file)
                     @Suppress("DEPRECATION")
                     val intent = Intent(Intent.ACTION_INSTALL_PACKAGE)
