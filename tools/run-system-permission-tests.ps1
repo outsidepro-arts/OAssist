@@ -10,6 +10,7 @@ $chatTestClass = "$package.chat.ChatTogglePermissionTest"
 $holdTestClass = "$package.chat.ChatHoldPermissionTest"
 $permissions = @('android.permission.CAMERA', 'android.permission.RECORD_AUDIO')
 $overlayTestClass = "$package.agent.AssistantOverlayModeTest"
+$terminalTestClass = "$package.agent.TerminalTranscriptPersistenceTest"
 $replyTestClass = "$package.notify.NotifyReplyContractInstrumentedTest"
 $replyFixture = "$package.test/$package.notify.ReplyNotificationFixture"
 $listener = "$package/$package.notify.OAssistNotificationListener"
@@ -101,6 +102,9 @@ try {
   $output = Invoke-Adb @('shell', 'am', 'instrument', '--user', $user, '-w', '-e', 'overlayModeFixture', 'true', '-e', 'class', $overlayTestClass, "$package.test/androidx.test.runner.AndroidJUnitRunner")
   Write-Output $output
   if ($output -notmatch '(?m)^OK \(1 test\)\s*$') { throw 'Overlay mode instrumentation did not report one passing test' }
+  $output = Invoke-Adb @('shell', 'am', 'instrument', '--user', $user, '-w', '-e', 'class', $terminalTestClass, "$package.test/androidx.test.runner.AndroidJUnitRunner")
+  Write-Output $output
+  if ($output -notmatch '(?m)^OK \(16 tests\)\s*$') { throw 'Terminal transcript instrumentation did not report sixteen passing tests' }
   $replyPhaseStarted = $true
   if ($sdk -ge 33) { Set-PermissionState 'android.permission.POST_NOTIFICATIONS' $user @{ Granted = $true; UserSet = $false; UserFixed = $false } "$package.test" }
   # Instrumentation restarts the target process. The fixture grants its listener

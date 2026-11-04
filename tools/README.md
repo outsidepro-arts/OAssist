@@ -24,10 +24,10 @@ Linux runners. Настройка автоматического выпуска 
 разрешений. Соберите и установите debug APK приложения и androidTest APK на эмулятор,
 затем запустите `pwsh -NoProfile -File tools/run-system-permission-tests.ps1 -Serial emulator-5554`
 с фактическим serial. Скрипт временно меняет CAMERA и RECORD_AUDIO, затем восстанавливает
-их исходное состояние, а на API 33+ также POST_NOTIFICATIONS; доступ поверх окон должен быть выключен. Отдельная фаза `AssistantOverlayModeTest` временно включает доступ поверх окон и восстанавливает его. Фаза `NotifyReplyContractInstrumentedTest` (5 тестов) временно включает доступ OAssist к уведомлениям и POST_NOTIFICATIONS для тестового APK (API 33+), затем восстанавливает доступ, разрешение и его flags. Тестовый Java receiver работает в отдельном UID и проверяет полный RemoteInput реального уведомления. Запускайте остальные
+их исходное состояние, а на API 33+ также POST_NOTIFICATIONS; доступ поверх окон должен быть выключен. Для `AssistantOverlayModeTest` и всех 16 сценариев `TerminalTranscriptPersistenceTest` runner временно включает доступ поверх окон и восстанавливает его. Фаза `NotifyReplyContractInstrumentedTest` (5 тестов) временно включает доступ OAssist к уведомлениям и POST_NOTIFICATIONS для тестового APK (API 33+), затем восстанавливает доступ, разрешение и его flags. Тестовый Java receiver работает в отдельном UID и проверяет полный RemoteInput реального уведомления. Запускайте остальные
 instrumentation-тесты с исключением этих классов и четырёх VIS-классов ниже, как в `.github/workflows/android.yml`.
 Доступ к уведомлениям для reply-фазы включается через shell-команду UiAutomation уже после запуска instrumentation: её запуск перезапускает процесс приложения. Host runner предварительно снимает доступ только у компонента OAssist, передаёт fixture текущего Android-пользователя и в `finally` восстанавливает исходный доступ. Runtime-разрешения не отзываются внутри instrumentation.
-Все фазы обязательны в CI: runner выполняет 13 тестов (6 + 1 + 1 + 5). При принудительном завершении скрипта восстановление не гарантируется.
+Все фазы обязательны в CI: runner выполняет 29 тестов (6 + 1 + 1 + 16 + 5). При принудительном завершении скрипта восстановление не гарантируется.
 
 ## Контекст системного ассистента
 
@@ -43,7 +43,7 @@ Runner предназначен только для эмулятора API 31+: 
 Эта отдельная обязательная фаза выполняет `VoiceInteractionCaptureTest`,
 `AssistHandoffLifecycleTest`, `AssistServiceHandoffTest` и `AssistTurnSnapshotTest`
 из пакета `ru.outsideproarts.oassist.vis` (5 тестов). Только эти четыре класса,
-наряду с `SystemPermissionLifecycleTest`, `ChatTogglePermissionTest`, `ChatHoldPermissionTest`, `AssistantOverlayModeTest` и `NotifyReplyContractInstrumentedTest`, исключены из общего запуска через `notClass`.
+наряду с `SystemPermissionLifecycleTest`, `ChatTogglePermissionTest`, `ChatHoldPermissionTest`, `AssistantOverlayModeTest`, `TerminalTranscriptPersistenceTest` и `NotifyReplyContractInstrumentedTest`, исключены из общего запуска через `notClass`.
 Неподготовленный прямой запуск завершается ошибкой предусловия, а не пропуском тестов.
 
 ## Сборка и тесты
