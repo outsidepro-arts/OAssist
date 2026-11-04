@@ -6,6 +6,7 @@ import androidx.datastore.preferences.core.edit
 import androidx.datastore.preferences.preferencesDataStore
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
+import ru.outsideproarts.oassist.core.data.atomicWriteText
 import ru.outsideproarts.oassist.core.model.SkillInfo
 import java.io.File
 
@@ -81,7 +82,7 @@ class FileSkillStore(private val deviceContext: Context) : SkillStore {
         } else {
             "# $cleanTitle\n\n$cleanBody"
         }
-        File(skillDir, SkillInfo.FILE_NAME).writeText(text.trim() + "\n")
+        atomicWriteText(File(skillDir, SkillInfo.FILE_NAME), text.trim() + "\n")
     }
 
     override suspend fun setEnabled(name: String, enabled: Boolean) {
