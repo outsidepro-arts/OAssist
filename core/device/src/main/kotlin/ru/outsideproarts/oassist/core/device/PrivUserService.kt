@@ -16,7 +16,11 @@ import android.os.Parcel
  * - [TRANSACTION_PUT_SETTING]: namespace/key/value → `settings put`.
  * - [TRANSACTION_INPUT]: жест `input tap/swipe`.
  */
-class PrivUserService : Binder() {
+class PrivUserService internal constructor(
+    private val executeProcess: (List<String>, Long, Int) -> ExecResult,
+) : Binder() {
+
+    constructor() : this(ProcessRunner::run)
 
     init {
         attachInterface(null, DESCRIPTOR)
@@ -30,11 +34,11 @@ class PrivUserService : Binder() {
                 val cmd = List(count) { data.readString().orEmpty() }
                 val timeoutMs = data.readLong().coerceIn(1, ShellPolicy.MAX_TIMEOUT_MS)
                 val maxBytes = data.readInt().coerceIn(1, ShellPolicy.MAX_BYTES)
-                val result = runExec(cmd)
+                val result = runExec(cmd, timeoutMs, maxBytes)
                 val (capped, truncated) = ShellPolicy.capOutput(result.stdout, maxBytes)
                 reply?.writeInt(result.exitCode)
                 reply?.writeString(capped)
-                reply?.writeInt(if (truncated) 1 else 0)
+                reply?.writeInt(if (result.truncated || truncated) 1 else 0)
                 true
             }
             TRANSACTION_PUT_SETTING -> {
@@ -77,21 +81,15 @@ class PrivUserService : Binder() {
         }
     }
 
-    private fun runExec(cmd: List<String>): ExecResult {
+    private fun runExec(cmd: List<String>, timeoutMs: Long, maxBytes: Int): ExecResult {
         val denied = ShellPolicy.checkShellExec(cmd)
         if (denied != null) return ExecResult(-1, "Запрещено: $denied")
-        return runRaw(ShellPolicy.shellExecArgv(cmd), ShellPolicy.DEFAULT_TIMEOUT_MS)
+        return runRaw(ShellPolicy.shellExecArgv(cmd), timeoutMs, maxBytes)
     }
 
-    private fun runRaw(cmd: List<String>, timeoutMs: Long): ExecResult = runCatching {
-        val process = ProcessBuilder(cmd).redirectErrorStream(true).start()
-        val finished = process.waitFor(timeoutMs, java.util.concurrent.TimeUnit.MILLISECONDS)
-        if (!finished) {
-            process.destroyForcibly()
-            throw IllegalStateException("Команда превысила таймаут ${timeoutMs}мс")
-        }
-        ExecResult(process.exitValue(), process.inputStream.bufferedReader().readText())
-    }.getOrElse { ExecResult(-1, "Ошибка: ${it.message}") }
+    private fun runRaw(cmd: List<String>, timeoutMs: Long, maxBytes: Int = ShellPolicy.DEFAULT_MAX_BYTES): ExecResult =
+        runCatching { executeProcess(cmd, timeoutMs, maxBytes) }
+            .getOrElse { ExecResult(-1, "Ошибка: ${it.message}") }
 
     private fun destroy() {
         object : Thread() {

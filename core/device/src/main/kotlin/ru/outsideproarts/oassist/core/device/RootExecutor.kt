@@ -2,6 +2,7 @@ package ru.outsideproarts.oassist.core.device
 
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.runInterruptible
 import ru.outsideproarts.oassist.core.model.PrivilegeLevel
 import java.io.File
 
@@ -38,7 +39,7 @@ class RootExecutor : PrivExecutor {
             val which = ProcessBuilder("which", "su")
                 .start().apply { waitFor() }.inputStream.bufferedReader().readText().trim()
             if (which.isBlank()) return@runCatching false
-            val probe = execRaw(listOf("su", "-c", "id"), ShellPolicy.DEFAULT_TIMEOUT_MS)
+            val probe = runInterruptible { execRaw(listOf("su", "-c", "id"), ShellPolicy.DEFAULT_TIMEOUT_MS, ShellPolicy.DEFAULT_MAX_BYTES) }
                 .getOrNull() ?: return@runCatching false
             probe.exitCode == 0 && "uid=0" in probe.stdout
         }.getOrDefault(false)
@@ -57,23 +58,13 @@ class RootExecutor : PrivExecutor {
             val flat = cmd.joinToString(" ") { arg ->
                 "'" + arg.replace("'", "'\\''") + "'"
             }
-            execRaw(listOf("su", "-c", flat), ShellPolicy.coerceTimeout(timeoutMs))
-                .map { (code, out) ->
-                    val (capped, truncated) = ShellPolicy.capOutput(out, ShellPolicy.coerceMaxBytes(maxBytes))
-                    ExecResult(code, capped, truncated)
-                }
+            runInterruptible {
+                execRaw(listOf("su", "-c", flat), ShellPolicy.coerceTimeout(timeoutMs), ShellPolicy.coerceMaxBytes(maxBytes))
+            }
         }
 
-    private fun execRaw(cmd: List<String>, timeoutMs: Long): Result<ExecResult> = runCatching {
-        val process = ProcessBuilder(cmd).redirectErrorStream(true).start()
-        val finished = process.waitFor(timeoutMs, java.util.concurrent.TimeUnit.MILLISECONDS)
-        if (!finished) {
-            process.destroyForcibly()
-            throw IllegalStateException("Команда превысила таймаут ${timeoutMs}мс")
-        }
-        val out = process.inputStream.bufferedReader().readText()
-        ExecResult(process.exitValue(), out)
-    }
+    private fun execRaw(cmd: List<String>, timeoutMs: Long, maxChars: Int): Result<ExecResult> =
+        runCatching { ProcessRunner.run(cmd, timeoutMs, maxChars) }
 
     override suspend fun getSetting(namespace: String, key: String): Result<String?> {
         ShellPolicy.checkNamespace(namespace)?.let { return Result.failure(IllegalArgumentException(it)) }
