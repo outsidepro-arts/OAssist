@@ -191,7 +191,7 @@ class McpClientTest {
             val id = McpJson.parseToJsonElement((request.body as TextContent).text).jsonObject["id"]
             if (id == null) return@MockEngine respond("", HttpStatusCode.Accepted)
             respond(
-                """{"jsonrpc":"2.0","id":$id,"result":{"protocolVersion":"2025-06-18","tools":[]}}""",
+                """{"jsonrpc":"2.0","id":$id,"result":{"protocolVersion":"2025-06-18","tools":[],"content":[]}}""",
                 HttpStatusCode.OK,
                 headersOf(
                     "Content-Type" to listOf("application/json"),

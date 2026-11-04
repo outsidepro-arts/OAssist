@@ -97,7 +97,8 @@ data class McpCallParamsDto(
 
 @Serializable
 data class McpCallResultDto(
-    val content: List<McpContentBlockDto> = emptyList(),
+    val content: List<McpContentBlockDto>,
+    val structuredContent: JsonObject? = null,
     @SerialName("isError") val isError: Boolean = false,
 )
 
@@ -105,4 +106,10 @@ data class McpCallResultDto(
 data class McpContentBlockDto(
     val type: String? = null,
     val text: String? = null,
+    val data: String? = null,
+    val mimeType: String? = null,
+    val uri: String? = null,
+    val name: String? = null,
+    val description: String? = null,
+    val resource: JsonObject? = null,
 )
