@@ -2,6 +2,7 @@ package ru.outsideproarts.oassist.core.agent
 
 import io.ktor.client.HttpClient
 import io.ktor.client.plugins.ResponseException
+import io.ktor.client.plugins.RedirectResponseException
 import io.ktor.client.request.accept
 import io.ktor.client.request.get
 import io.ktor.client.statement.bodyAsChannel
@@ -11,6 +12,7 @@ import io.ktor.http.contentType
 import io.ktor.utils.io.ByteReadChannel
 import io.ktor.utils.io.readAvailable
 import kotlinx.coroutines.withTimeoutOrNull
+import kotlinx.coroutines.job
 import java.net.URI
 import java.nio.charset.Charset
 
@@ -33,21 +35,18 @@ data class RawFetch(
  * Без JS-рендера — для JS-страниц есть [WebRenderActions].
  */
 class WebContentActions(private val httpClient: HttpClient) {
+    private val redirectClient = httpClient.config { followRedirects = false }
+
+    init {
+        // The configured client shares the engine and lives as long as its owner.
+        httpClient.coroutineContext.job.invokeOnCompletion { redirectClient.close() }
+    }
 
     suspend fun fetchStatic(rawUrl: String, userAgent: String? = null): Result<RawFetch> {
-        val url = normalizeUrl(rawUrl)
-            ?: return Result.failure(IllegalArgumentException("Некорректный URL: $rawUrl"))
-        val host = runCatching { URI(url).host }.getOrNull()
-            ?: return Result.failure(IllegalArgumentException("Некорректный URL: $rawUrl"))
-        if (isBlockedHost(host)) {
-            return Result.failure(SecurityException("Локальные адреса запрещены: $host"))
-        }
+        val url = try { checkedUrl(rawUrl) } catch (e: Exception) { return Result.failure(e) }
         return runCatching {
             val response = withTimeoutOrNull(STATIC_TIMEOUT_MS) {
-                httpClient.get(url) {
-                    accept(ContentType.parse("text/markdown, text/html;q=0.9, text/plain;q=0.8"))
-                    userAgent?.let { headers.append(io.ktor.http.HttpHeaders.UserAgent, it) }
-                }
+                getFollowingCheckedRedirects(url, "text/markdown, text/html;q=0.9, text/plain;q=0.8", userAgent)
             } ?: throw java.util.concurrent.TimeoutException("Таймаут $STATIC_TIMEOUT_MS мс: $url")
             val contentLength = response.headers["Content-Length"]?.toLongOrNull()
             if (contentLength != null && contentLength > MAX_BODY_BYTES * 8) {
@@ -77,9 +76,7 @@ class WebContentActions(private val httpClient: HttpClient) {
         val variant = url.trimEnd('/') + ".md"
         return runCatching {
             val response = withTimeoutOrNull(STATIC_TIMEOUT_MS) {
-                httpClient.get(variant) {
-                    accept(ContentType.parse("text/markdown"))
-                }
+                getFollowingCheckedRedirects(variant, "text/markdown", null)
             } ?: throw java.util.concurrent.TimeoutException("Таймаут: $variant")
             val type = response.contentType()?.toString() ?: ""
             if (!type.contains("markdown") && !type.contains("plain")) {
@@ -91,6 +88,39 @@ class WebContentActions(private val httpClient: HttpClient) {
             if (body.text.length < MIN_MARKDOWN_CHARS) throw IllegalStateException("Markdown-вариант пуст")
             RawFetch(response.request.url.toString(), type, body.text, body.truncated)
         }
+    }
+
+    private suspend fun getFollowingCheckedRedirects(
+        initialUrl: String,
+        acceptType: String,
+        userAgent: String?,
+    ): io.ktor.client.statement.HttpResponse {
+        var url = checkedUrl(initialUrl)
+        repeat(20) { hop ->
+            var redirectError: RedirectResponseException? = null
+            val response = try {
+                redirectClient.get(url) {
+                    accept(ContentType.parse(acceptType))
+                    userAgent?.let { headers.append(io.ktor.http.HttpHeaders.UserAgent, it) }
+                }
+            } catch (e: RedirectResponseException) {
+                redirectError = e
+                e.response
+            }
+            val location = response.headers[io.ktor.http.HttpHeaders.Location]
+            if (response.status.value !in REDIRECT_STATUSES || location == null) {
+                redirectError?.let { throw it }
+                return response
+            }
+            val next = checkedUrl(URI(url).resolve(location).toString())
+            if (URI(url).scheme.equals("https", true) && URI(next).scheme.equals("http", true)) {
+                redirectError?.let { throw it }
+                return response
+            }
+            if (hop == 19) throw IllegalStateException("Слишком много перенаправлений")
+            url = next
+        }
+        error("Недостижимый переход")
     }
 
     private data class CappedText(val text: String, val truncated: Boolean)
@@ -142,6 +172,13 @@ class WebContentActions(private val httpClient: HttpClient) {
         /** Бюджет чтения тела после получения заголовков (защита от «капельных» ответов). */
         const val BODY_TIMEOUT_MS = 15_000L
         private const val MIN_MARKDOWN_CHARS = 200
+        private val REDIRECT_STATUSES = setOf(301, 302, 303, 307, 308)
+        fun checkedUrl(raw: String): String {
+            val url = normalizeUrl(raw) ?: throw IllegalArgumentException("Некорректный URL: $raw")
+            val host = URI(url).host
+            if (isBlockedHost(host)) throw SecurityException("Локальные адреса запрещены: $host")
+            return url
+        }
         fun normalizeUrl(raw: String): String? {
             val trimmed = raw.trim()
             if (trimmed.isEmpty()) return null

@@ -40,8 +40,7 @@ class WebFetcher(
         renderMode: RenderMode = RenderMode.AUTO,
         loadImages: Boolean = false,
     ): Result<FetchedResult> {
-        val url = WebContentActions.normalizeUrl(rawUrl)
-            ?: return Result.failure(IllegalArgumentException("Некорректный URL: $rawUrl"))
+        val url = try { WebContentActions.checkedUrl(rawUrl) } catch (e: Exception) { return Result.failure(e) }
         val cap = maxChars.coerceIn(MIN_CAP, MAX_CAP)
 
         if (renderMode == RenderMode.ALWAYS) {
