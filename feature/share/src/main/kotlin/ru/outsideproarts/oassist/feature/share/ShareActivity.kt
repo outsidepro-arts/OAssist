@@ -41,6 +41,7 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.input.KeyboardCapitalization
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.TextFieldValue
+import androidx.compose.ui.unit.dp
 import androidx.lifecycle.viewmodel.compose.viewModel
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.CancellationException
@@ -68,6 +69,7 @@ import ru.outsideproarts.oassist.core.ui.components.ChatPickerList
 import ru.outsideproarts.oassist.core.ui.components.ChatUnsavedDialog
 import ru.outsideproarts.oassist.core.ui.components.OAssistImageThumbnail
 import ru.outsideproarts.oassist.core.ui.components.OAssistPanel
+import ru.outsideproarts.oassist.core.ui.components.OAssistLiveStatus
 import ru.outsideproarts.oassist.core.ui.theme.OAssistTheme
 
 private const val SHARE_MAX_IMAGES = 4
@@ -75,6 +77,7 @@ private const val SHARE_MAX_IMAGES = 4
 internal suspend fun loadShareImages(
     resolver: android.content.ContentResolver,
     imageUris: List<Uri>,
+    requireAll: Boolean = false,
 ): List<ru.outsideproarts.oassist.core.model.ImagePart> = withContext(Dispatchers.IO) {
     imageUris.take(SHARE_MAX_IMAGES).mapNotNull { uri ->
         val bytes = try {
@@ -91,7 +94,9 @@ internal suspend fun loadShareImages(
         } catch (_: Exception) {
             null
         }
-        bytes?.let { ImageCodec.fromBytes(it) }
+        val image = bytes?.let { ImageCodec.fromBytes(it) }
+        if (requireAll && image == null) throw java.io.IOException("Could not read shared image")
+        image
     }
 }
 
@@ -107,7 +112,7 @@ class ShareActivity : AppCompatActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        val payload = SharePayload.from(intent)
+        val payload = SharePayload.from(intent, contentResolver::getType)
         setContent {
             OAssistTheme {
                 ShareFlow(payload = payload)
@@ -121,23 +126,29 @@ data class SharePayload(
     val imageUris: List<Uri>,
     val otherUris: List<Uri>,
 ) {
+    val unsupported: Boolean get() = otherUris.isNotEmpty() || imageUris.size > SHARE_MAX_IMAGES
     val isEmpty: Boolean
         get() = text.isNullOrBlank() && imageUris.isEmpty() && otherUris.isEmpty()
 
     companion object {
-        fun from(intent: Intent?): SharePayload {
+        fun from(intent: Intent?, getType: (Uri) -> String?): SharePayload {
             if (intent == null) return SharePayload(null, emptyList(), emptyList())
-            val text = intent.getStringExtra(Intent.EXTRA_TEXT)
+            val text = intent.getCharSequenceExtra(Intent.EXTRA_TEXT)?.toString()
             val images = mutableListOf<Uri>()
             val others = mutableListOf<Uri>()
+            fun addStream(uri: Uri) {
+                val type = runCatching { getType(uri) }.getOrNull()?.takeIf { it.isNotBlank() } ?: intent.type
+                if (type?.startsWith("image/", ignoreCase = true) == true) images.add(uri)
+                else others.add(uri)
+            }
             when (intent.action) {
                 Intent.ACTION_SEND -> {
                     val stream = intent.getParcelableExtra<Uri>(Intent.EXTRA_STREAM)
-                    if (stream != null) images.add(stream)
+                    if (stream != null) addStream(stream)
                 }
                 Intent.ACTION_SEND_MULTIPLE -> {
                     val list = intent.getParcelableArrayListExtra<Uri>(Intent.EXTRA_STREAM)
-                    if (list != null) images.addAll(list)
+                    list?.forEach(::addStream)
                 }
             }
             return SharePayload(text = text, imageUris = images, otherUris = others)
@@ -242,7 +253,7 @@ private fun ShareFlow(payload: SharePayload) {
 
     LaunchedEffect(Unit) {
         val resolver = context.applicationContext.contentResolver
-        vm.loadPayload { loadShareImages(resolver, payload.imageUris) }
+        if (!payload.unsupported) vm.loadPayload { loadShareImages(resolver, payload.imageUris, requireAll = true) }
     }
 
     // Тосты VM: строка резолвится в момент события в хелпере вне @Composable
@@ -254,6 +265,7 @@ private fun ShareFlow(payload: SharePayload) {
     if (!vm.inConversation) {
         ShareChatList(
             payload = payload,
+            payloadLoadFailed = vm.payloadLoadFailed,
             chats = chats,
             sortOrder = sortOrder,
             onSortOrderChange = { order ->
@@ -282,6 +294,7 @@ private fun ShareFlow(payload: SharePayload) {
     } else {
         ShareConversation(
             payload = payload,
+            payloadLoadFailed = vm.payloadLoadFailed,
             chatTitle = vm.chatTitle,
             isSaved = vm.chatId != null,
             turns = vm.turns,
@@ -290,13 +303,13 @@ private fun ShareFlow(payload: SharePayload) {
             response = vm.response,
             usage = vm.turnUsage,
             isStreaming = vm.isStreaming,
-            canSend = vm.canSend,
+            canSend = vm.canSend && !payload.unsupported,
             saveFailed = vm.saveFailed,
             thinkingContextReduced = vm.providerNotice != null,
             question = vm.question,
             onQuestionChange = { vm.question = it },
             onSend = {
-                if (vm.question.text.isNotBlank() && vm.canSend) {
+                if (vm.question.text.isNotBlank() && vm.canSend && !payload.unsupported) {
                     val net = ru.outsideproarts.oassist.core.net.NetworkHandle.get()
                     val request = buildShareAsk(payload, vm.question.text.trim(), templates)
                     if (net != null && !net.isOnline.value) {
@@ -354,6 +367,7 @@ private fun ShareFlow(payload: SharePayload) {
 @Composable
 private fun ShareChatList(
     payload: SharePayload,
+    payloadLoadFailed: Boolean,
     chats: List<ChatSummary>,
     sortOrder: ChatSortOrder,
     onSortOrderChange: (ChatSortOrder) -> Unit,
@@ -383,7 +397,7 @@ private fun ShareChatList(
                 .fillMaxWidth()
                 .oassistHeading(),
         )
-        ShareReceivedPanel(payload = payload, compact = true)
+        ShareReceivedPanel(payload = payload, compact = true, payloadLoadFailed = payloadLoadFailed)
 
         ChatPickerList(
             chats = chats,
@@ -420,6 +434,7 @@ private fun ShareChatList(
 @Composable
 private fun ShareConversation(
     payload: SharePayload,
+    payloadLoadFailed: Boolean,
     chatTitle: String,
     isSaved: Boolean,
     turns: List<StoredTurn>,
@@ -542,7 +557,7 @@ private fun ShareConversation(
             }
         }
 
-        ShareReceivedPanel(payload = payload, compact = true)
+        ShareReceivedPanel(payload = payload, compact = true, payloadLoadFailed = payloadLoadFailed)
 
         ru.outsideproarts.oassist.core.ui.components.ThinkingContextNotice(thinkingContextReduced)
         Row(
@@ -577,7 +592,7 @@ private fun ShareConversation(
 
 /** Что получено: текст, количество изображений и миниатюры (компактно). */
 @Composable
-private fun ShareReceivedPanel(payload: SharePayload, compact: Boolean) {
+private fun ShareReceivedPanel(payload: SharePayload, compact: Boolean, payloadLoadFailed: Boolean) {
     val receivedLabel = stringResource(R.string.share_received_label)
     val imagesCount = stringResource(R.string.share_images_count, payload.imageUris.size)
     val imageDesc = stringResource(R.string.share_image_attached)
@@ -609,12 +624,8 @@ private fun ShareReceivedPanel(payload: SharePayload, compact: Boolean) {
                 }
             }
         }
-        if (payload.otherUris.isNotEmpty()) {
-            Text(
-                text = payload.otherUris.joinToString("\n") { it.toString() },
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
+        if (payload.unsupported || payloadLoadFailed) {
+            OAssistLiveStatus(text = stringResource(R.string.share_unsupported_file), horizontalPadding = 0.dp)
         }
     }
 }

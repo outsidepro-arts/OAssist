@@ -4,6 +4,7 @@
     <string name="share_activity_label">OAssist — share</string>
     <string name="share_title">Share with OAssist</string>
     <string name="share_received_label">Received content</string>
+    <string name="share_unsupported_file">Could not process attachments. Up to four images are supported; other files are not supported. Sending is unavailable.</string>
     <string name="share_open_chat">Open chat</string>
     <string name="share_close">Close</string>
     <string name="share_images_count">Images: %1$d</string>

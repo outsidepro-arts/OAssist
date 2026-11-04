@@ -3,11 +3,13 @@ package ru.outsideproarts.oassist.feature.share
 import android.content.ContentProvider
 import android.content.ContentResolver
 import android.content.ContentValues
+import android.content.Intent
 import android.content.res.AssetFileDescriptor
 import android.database.Cursor
 import android.graphics.Bitmap
 import android.net.Uri
 import android.os.ParcelFileDescriptor
+import android.text.SpannedString
 import androidx.lifecycle.ViewModelStore
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import kotlinx.coroutines.CompletableDeferred
@@ -26,6 +28,35 @@ import java.io.FileInputStream
 
 @RunWith(AndroidJUnit4::class)
 class SharePayloadContentProviderTest {
+    @Test fun readsPlainAndStyledText() {
+        for (text in listOf<CharSequence>("shared text", SpannedString("shared text"))) {
+            val intent = Intent(Intent.ACTION_SEND).setType("text/plain")
+                .putExtra(Intent.EXTRA_TEXT, text)
+            assertEquals("shared text", SharePayload.from(intent) { null }.text)
+        }
+    }
+
+    @Test fun classifiesEachStreamAndRejectsPdfAndUnknown() {
+        val image = Uri.parse("content://share-test/image")
+        val pdf = Uri.parse("content://share-test/pdf")
+        val unknown = Uri.parse("content://share-test/unknown")
+        val intent = Intent(Intent.ACTION_SEND_MULTIPLE).setType("*/*")
+            .putParcelableArrayListExtra(Intent.EXTRA_STREAM, arrayListOf(image, pdf, unknown))
+        val payload = SharePayload.from(intent) { uri ->
+            when (uri) { image -> "image/png"; pdf -> "application/pdf"; else -> null }
+        }
+        assertEquals(listOf(image), payload.imageUris)
+        assertEquals(listOf(pdf, unknown), payload.otherUris)
+        assertTrue(payload.unsupported)
+        val overflow = Intent(Intent.ACTION_SEND_MULTIPLE).setType("image/png")
+            .putParcelableArrayListExtra(Intent.EXTRA_STREAM, ArrayList(List(5) { image }))
+        assertTrue(SharePayload.from(overflow) { "image/png" }.unsupported)
+        val spoofedPdf = Intent(Intent.ACTION_SEND).setType("image/png")
+            .putExtra(Intent.EXTRA_STREAM, pdf)
+        assertTrue(SharePayload.from(spoofedPdf) { "application/pdf" }.unsupported)
+        assertEquals(listOf(pdf), SharePayload.from(spoofedPdf) { null }.imageUris)
+    }
+
     @Test fun sendWaitsForActualProviderReadAndDecodeAcrossSameVmLoadRetry() = runBlocking {
         val png = ByteArrayOutputStream().use { output ->
             val bitmap = Bitmap.createBitmap(2, 3, Bitmap.Config.ARGB_8888)
@@ -63,6 +94,33 @@ class SharePayloadContentProviderTest {
                 assertTrue(vm.canSend)
                 assertEquals(listOf(ImageCodec.fromBytes(png)), vm.images)
                 assertEquals(1, provider.opens)
+            }
+        } finally {
+            provider.pipe.forEach { runCatching { it.close() } }
+            withContext(Dispatchers.Main) { owner.clear() }
+        }
+    }
+
+    @Test fun unreadableImageDoesNotEnableSending() = runBlocking {
+        val provider = DelayedProvider()
+        val owner = ViewModelStore()
+        val vm = withContext(Dispatchers.Main) {
+            ShareSessionViewModel(null).also { owner.put("share", it) }
+        }
+        try {
+            withContext(Dispatchers.Main) {
+                vm.loadPayload {
+                    loadShareImages(ContentResolver.wrap(provider), listOf(Uri.parse("content://share-test/image")), requireAll = true)
+                }
+            }
+            withTimeout(10_000) { provider.opened.await() }
+            ParcelFileDescriptor.AutoCloseOutputStream(provider.pipe[1]).use { it.write("not an image".toByteArray()) }
+            withTimeout(10_000) {
+                while (!withContext(Dispatchers.Main) { vm.payloadLoadFailed }) kotlinx.coroutines.yield()
+            }
+            withContext(Dispatchers.Main) {
+                assertFalse(vm.payloadReady)
+                assertFalse(vm.canSend)
             }
         } finally {
             provider.pipe.forEach { runCatching { it.close() } }

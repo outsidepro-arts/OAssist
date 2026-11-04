@@ -4,6 +4,7 @@
     <string name="share_activity_label">OAssist — общий доступ</string>
     <string name="share_title">Отправить в OAssist</string>
     <string name="share_received_label">Полученный контент</string>
+    <string name="share_unsupported_file">Не удалось обработать вложения. Поддерживается не более четырёх изображений; другие файлы не поддерживаются. Отправка недоступна.</string>
     <string name="share_open_chat">Открыть чат</string>
     <string name="share_close">Закрыть</string>
     <string name="share_images_count">Изображений: %1$d</string>

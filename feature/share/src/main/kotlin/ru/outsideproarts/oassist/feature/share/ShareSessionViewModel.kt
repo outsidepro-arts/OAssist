@@ -91,6 +91,8 @@ class ShareSessionViewModel internal constructor(private val chatStore: ShareCha
         private set
     var payloadReady by mutableStateOf(false)
         private set
+    var payloadLoadFailed by mutableStateOf(false)
+        private set
     var isChangingConversation by mutableStateOf(false)
         private set
     var isSaving by mutableStateOf(false)
@@ -109,6 +111,7 @@ class ShareSessionViewModel internal constructor(private val chatStore: ShareCha
     /** Owned by the VM so Activity recreation cannot restart or truncate the payload load. */
     fun loadPayload(load: suspend () -> List<ImagePart>) {
         if (isClosing || payloadJob?.isActive == true || payloadReady) return
+        payloadLoadFailed = false
         payloadJob = scope.launch {
             try {
                 images = load().toList()
@@ -116,6 +119,7 @@ class ShareSessionViewModel internal constructor(private val chatStore: ShareCha
             } catch (cancel: CancellationException) {
                 throw cancel
             } catch (error: Exception) {
+                payloadLoadFailed = true
                 _toasts.tryEmit(ShareToast.Error(ProviderError.from(error)))
             } finally {
                 payloadJob = null
