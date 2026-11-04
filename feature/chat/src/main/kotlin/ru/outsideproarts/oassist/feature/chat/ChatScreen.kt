@@ -727,12 +727,11 @@ fun ChatScreen(
             resetChat()
         }
     }
-    // Авто-повтор отложенного хода только по фронту offline→online:
-    // повтор «по уровню» дал бы петлю при флэппинге сети.
+    // Проверяем текущее состояние при входе и дальнейшие переходы offline→online.
     // Позиция — после launchTurn/send/cancelTurn: эффект их вызывает,
     // локальные fun видны только ниже объявления.
     LaunchedEffect(netHandle) {
-        var wasOnline = netHandle?.isOnline?.value ?: true
+        var wasOnline = false
         netHandle?.isOnline?.collect { online ->
             if (online && !wasOnline) {
                 val retry = pendingRetry
