@@ -12,6 +12,8 @@ import android.widget.Toast
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.net.toUri
+import androidx.lifecycle.ViewModel
+import androidx.lifecycle.ViewModelProvider
 
 /**
  * Trampoline для assist-жеста: принимает AssistStructure (или готовый screen_context из VIS),
@@ -23,9 +25,22 @@ class AssistActivity : AppCompatActivity() {
     private var screenContext: String? = null
     private var screenImage: String? = null
     private var overlayNeeded = true
+    private var contextAvailable = false
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        val retained = ViewModelProvider(this)[AssistContextViewModel::class.java]
+        if (savedInstanceState != null) {
+            if (!retained.initialized) {
+                finish()
+                return
+            }
+            screenContext = retained.screenContext
+            screenImage = retained.screenImage
+            overlayNeeded = retained.overlayNeeded
+            contextAvailable = true
+            return
+        }
         screenContext = extractScreenContext(intent)
             ?: intent?.getStringExtra(AssistantOverlayService.EXTRA_SCREEN_CONTEXT)
         overlayNeeded = kotlinx.coroutines.runBlocking {
@@ -44,6 +59,12 @@ class AssistActivity : AppCompatActivity() {
         }
         screenImage = intent?.getStringExtra(AssistantOverlayService.EXTRA_SCREEN_IMAGE)
             ?: if (attachScreenshot) extractScreenImage(intent) else null
+
+        retained.screenContext = screenContext
+        retained.screenImage = screenImage
+        retained.overlayNeeded = overlayNeeded
+        retained.initialized = true
+        contextAvailable = true
 
         if (overlayNeeded && !Settings.canDrawOverlays(this)) {
             val overlayIntent = Intent(
@@ -68,7 +89,9 @@ class AssistActivity : AppCompatActivity() {
     private val overlayLauncher = registerForActivityResult(
         ActivityResultContracts.StartActivityForResult(),
     ) {
-        if (!overlayNeeded || Settings.canDrawOverlays(this)) {
+        if (!contextAvailable) {
+            finish()
+        } else if (!overlayNeeded || Settings.canDrawOverlays(this)) {
             ensureMicAndStart()
         } else {
             Toast.makeText(this, R.string.assistant_no_overlay, Toast.LENGTH_LONG).show()
@@ -80,13 +103,14 @@ class AssistActivity : AppCompatActivity() {
         ActivityResultContracts.RequestPermission(),
     ) {
         // Отказ не блокирует окно: текстовый ввод остаётся, сервис покажет подсказку.
-        startServiceAndStartOverlay()
+        if (contextAvailable) startServiceAndStartOverlay() else finish()
     }
 
     private val notificationLauncher = registerForActivityResult(
         ActivityResultContracts.RequestPermission(),
     ) { granted ->
         when {
+            !contextAvailable -> finish()
             notificationsEnabled() -> ensureMicAndStart()
             // Выдали, но уведомления выключены в настройках приложения — отправляем туда.
             granted -> openNotificationSettings()
@@ -170,4 +194,13 @@ class AssistActivity : AppCompatActivity() {
             dumpNode(node.getChildAt(i), sb, depth + 1)
         }
     }
+
+}
+
+/** Retains assist data across configuration changes without persisting screenshots. */
+class AssistContextViewModel : ViewModel() {
+    var initialized = false
+    var screenContext: String? = null
+    var screenImage: String? = null
+    var overlayNeeded = true
 }

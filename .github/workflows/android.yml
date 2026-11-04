@@ -158,14 +158,19 @@ jobs:
           echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
           sudo udevadm control --reload-rules
           sudo udevadm trigger --name-match=kvm
-      - name: Run all instrumentation tests on a local emulator
+      - name: Run instrumentation tests on a local emulator
         id: tests
         uses: reactivecircus/android-emulator-runner@a421e43855164a8197daf9d8d40fe71c6996bb0d # v2.38.0
         with:
           api-level: ${{ matrix.api }}
           arch: x86_64
           target: google_apis
-          script: ./gradlew --continue :app:connectedDebugAndroidTest -Pandroid.testInstrumentationRunnerArguments.verifyInternet=true
+          script: |
+            set -e
+            ./gradlew --continue :app:connectedDebugAndroidTest -Pandroid.testInstrumentationRunnerArguments.verifyInternet=true -Pandroid.testInstrumentationRunnerArguments.notClass=ru.outsideproarts.oassist.permission.SystemPermissionLifecycleTest
+            adb install -r app/build/outputs/apk/debug/app-debug.apk
+            adb install -r app/build/outputs/apk/androidTest/debug/app-debug-androidTest.apk
+            pwsh -NoProfile -File tools/run-system-permission-tests.ps1 -Serial "$(adb get-serialno)"
       - name: Require executed tests without skips
         if: ${{ !cancelled() && (steps.tests.outcome == 'success' || steps.tests.outcome == 'failure') }}
         shell: pwsh

@@ -18,6 +18,16 @@ Linux runners. Настройка автоматического выпуска 
 сквозной проверки подписи временным тестовым ключом первая команда принимает
 `-ReferenceApk <release.apk>` и `-BuildToolsDirectory <SDK/build-tools/36.0.0>`.
 
+## Системные разрешения
+
+`SystemPermissionLifecycleTest` открывает системные окна и требует отдельной подготовки
+разрешений. Соберите и установите debug APK приложения и androidTest APK на эмулятор,
+затем запустите `pwsh -NoProfile -File tools/run-system-permission-tests.ps1 -Serial emulator-5554`
+с фактическим serial. Скрипт временно меняет CAMERA и RECORD_AUDIO, затем восстанавливает
+их исходное состояние; доступ поверх окон должен быть выключен. Запускайте остальные
+instrumentation-тесты с `-Pandroid.testInstrumentationRunnerArguments.notClass=ru.outsideproarts.oassist.permission.SystemPermissionLifecycleTest`.
+Обе фазы обязательны в CI. При принудительном завершении скрипта восстановление не гарантируется.
+
 ## Сборка и тесты
 
 ```powershell

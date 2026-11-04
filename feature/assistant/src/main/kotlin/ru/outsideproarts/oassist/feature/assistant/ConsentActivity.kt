@@ -30,16 +30,11 @@ class ConsentActivity : AppCompatActivity() {
         ActivityResultContracts.RequestMultiplePermissions(),
     ) { results ->
         val id = intent?.getStringExtra(EXTRA_REQUEST_ID)
-        val outcome = when {
-            id == null -> null
-            results.values.all { it } -> PermissionRequestOutcome.GRANTED
-            // Нет rationale после отказа = «больше не спрашивать»: диалог больше не появится.
-            results.filterValues { granted -> !granted }.keys
-                .none { shouldShowRequestPermissionRationale(it) } ->
-                PermissionRequestOutcome.DENIED_FOREVER
-            else -> PermissionRequestOutcome.DENIED
-        }
-        if (id != null && outcome != null) PermissionRequestBridge.complete(id, outcome)
+        val outcome = permissionResultOutcome(
+            intent?.getStringArrayExtra(EXTRA_PERMISSIONS)?.toList().orEmpty(), results,
+            ::shouldShowRequestPermissionRationale,
+        )
+        if (id != null) PermissionRequestBridge.complete(id, outcome)
         finish()
     }
 
@@ -51,10 +46,29 @@ class ConsentActivity : AppCompatActivity() {
                 // Метка «окно показано»: мост отличит живой диалог от заблокированного старта.
                 intent?.getStringExtra(EXTRA_REQUEST_ID)
                     ?.let(PermissionRequestBridge::markStarted)
-                startPermissionRequest()
+                if (savedInstanceState == null) startPermissionRequest()
             }
             MODE_APPROVAL -> showApprovalDialog()
             else -> finish()
+        }
+    }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        // singleInstance can receive another request while its current dialog is open.
+        // Keep the original owner and fail the competing request closed.
+        when (intent.getStringExtra(EXTRA_MODE)) {
+            MODE_PERMISSIONS -> intent.getStringExtra(EXTRA_REQUEST_ID)?.let { id ->
+                if (id != this.intent?.getStringExtra(EXTRA_REQUEST_ID)) {
+                    PermissionRequestBridge.cancel(id)
+                }
+            }
+            MODE_APPROVAL -> intent.getStringExtra(EXTRA_CALL_ID)?.let { id ->
+                if (id != this.intent?.getStringExtra(EXTRA_CALL_ID)) {
+                    ApprovalUiBridge.resolve(id, ApprovalDecision.DENY)
+                    ApprovalUiBridge.clear(id)
+                }
+            }
         }
     }
 
@@ -135,6 +149,7 @@ class ConsentActivity : AppCompatActivity() {
         }
         // Закрытие без решения (назад/система) — fail-closed отказ, иначе стрим зависнет.
         val callId = intent?.getStringExtra(EXTRA_CALL_ID) ?: return
+        if (isChangingConfigurations) return
         if (!decided) {
             ApprovalUiBridge.resolve(callId, ApprovalDecision.DENY)
         }
@@ -172,5 +187,21 @@ class ConsentActivity : AppCompatActivity() {
                 .putExtra(EXTRA_SUMMARY, request.summary)
                 .putExtra(EXTRA_GROUP_KEY, request.groupKey)
                 .putExtra(EXTRA_SCREEN_LOCKED, request.screenLocked)
+    }
+}
+
+internal fun permissionResultOutcome(
+    requested: List<String>,
+    results: Map<String, Boolean>,
+    shouldShowRationale: (String) -> Boolean,
+): PermissionRequestOutcome {
+    if (requested.isEmpty() || !results.keys.containsAll(requested)) {
+        return PermissionRequestOutcome.UNAVAILABLE
+    }
+    val denied = requested.filter { results[it] != true }
+    return when {
+        denied.isEmpty() -> PermissionRequestOutcome.GRANTED
+        denied.none(shouldShowRationale) -> PermissionRequestOutcome.DENIED_FOREVER
+        else -> PermissionRequestOutcome.DENIED
     }
 }
