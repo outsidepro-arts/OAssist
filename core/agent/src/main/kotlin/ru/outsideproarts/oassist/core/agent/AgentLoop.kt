@@ -145,6 +145,7 @@ class AgentLoop(
             val reasoningSb = StringBuilder()
             var reasoningSignature: String? = null
             val replayItems = mutableListOf<String>()
+            var anthropicReplay: ru.outsideproarts.oassist.core.model.AnthropicReplay? = null
 
             val budgetedMessages = enforceImageBudget(messages)
             val roundMessages = buildRuntimeMessages(
@@ -182,6 +183,7 @@ class AgentLoop(
                         if (chunk.delta.isNotEmpty()) reasoningSb.append(chunk.delta)
                         chunk.signature?.let { reasoningSignature = it }
                         chunk.replayJson?.let { replayItems += it }
+                        chunk.anthropicReplay?.let { anthropicReplay = it }
                     }
                     is ChatChunk.ToolCall -> toolCalls.add(chunk)
                     is ChatChunk.Finish -> {
@@ -193,7 +195,7 @@ class AgentLoop(
                     is ChatChunk.ToolResult -> {}
                 }
             }
-            val reasoning = buildReasoningBlock(reasoningSb, reasoningSignature, replayItems)
+            val reasoning = buildReasoningBlock(reasoningSb, reasoningSignature, replayItems, anthropicReplay)
             diagnostics.emit(DiagnosticKind.PROVIDER_RESPONSE, diagnosticOperation,
                 attributes = mapOf("round" to rounds.toString(), "abrupt" to streamAbrupt.toString()),
                 content = Json.encodeToString(ChatMessage(ChatRole.ASSISTANT, contentSb.toString(),
@@ -376,8 +378,9 @@ class AgentLoop(
         text: StringBuilder,
         signature: String?,
         replayItems: List<String>,
+        anthropicReplay: ru.outsideproarts.oassist.core.model.AnthropicReplay?,
     ): ru.outsideproarts.oassist.core.model.ReasoningBlock? {
-        if (text.isEmpty() && signature == null && replayItems.isEmpty()) return null
+        if (text.isEmpty() && signature == null && replayItems.isEmpty() && anthropicReplay == null) return null
         val replayJson = when (replayItems.size) {
             0 -> null
             1 -> replayItems.first()
@@ -387,6 +390,7 @@ class AgentLoop(
             text = text.toString(),
             signature = signature,
             replayJson = replayJson,
+            anthropicReplay = anthropicReplay,
         )
     }
 

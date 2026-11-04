@@ -24,9 +24,10 @@ data class ChatMessage(
 /**
  * Мысли модели, привязанные к assistant-сообщению хода.
  *
- * [text] — display-текст (полотно «Ход работы») и thinking-блок Anthropic;
- * [signature] — подпись Anthropic, обязательна при обратной передаче
- * `thinking`-блока (иначе API 400); [replayJson] — протокольный JSON
+ * [text] — display-текст (полотно «Ход работы»);
+ * [signature] — legacy-подпись единственного thinking-блока Anthropic.
+ * Новые ответы используют [anthropicReplay], сохраняя границы блоков.
+ * [replayJson] — протокольный JSON
  * reasoning-item'ов OpenAI Responses для stateless-replay.
  */
 @Serializable
@@ -34,9 +35,18 @@ data class ReasoningBlock(
     val text: String = "",
     val signature: String? = null,
     val replayJson: String? = null,
+    /** Complete Anthropic response blocks; separate from display text and Responses replay. */
+    val anthropicReplay: AnthropicReplay? = null,
 ) {
-    fun isEmpty(): Boolean = text.isEmpty() && signature == null && replayJson == null
+    fun isEmpty(): Boolean = text.isEmpty() && signature == null && replayJson == null && anthropicReplay == null
 }
+
+/** Opaque, ordered assistant content. Only the originating Anthropic endpoint may replay it. */
+@Serializable
+data class AnthropicReplay(
+    val origin: String,
+    val blocksJson: String,
+)
 
 /**
  * Аудио-приложение к user-ходу: WAV 16 кГц моно в base64 (см. `WavEncoder`).

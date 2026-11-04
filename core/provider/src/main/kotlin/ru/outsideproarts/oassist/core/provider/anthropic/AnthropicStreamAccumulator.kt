@@ -14,16 +14,18 @@ class AnthropicStreamAccumulator {
         var id: String?,
         var name: String?,
         val args: StringBuilder = StringBuilder(),
+        var initialInput: String? = null,
     )
 
     private val accs = LinkedHashMap<Int, Acc>()
 
     /** Старт блока; нетекстовые нетулзовые блоки игнорируются. */
-    fun contentBlockStart(index: Int, blockType: String?, id: String?, name: String?) {
+    fun contentBlockStart(index: Int, blockType: String?, id: String?, name: String?, initialInput: String? = null) {
         if (blockType != "tool_use") return
         val acc = accs.getOrPut(index) { Acc(null, null) }
         id?.let { acc.id = it }
         name?.let { acc.name = it }
+        acc.initialInput = initialInput
     }
 
     /** Кусок `input` одного блока. */
@@ -41,7 +43,7 @@ class AnthropicStreamAccumulator {
             ChatChunk.ToolCall(
                 id = acc.id ?: "call_$index",
                 name = acc.name.orEmpty(),
-                argumentsJson = acc.args.toString().ifBlank { "{}" },
+                argumentsJson = acc.args.toString().ifBlank { acc.initialInput ?: "{}" },
                 index = index,
             )
         }

@@ -54,6 +54,8 @@ class EndpointConfig(
     val extraBody: JsonObject? = null,
     /** Путь каталога моделей; null — стандартный `models` (итог: `{base}/models`). */
     val catalogPath: String? = null,
+    /** Non-secret profile/credential generation for opaque replay ownership. */
+    val replayIdentity: String? = null,
 ) {
     /**
      * Заголовки авторизации по [authScheme]. [AuthScheme.NATIVE] — key-based

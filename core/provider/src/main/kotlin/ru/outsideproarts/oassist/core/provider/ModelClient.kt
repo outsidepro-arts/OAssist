@@ -57,6 +57,7 @@ sealed interface ChatChunk {
         val delta: String,
         val signature: String? = null,
         val replayJson: String? = null,
+        val anthropicReplay: ru.outsideproarts.oassist.core.model.AnthropicReplay? = null,
     ) : ChatChunk
     data class ToolCall(
         val id: String,
@@ -174,6 +175,7 @@ interface ModelClient {
                 requestHeaders = profile.preset.requestHeaders(),
                 extraBody = extraBodyJson(profile.extraBody),
                 catalogPath = profile.catalogPath,
+                replayIdentity = profile.id + ":" + profile.credentialRevision.orEmpty(),
             )
     }
 }

@@ -5,6 +5,8 @@ import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.jsonPrimitive
+import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.put
 import ru.outsideproarts.oassist.core.model.ChatMessage
 import ru.outsideproarts.oassist.core.model.ChatRole
@@ -22,14 +24,15 @@ import ru.outsideproarts.oassist.core.provider.openai.ToolSchemaDto
  * Неподдерживаемых ролей у [ChatRole] нет — ветка exhaustive.
  *
  * [thinkingEnabled] — extended thinking включён в запросе: assistant-сообщения
- * с [ChatMessage.reasoning] получают первый блок `thinking` с подписью —
- * без него API отклоняет tool-use-продолжения (обязательный replay thinking-блоков).
- * Выключенный thinking + мысли в истории → блок НЕ добавляется (API запрещает
- * thinking-блоки при выключенном thinking).
+ * с [ChatMessage.reasoning] возвращают исходные блоки того же origin без изменений.
+ * Legacy-истории содержат только одну пару text/signature: потерянные границы
+ * и redacted-блоки из неё восстановить нельзя. Выключенный thinking не отправляет
+ * reasoning; исходная история при этом не изменяется.
  */
 internal fun mapAnthropicMessages(
     messages: List<ChatMessage>,
     thinkingEnabled: Boolean = false,
+    replayOrigin: String? = null,
 ): Pair<String?, List<AnthropicMessageDto>> {
     messages.firstOrNull { it.audio != null }?.let {
         throw ProviderError.NotSupported("audio input")
@@ -45,9 +48,11 @@ internal fun mapAnthropicMessages(
             ChatRole.ASSISTANT -> {
                 val calls = msg.toolCalls.orEmpty()
                 val reasoning = msg.reasoning
+                val replay = reasoning?.anthropicReplay?.takeIf { thinkingEnabled && it.origin == replayOrigin }
+                    ?.let { completeReplayContent(msg, it.blocksJson) }
                 val thinkingBlock = if (
                     thinkingEnabled && reasoning != null &&
-                    !reasoning.text.isEmpty() && reasoning.signature != null
+                    reasoning.anthropicReplay == null && reasoning.signature != null
                 ) {
                     buildJsonObject {
                         put("type", "thinking")
@@ -57,7 +62,9 @@ internal fun mapAnthropicMessages(
                 } else {
                     null
                 }
-                if (calls.isEmpty() && thinkingBlock == null) {
+                if (replay != null) {
+                    AnthropicMessageDto("assistant", replay)
+                } else if (calls.isEmpty() && thinkingBlock == null) {
                     AnthropicMessageDto("assistant", JsonPrimitive(msg.content))
                 } else {
                     val blocks = buildList {
@@ -96,6 +103,23 @@ internal fun mapAnthropicMessages(
     }
     return system to out
 }
+
+/** Never let an opaque snapshot override edited text or remapped/removed tool calls. */
+private fun completeReplayContent(message: ChatMessage, json: String): JsonArray? = runCatching {
+    val blocks = ProviderJson.parseToJsonElement(json) as? JsonArray ?: return null
+    val objects = blocks.map { it.jsonObject }
+    val text = objects.filter { it["type"]?.jsonPrimitive?.contentOrNull == "text" }
+        .joinToString("") { it["text"]?.jsonPrimitive?.contentOrNull.orEmpty() }
+    if (text != message.content) return null
+    val calls = objects.filter { it["type"]?.jsonPrimitive?.contentOrNull == "tool_use" }
+    if (calls.size != message.toolCalls.orEmpty().size) return null
+    if (!calls.zip(message.toolCalls.orEmpty()).all { (block, call) ->
+        block["id"]?.jsonPrimitive?.contentOrNull == call.id &&
+            block["name"]?.jsonPrimitive?.contentOrNull == call.name &&
+            block["input"] == ProviderJson.parseToJsonElement(call.argumentsJson)
+    }) return null
+    blocks
+}.getOrNull()
 
 /** Схемы OpenAI function calling → Anthropic `tools` (`input_schema`). Пустой список — как null. */
 internal fun mapAnthropicTools(tools: List<ToolSchemaDto>): List<AnthropicToolDto>? {

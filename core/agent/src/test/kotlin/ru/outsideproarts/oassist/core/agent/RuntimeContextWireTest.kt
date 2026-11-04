@@ -6,6 +6,7 @@ import io.ktor.client.plugins.contentnegotiation.ContentNegotiation
 import io.ktor.client.plugins.sse.SSE
 import io.ktor.serialization.kotlinx.json.json
 import kotlinx.coroutines.flow.toList
+import kotlinx.coroutines.flow.take
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeout
 import kotlinx.serialization.json.Json
@@ -49,6 +50,146 @@ import ru.outsideproarts.oassist.core.provider.ModelClient
 class RuntimeContextWireTest {
 
     @get:Rule val temporaryFolder = TemporaryFolder()
+
+    @Test
+    fun anthropicOpaqueBlocksSurviveToolRoundsDiskCodecAndReopen() = runBlocking {
+        withTimeout(30_000) {
+            val blocks = Json.parseToJsonElement("""[
+                {"type":"thinking","thinking":"","signature":"empty+/="},
+                {"type":"text","text":"checking"},
+                {"type":"redacted_thinking","data":"opaque+/="},
+                {"type":"thinking","thinking":"first\nsecond","signature":"signature+/="},
+                {"type":"tool_use","id":"call-1","name":"ping","input":{}}
+            ]""").jsonArray
+            val secondBlocks = Json.parseToJsonElement("""[
+                {"type":"redacted_thinking","data":"second-redaction"},
+                {"type":"tool_use","id":"call-2","name":"ping","input":{}}
+            ]""").jsonArray
+            val final = Json.parseToJsonElement("""[{"type":"text","text":"done"}]""").jsonArray
+            LoopbackSseServer(listOf(blocks, secondBlocks, final, final, final, final, final, final).map(::anthropicSse) +
+                listOf("data: [DONE]\n\n", anthropicSse(final), anthropicSse(final), anthropicSse(final))).use { server ->
+                httpClient().use { http ->
+                    val profile = ProviderProfile(id = "anthropic-replay", name = "Anthropic", preset = ProviderPreset.CUSTOM,
+                        protocol = ModelProtocol.ANTHROPIC_MESSAGES, baseUrl = server.baseUrl + "/v1")
+                    suspend fun agent(p: ProviderProfile = profile, enabled: Boolean = true) = AgentLoop(
+                        ModelClient.create(ru.outsideproarts.oassist.core.model.diagnostics.Diagnostics, p, secrets, http),
+                        ToolRegistry(listOf(PingTool())), reasoningEnabled = enabled)
+                    var transcript = emptyList<ChatMessage>()
+                    agent().stream("model", null, emptyList(), "ping", onTurnMessages = { transcript = it }).toList()
+                    assertEquals(blocks, server.requestBodies[1].parseJsonObject().anthropicAssistantBlocks().first())
+                    assertEquals(listOf(blocks, secondBlocks), server.requestBodies[2].parseJsonObject().anthropicAssistantBlocks())
+                    assertTrue(server.requestBodies[2].contains("second failed result"))
+                    val reasoning = transcript.first { it.toolCalls != null }.reasoning!!
+                    assertEquals("first\nsecond", reasoning.text)
+                    assertEquals(null, reasoning.signature)
+
+                    val folder = temporaryFolder.newFolder()
+                    val storedFile = java.io.File(folder, "turn.json")
+                    storedFile.writeText(TurnCodec.encode(StoredTurn(userText = "ping", turn = transcript), "chat", "turn", ChatMediaStore(folder)))
+                    val restored = requireNotNull(TurnCodec.decode(storedFile.readText(), ChatMediaStore(folder)))
+                    assertEquals(transcript, restored.turn)
+                    agent().stream("model", null, restored.turn, "continue").toList()
+                    assertEquals(listOf(blocks, secondBlocks), server.requestBodies[3].parseJsonObject().anthropicAssistantBlocks().take(2))
+                    agent(profile.copy(id = "another-profile")).stream("model", null, restored.turn, "continue").toList()
+                    agent().stream("another-model", null, restored.turn, "continue").toList()
+                    agent(enabled = false).stream("model", null, restored.turn, "continue").toList()
+                    for (index in 4..6) {
+                        assertFalse(server.requestBodies[index].contains("redacted_thinking"))
+                        assertFalse(server.requestBodies[index].contains("signature+/="))
+                    }
+                    // A switch must not mutate the saved opaque data; returning restores replay.
+                    agent().stream("model", null, restored.turn, "continue").toList()
+                    assertEquals(blocks, server.requestBodies[7].parseJsonObject().anthropicAssistantBlocks().first())
+                    agent(profile.copy(protocol = ModelProtocol.OPENAI_COMPLETIONS)).stream("model", null, restored.turn, "continue").toList()
+                    assertFalse(server.requestBodies[8].contains("signature+/="))
+                    assertFalse(server.requestBodies[8].contains("opaque+/="))
+                    agent(profile.copy(baseUrl = server.baseUrl + "/other")).stream("model", null, restored.turn, "continue").toList()
+                    agent(profile.copy(credentialRevision = "rotated")).stream("model", null, restored.turn, "continue").toList()
+                    assertFalse(server.requestBodies[9].contains("signature+/="))
+                    assertFalse(server.requestBodies[10].contains("signature+/="))
+                    agent().stream("model", null, restored.turn, "continue").toList()
+                    assertEquals(blocks, server.requestBodies[11].parseJsonObject().anthropicAssistantBlocks().first())
+                }
+            }
+        }
+    }
+
+    private fun JsonObject.anthropicAssistantBlocks(): List<JsonArray> = this["messages"]!!.jsonArray
+        .map { it.jsonObject }.filter { it["role"]!!.jsonPrimitive.content == "assistant" }
+        .mapNotNull { it["content"] as? JsonArray }
+
+    @Test
+    fun anthropicIncompleteErrorAndCancelledStreamsNeverPublishReplayOrExecutePartialTools() = runBlocking {
+        withTimeout(30_000) {
+            val prefix = """
+                event: content_block_start
+                data: {"index":0,"content_block":{"type":"thinking","thinking":"","signature":""}}
+
+                event: content_block_delta
+                data: {"index":0,"delta":{"type":"thinking_delta","thinking":"visible partial"}}
+
+                event: content_block_delta
+                data: {"index":0,"delta":{"type":"signature_delta","signature":"partial signature"}}
+
+                event: content_block_stop
+                data: {"index":0}
+
+                event: content_block_start
+                data: {"index":1,"content_block":{"type":"tool_use","id":"partial-call","name":"ping","input":{}}}
+
+            """.trimIndent() + "\n\n"
+            val error = "event: error\ndata: {\"error\":{\"message\":\"stream failed\"}}\n\n"
+            LoopbackSseServer(listOf(prefix, prefix + error, prefix, prefix + "event: message_stop\ndata: {}\n\n")).use { server ->
+                httpClient().use { http ->
+                    val profile = ProviderProfile(id = "partial", name = "Anthropic", preset = ProviderPreset.CUSTOM,
+                        protocol = ModelProtocol.ANTHROPIC_MESSAGES, baseUrl = server.baseUrl)
+                    suspend fun agent() = AgentLoop(
+                        ModelClient.create(ru.outsideproarts.oassist.core.model.diagnostics.Diagnostics, profile, secrets, http),
+                        ToolRegistry(listOf(PingTool())), reasoningEnabled = true)
+                    var saved = emptyList<ChatMessage>()
+                    val chunks = agent().stream("model", null, emptyList(), "ping", onTurnMessages = { saved = it }).toList()
+                    assertTrue(chunks.filterIsInstance<ru.outsideproarts.oassist.core.provider.ChatChunk.Finish>().last().abrupt)
+                    assertTrue(chunks.none { it is ru.outsideproarts.oassist.core.provider.ChatChunk.ToolCall })
+                    assertEquals("visible partial", saved.last().reasoning?.text)
+                    assertEquals(null, saved.last().reasoning?.anthropicReplay)
+                    var published = false
+                    assertTrue(runCatching { agent().stream("model", null, emptyList(), "ping", onTurnMessages = { published = true }).toList() }.isFailure)
+                    assertFalse(published)
+                    agent().stream("model", null, emptyList(), "ping", onTurnMessages = { published = true }).take(1).toList()
+                    assertFalse(published)
+                    assertTrue(runCatching { agent().stream("model", null, emptyList(), "ping", onTurnMessages = { published = true }).toList() }.isFailure)
+                    assertFalse(published)
+                    assertEquals(4, server.requestBodies.size)
+                }
+            }
+        }
+    }
+
+    /** Thinking/signature fields are deliberately split across multiple deltas. */
+    private fun anthropicSse(blocks: JsonArray): String = buildString {
+        fun event(type: String, data: JsonObject) { append("event: $type\ndata: $data\n\n") }
+        event("message_start", kotlinx.serialization.json.buildJsonObject { put("type", "message_start") })
+        blocks.forEachIndexed { index, element ->
+            val block = element.jsonObject
+            val type = block["type"]!!.jsonPrimitive.content
+            val fields = when (type) { "thinking" -> listOf("thinking", "signature"); "text" -> listOf("text"); else -> emptyList() }
+            event("content_block_start", kotlinx.serialization.json.buildJsonObject {
+                put("index", index)
+                put("content_block", JsonObject(block + fields.associateWith { JsonPrimitive("") }))
+            })
+            fields.forEach { field ->
+                val value = block[field]!!.jsonPrimitive.content
+                listOf(value.take(value.length / 2), value.drop(value.length / 2)).forEach { part ->
+                    event("content_block_delta", kotlinx.serialization.json.buildJsonObject {
+                        put("index", index)
+                        put("delta", kotlinx.serialization.json.buildJsonObject { put("type", "${field}_delta"); put(field, part) })
+                    })
+                }
+            }
+            event("content_block_stop", kotlinx.serialization.json.buildJsonObject { put("index", index) })
+        }
+        event("message_stop", kotlinx.serialization.json.buildJsonObject { put("type", "message_stop") })
+    }
 
     @Test
     fun geminiToolSignaturesSurviveToolErrorsSequentialRoundsAndHistoryReload() = runBlocking {
@@ -143,7 +284,9 @@ class RuntimeContextWireTest {
         ProtocolCase(
             ModelProtocol.ANTHROPIC_MESSAGES,
             "",
-            "event: content_block_delta\ndata: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\"ok\"}}\n\n" +
+            "event: content_block_start\ndata: {\"index\":0,\"content_block\":{\"type\":\"text\",\"text\":\"\"}}\n\n" +
+                "event: content_block_delta\ndata: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\"ok\"}}\n\n" +
+                "event: content_block_stop\ndata: {\"index\":0}\n\n" +
                 "event: message_stop\ndata: {\"type\":\"message_stop\"}\n\n",
             "system",
         ),

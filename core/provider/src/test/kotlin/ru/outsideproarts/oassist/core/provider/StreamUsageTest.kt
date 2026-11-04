@@ -173,7 +173,9 @@ class StreamUsageTest {
             respond(
                 content = namedSseBody(
                     "message_start" to """{"type":"message_start","message":{"usage":{"input_tokens":25,"cache_creation_input_tokens":10,"cache_read_input_tokens":100,"output_tokens":1}}}""",
+                    "content_block_start" to """{"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}""",
                     "content_block_delta" to """{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"hi"}}""",
+                    "content_block_stop" to """{"type":"content_block_stop","index":0}""",
                     "message_delta" to """{"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"input_tokens":25,"output_tokens":15,"cache_creation_input_tokens":10,"cache_read_input_tokens":100,"cost":0.0041,"opencode":{"billing_source":"balance"}}}""",
                     "message_stop" to """{"type":"message_stop"}""",
                 ),

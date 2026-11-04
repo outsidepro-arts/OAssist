@@ -227,6 +227,7 @@ internal fun EndpointConfig.withProtocol(protocol: ModelProtocol): EndpointConfi
     requestHeaders = requestHeaders,
     extraBody = extraBody,
     catalogPath = catalogPath,
+    replayIdentity = replayIdentity,
 )
 
 /** Декорации запросов пресета провайдера (заголовки агрегатора и т.п.). */

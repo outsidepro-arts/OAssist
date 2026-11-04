@@ -18,6 +18,8 @@ import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.flow
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.jsonPrimitive
 import ru.outsideproarts.oassist.core.data.secret.SecretStore
 import ru.outsideproarts.oassist.core.model.ModelCapability
 import ru.outsideproarts.oassist.core.model.ModelInfo
@@ -92,7 +94,9 @@ class AnthropicClient internal constructor(
         reasoningEnabled: Boolean,
     ): Flow<ChatChunk> = flow {
         val diagnosticParent = kotlinx.coroutines.currentCoroutineContext()[ru.outsideproarts.oassist.core.model.diagnostics.DiagnosticContext]
-        val (system, mapped) = mapAnthropicMessages(messages, thinkingEnabled = reasoningEnabled)
+        val replayOrigin = ProviderJson.encodeToString(kotlinx.serialization.builtins.ListSerializer(kotlinx.serialization.serializer<String>()),
+            listOf("anthropic_messages", endpoint.baseUrl.trimEnd('/'), endpoint.replayIdentity.orEmpty(), modelId))
+        val (system, mapped) = mapAnthropicMessages(messages, thinkingEnabled = reasoningEnabled, replayOrigin = replayOrigin)
         // budget_tokens обязан быть < max_tokens: при включённом thinking
         // поднимаем потолок, иначе API 400 ("max_tokens must exceed budget").
         val thinking = if (reasoningEnabled) {
@@ -121,6 +125,7 @@ class AnthropicClient internal constructor(
             },
         ) {
             val acc = AnthropicStreamAccumulator()
+            val content = AnthropicContentAccumulator()
             var stopReason: String? = null
             var sawStop = false
             var callsFlushed = false
@@ -167,12 +172,20 @@ class AnthropicClient internal constructor(
                                 AnthropicContentBlockStartEvent.serializer(),
                                 data,
                             )
-                        }.getOrNull() ?: return@collect
+                        }.getOrNull() ?: throw ProviderError.Protocol("anthropic: malformed content block start")
+                        val block = ProviderJson.parseToJsonElement(data).jsonObject["content_block"]?.jsonObject
+                            ?: throw ProviderError.Protocol("anthropic: missing content block")
+                        content.start(start.index, block)
+                        block["text"]?.jsonPrimitive?.content?.takeIf { it.isNotEmpty() }
+                            ?.let { emit(ChatChunk.Content(it)) }
+                        block["thinking"]?.jsonPrimitive?.content?.takeIf { it.isNotEmpty() }
+                            ?.let { emit(ChatChunk.Reasoning(it)) }
                         acc.contentBlockStart(
                             start.index,
                             start.contentBlock?.type,
                             start.contentBlock?.id,
                             start.contentBlock?.name,
+                            block["input"]?.toString(),
                         )
                     }
                     "content_block_delta" -> {
@@ -181,7 +194,9 @@ class AnthropicClient internal constructor(
                                 AnthropicContentBlockDeltaEvent.serializer(),
                                 data,
                             )
-                        }.getOrNull() ?: return@collect
+                        }.getOrNull() ?: throw ProviderError.Protocol("anthropic: malformed content block delta")
+                        val delta = deltaEvent.delta ?: throw ProviderError.Protocol("anthropic: missing content block delta")
+                        content.delta(deltaEvent.index, delta)
                         when (deltaEvent.delta?.type) {
                             "text_delta" -> deltaEvent.delta.text
                                 ?.takeIf { it.isNotEmpty() }
@@ -192,10 +207,14 @@ class AnthropicClient internal constructor(
                             "thinking_delta" -> deltaEvent.delta.thinking
                                 ?.takeIf { it.isNotEmpty() }
                                 ?.let { emit(ChatChunk.Reasoning(it)) }
-                            "signature_delta" -> deltaEvent.delta.signature
-                                ?.let { emit(ChatChunk.Reasoning(delta = "", signature = it)) }
+                            "signature_delta" -> Unit // Kept per block, never attached to concatenated display text.
                             else -> {}
                         }
+                    }
+                    "content_block_stop" -> {
+                        val index = ProviderJson.parseToJsonElement(data).jsonObject["index"]?.jsonPrimitive?.content?.toIntOrNull()
+                            ?: throw ProviderError.Protocol("anthropic: missing content block index")
+                        content.stop(index)
                     }
                     "message_delta" -> {
                         val deltaEvent = runCatching {
@@ -209,6 +228,10 @@ class AnthropicClient internal constructor(
                         deltaEvent.usage?.let { deltaUsage = it }
                     }
                     "message_stop" -> {
+                        val blocks = content.complete()
+                        if (blocks.any { it.jsonObject["type"]?.jsonPrimitive?.content in setOf("thinking", "redacted_thinking") }) {
+                            emit(ChatChunk.Reasoning("", anthropicReplay = ru.outsideproarts.oassist.core.model.AnthropicReplay(replayOrigin, blocks.toString())))
+                        }
                         sawStop = true
                         flushCalls()
                         emit(ChatChunk.Finish(reason = stopReason ?: "end_turn"))
@@ -222,11 +245,11 @@ class AnthropicClient internal constructor(
                     else -> {}
                 }
             }
-            // Страховка: соединение закрылось без `message_stop` — отдать накопленное.
-            // Без терминатора ответ мог быть усечён — помечаем abrupt.
+            // Without message_stop, display deltas remain usable but calls and opaque
+            // replay may be incomplete. Never execute or publish that partial protocol state.
             // Usage несёт только этот финальный Finish (message_stop — без него),
             // иначе аккумуляция в AgentLoop задвоила бы счётчики.
-            flushCalls()
+            if (sawStop) flushCalls()
             emit(ChatChunk.Finish(
                 reason = stopReason ?: "end_turn",
                 abrupt = !sawStop,
@@ -278,6 +301,7 @@ class AnthropicClient internal constructor(
                 protocol = ModelProtocol.ANTHROPIC_MESSAGES,
                 baseUrl = profile.baseUrl,
                 auth = resolveProviderAuth(profile, secretStore, overrides),
+                replayIdentity = profile.id + ":" + profile.credentialRevision.orEmpty(),
             ),
             httpClient,
         )
