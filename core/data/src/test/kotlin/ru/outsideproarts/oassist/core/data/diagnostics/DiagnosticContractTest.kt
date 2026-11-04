@@ -51,6 +51,28 @@ class DiagnosticContractTest {
         assertFalse(result.contains("sensitive"))
     }
 
+    @Test fun `escaped known secrets are removed from JSON and malformed bodies in export`() {
+        val store = DiagnosticStore(Files.createTempDirectory("oassist-escaped-secret").toFile(), cipher)
+        val secret = "marker-secret"
+        val bodies = listOf(
+            """{"detail":"\u006darker-secret","nested":["marker-\u0073ecret"],"\u006darker-secret":"visible","count":42}""",
+            """{"detail":"\u006darker-\u0073ecret""",
+            """{"detail":"marker-secret","ok":true}""",
+        )
+        bodies.forEachIndexed { index, body ->
+            store.record(DiagnosticEvent(DiagnosticKind.PROVIDER_ERROR, "run-$index", content = body), listOf(secret))
+        }
+        val output = ByteArrayOutputStream()
+        store.export(output, 0)
+        val events = unzip(output.toByteArray()).getValue("events.jsonl").decodeToString()
+        assertFalse(events.contains(secret))
+        assertFalse(events.contains("\\u006d"))
+        assertTrue(events.contains("visible"))
+        assertTrue(events.contains("count"))
+        assertTrue(events.contains("REDACTED"))
+        store.close()
+    }
+
     @Test fun `media is omitted by default and included on explicit request`() {
         val store = DiagnosticStore(Files.createTempDirectory("oassist-media-test").toFile(), cipher)
         val encoded = Base64.getEncoder().encodeToString("image-content".toByteArray())

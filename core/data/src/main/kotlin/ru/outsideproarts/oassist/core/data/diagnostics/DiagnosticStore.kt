@@ -56,17 +56,24 @@ internal object DiagnosticSanitizer {
     private val secretKey = Regex("(?i)^(authorization|proxy-authorization|cookie|set-cookie|api[_-]?key|x-api-key|x-goog-api-key|token|access[_-]?token|refresh[_-]?token|password|passwd|pwd|secret|client[_-]?secret|credential|extraheaders)$")
     private val json = Json { ignoreUnknownKeys = true }
     private val urlPattern = Regex("https?://[^\\s\\\"<>]+")
+    private val jsonEscape = Regex("""\\(?:u[0-9a-fA-F]{4}|["\\/bfnrt])""")
 
     fun clean(value: String, secrets: Collection<String>): String {
-        val replaced = secrets.filter { it.isNotEmpty() }.fold(value) { text, secret ->
+        val parsed = if (value.trimStart().startsWith("{") || value.trimStart().startsWith("[")) {
+            runCatching { json.parseToJsonElement(value) }.getOrNull()
+        } else null
+        if (parsed != null) return json.encodeToString(JsonElement.serializer(), cleanJson(parsed, secrets))
+
+        // A truncated or malformed JSON body can still contain escaped credentials.
+        val decoded = jsonEscape.replace(value) { match ->
+            runCatching { json.decodeFromString<String>("\"${match.value}\"") }.getOrDefault(match.value)
+        }
+        val fallback = if (secrets.any { it.isNotEmpty() && decoded.contains(it) }) decoded else value
+        val replaced = secrets.filter { it.isNotEmpty() }.fold(fallback) { text, secret ->
             val escaped = Json.encodeToString(secret).removeSurrounding("\"")
             text.replace(secret, "[REDACTED]").replace(escaped, "[REDACTED]")
         }
-        val parsed = if (replaced.trimStart().startsWith("{") || replaced.trimStart().startsWith("[")) {
-            runCatching { json.parseToJsonElement(replaced) }.getOrNull()
-        } else null
-        return if (parsed == null) cleanText(replaced).replace(Regex("data:[^\\s\\\"]+;base64,[A-Za-z0-9+/=]+"), "[MEDIA_OMITTED_UNPARSEABLE]")
-        else json.encodeToString(JsonElement.serializer(), cleanJson(parsed))
+        return cleanText(replaced).replace(Regex("data:[^\\s\\\"]+;base64,[A-Za-z0-9+/=]+"), "[MEDIA_OMITTED_UNPARSEABLE]")
     }
 
     private fun cleanText(value: String): String = SecretRedactor.redact(urlPattern.replace(value) { match ->
@@ -76,13 +83,20 @@ internal object DiagnosticSanitizer {
         }.getOrDefault("[URL_REDACTED]")
     })
 
-    private fun cleanJson(value: JsonElement, declarations: Boolean = false): JsonElement = when (value) {
-        is JsonObject -> JsonObject(value.mapValues { (key, item) ->
-            if (!declarations && secretKey.matches(key)) JsonPrimitive("[REDACTED]") else cleanJson(item, key == "properties")
+    private fun cleanJson(value: JsonElement, secrets: Collection<String>, declarations: Boolean = false): JsonElement = when (value) {
+        is JsonObject -> JsonObject(value.entries.associate { (key, item) ->
+            redactKnown(key, secrets) to if (!declarations && secretKey.matches(key)) JsonPrimitive("[REDACTED]") else cleanJson(item, secrets, key == "properties")
         })
-        is JsonArray -> JsonArray(value.map { cleanJson(it) })
-        is JsonPrimitive -> if (value.isString) JsonPrimitive(cleanText(value.content)) else value
+        is JsonArray -> JsonArray(value.map { cleanJson(it, secrets) })
+        is JsonPrimitive -> {
+            val redacted = redactKnown(value.content, secrets)
+            if (value.isString) JsonPrimitive(cleanText(redacted))
+            else if (redacted != value.content) JsonPrimitive(redacted) else value
+        }
     }
+
+    private fun redactKnown(value: String, secrets: Collection<String>): String =
+        secrets.filter { it.isNotEmpty() }.fold(value) { text, secret -> text.replace(secret, "[REDACTED]") }
 
     fun attributes(attributes: Map<String, String>, secrets: Collection<String>): Map<String, String> =
         attributes.mapValues { (key, value) ->

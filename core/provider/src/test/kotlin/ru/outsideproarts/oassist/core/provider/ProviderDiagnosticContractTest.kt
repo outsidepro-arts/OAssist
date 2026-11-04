@@ -21,8 +21,48 @@ import ru.outsideproarts.oassist.core.model.ProviderPreset
 import ru.outsideproarts.oassist.core.data.secret.SecretStore
 import ru.outsideproarts.oassist.core.net.WireJson
 import ru.outsideproarts.oassist.core.model.diagnostics.*
+import ru.outsideproarts.oassist.core.data.diagnostics.DiagnosticStore
+import java.io.ByteArrayInputStream
+import java.io.ByteArrayOutputStream
+import java.nio.file.Files
+import java.lang.reflect.Proxy
+import java.util.zip.ZipInputStream
 
 class ProviderDiagnosticContractTest {
+    @Test fun escapedProviderErrorIsSanitizedBeforeExport() = runTest {
+        // The file-backed test constructor and cipher are internal to the data module.
+        val cipherType = Class.forName("ru.outsideproarts.oassist.core.data.diagnostics.DiagnosticCipher")
+        val cipher = Proxy.newProxyInstance(cipherType.classLoader, arrayOf(cipherType)) { _, _, args -> args!![0] }
+        val constructor = DiagnosticStore::class.java.declaredConstructors.single { it.parameterTypes.size == 6 }
+        val store = constructor.newInstance(Files.createTempDirectory("provider-diagnostic-export").toFile(), cipher,
+            { System.currentTimeMillis() }, 1_000_000L, 10_000L, 100_000L) as DiagnosticStore
+        val http = HttpClient(MockEngine {
+            respond("""{"detail":"\u006darker-\u0073ecret","numeric":12345678,"count":42,"code":"invalid_key"}""", HttpStatusCode.Unauthorized)
+        }) { expectSuccess = true }
+        try {
+            val error = runCatching { http.get("https://example.com") }.exceptionOrNull()!!
+            recordProviderHttpError(store, "parent", error, listOf("marker-secret", "12345678"))
+            val archive = ByteArrayOutputStream()
+            store.export(archive, 0)
+            var events = ""
+            ZipInputStream(ByteArrayInputStream(archive.toByteArray())).use { zip ->
+                while (true) {
+                    val entry = zip.nextEntry ?: break
+                    if (entry.name == "events.jsonl") events = zip.readBytes().decodeToString()
+                }
+            }
+            assertFalse(events.contains("marker-secret"))
+            assertFalse(events.contains("12345678"))
+            assertTrue(events.contains("REDACTED"))
+            assertTrue(events.contains("invalid_key"))
+            val event = Json.decodeFromString<DiagnosticEvent>(events.trim())
+            assertEquals(Json.parseToJsonElement("""{"detail":"[REDACTED]","numeric":"[REDACTED]","count":42,"code":"invalid_key"}"""),
+                Json.parseToJsonElement(event.content!!))
+        } finally {
+            http.close()
+            store.close()
+        }
+    }
     @Test fun oversizedProviderErrorIsOmittedRatherThanTruncatedThroughCredential() = runTest {
         val events = mutableListOf<DiagnosticEvent>()
         val recorder = object : DiagnosticRecorder {
