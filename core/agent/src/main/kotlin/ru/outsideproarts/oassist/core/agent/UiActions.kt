@@ -566,21 +566,20 @@ class UiActions(
         val bounds = Rect()
         window?.getBoundsInScreen(bounds)
         val winBounds = bounds.takeIf { window != null && it.width() > 0 && it.height() > 0 }
-        val raw = if (Build.VERSION.SDK_INT >= 34 && window != null) {
-            takeWindowShot(service, window.id)
+        val source = screenshotSource(Build.VERSION.SDK_INT, window != null)
+        val raw = if (source == ScreenshotSource.WINDOW) {
+            takeWindowShot(service, requireNotNull(window).id)
         } else {
             takeDisplayShot(service)
         }
         val bitmap = raw.getOrElse { return Result.failure(it) }
-        val cropped = cropTo(bitmap, winBounds)
+        val cropped = cropTo(bitmap, screenshotFrameCrop(source, winBounds?.toUiRect())?.toRect())
         return Result.success(Frame(cropped, winBounds, window?.title?.toString(), probeBlack(cropped)))
     }
 
     /** Сжатие кадра в JPEG; [bounds] (экранные координаты) переводится в координаты кадра и вырезается. */
     private fun finishFrame(frame: Frame, bounds: Rect?, liftedCurtain: Boolean = false): Result<Shot> {
-        val requested = bounds?.let { b ->
-            frame.window?.let { w -> Rect(b.left - w.left, b.top - w.top, b.right - w.left, b.bottom - w.top) }
-        }
+        val requested = screenshotRegionCrop(bounds?.toUiRect(), frame.window?.toUiRect())?.toRect()
         val cropped = cropTo(frame.bitmap, requested)
         val clipped = requested != null &&
             (cropped.width != requested.width() || cropped.height != requested.height())
