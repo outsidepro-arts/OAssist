@@ -274,7 +274,8 @@ class AgentLoop(
                 } else null
                 val toolSummary = args?.let { toolRegistry?.find(tc.name)?.describeForConfirmation(it) }
                     ?: "${tc.name}: ${tc.argumentsJson}"
-                if (!includesBuiltinBye) events?.onToolCall(tc.name, tc.argumentsJson, toolSummary)
+                val narrationName = toolRegistry?.find(tc.name)?.narrationName ?: tc.name
+                if (!includesBuiltinBye) events?.onToolCall(narrationName, tc.argumentsJson, toolSummary)
                 val result = when {
                     invalidByeBatch -> ToolResult(false, "bye должен быть единственным вызовом раунда; повторите запрос отдельно")
                     invalidFarewell -> ToolResult(false, "Некорректные аргументы bye: farewell должен быть строкой")
@@ -290,7 +291,7 @@ class AgentLoop(
                 if (result.success && toolRegistry?.find(tc.name) is SkillGetTool) {
                     result.ownerInstructions?.takeIf { it.isNotBlank() }?.let(liveSkillInstructions::add)
                 }
-                if (!includesBuiltinBye) events?.onToolResult(tc.name, result.output, result.success)
+                if (!includesBuiltinBye) events?.onToolResult(narrationName, result.output, result.success)
                 // Результат — отдельной сущностью ToolResult (в полотно «Ход работы»,
                 // не в основной ответ; в синтез не идёт). Текстовый маркер
                 // `[name: output]` больше не эмитим — модель получает результат

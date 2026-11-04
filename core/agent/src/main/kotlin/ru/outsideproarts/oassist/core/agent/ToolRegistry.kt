@@ -31,6 +31,8 @@ data class ToolResult(
 /** Инструмент агента. */
 interface Tool {
     val schema: ToolSchema
+    /** Display label for narrative events; never used for dispatch or permissions. */
+    val narrationName: String get() = schema.name
     fun diagnosticSecrets(): Collection<String> = emptyList()
 
     /**
@@ -72,13 +74,22 @@ class ToolRegistry(
     private val diagnostics: DiagnosticRecorder,
 ) {
 
+    init {
+        require(tools.map { it.schema.name }.toSet().size == tools.size) {
+            "Duplicate tool names in registry"
+        }
+    }
+
+    private val effectiveDisabled = disabled + tools.filterIsInstance<ru.outsideproarts.oassist.core.agent.mcp.McpTool>()
+        .filter { it.legacyDisabledName in disabled }.map { it.schema.name }
+
     /** Схемы для модели: только включённые — выключенные модель не должна вызывать. */
     fun schemas(): List<ToolSchema> =
-        tools.filter { it.schema.name !in disabled }.map { it.schema }
+        tools.filter { isEnabled(it.schema.name) }.map { it.schema }
 
     fun find(name: String): Tool? = tools.find { it.schema.name == name }
 
-    fun isEnabled(name: String): Boolean = name !in disabled
+    fun isEnabled(name: String): Boolean = name !in effectiveDisabled
 
     fun diagnosticSecrets(): List<String> = tools.flatMap { it.diagnosticSecrets() }
 

@@ -91,7 +91,7 @@ class McpClientTest {
 
     @Test
     fun toolName_hasServerPrefix() {
-        assertEquals("mcp_srv-1__read", McpTool.displayName("srv-1", "read"))
+        assertTrue(McpTool.displayName("srv-1", "read").startsWith("mcp2_read_"))
     }
 
     @Test
@@ -191,7 +191,7 @@ class McpClientTest {
             val id = McpJson.parseToJsonElement((request.body as TextContent).text).jsonObject["id"]
             if (id == null) return@MockEngine respond("", HttpStatusCode.Accepted)
             respond(
-                """{"jsonrpc":"2.0","id":$id,"result":{"protocolVersion":"2025-06-18"}}""",
+                """{"jsonrpc":"2.0","id":$id,"result":{"protocolVersion":"2025-06-18","tools":[]}}""",
                 HttpStatusCode.OK,
                 headersOf(
                     "Content-Type" to listOf("application/json"),
@@ -219,7 +219,7 @@ class McpClientTest {
             val id = McpJson.parseToJsonElement((request.body as TextContent).text).jsonObject["id"]
             if (id == null) return@MockEngine respond("", HttpStatusCode.Accepted)
             respond(
-                """{"jsonrpc":"2.0","id":$id,"result":{"protocolVersion":"2025-06-18"}}""",
+                """{"jsonrpc":"2.0","id":$id,"result":{"protocolVersion":"2025-06-18","tools":[]}}""",
                 HttpStatusCode.OK,
                 headersOf(
                     "Content-Type" to listOf("application/json"),

@@ -71,14 +71,43 @@ class McpClient(
     private var session: Session? = null
 
     suspend fun listTools(): List<McpToolInfo> {
-        val result = call("tools/list", buildJsonObject {}, McpToolsListResultDto.serializer())
-        return result.tools.map { tool ->
-            McpToolInfo(
-                name = tool.name,
-                description = tool.description,
-                inputSchema = tool.inputSchema ?: JsonObject(emptyMap()),
-            )
+        var active = ensureSession()
+        var restarted = false
+        while (true) {
+            try {
+                return listTools(active)
+            } catch (e: ClientRequestException) {
+                if (e.response.status.value != 404 || active.id == null || restarted) throw e
+                active = ensureSession(expired = active)
+                restarted = true
+            }
         }
+    }
+
+    // Cursors belong to this handshake. Never replay a later page in a new session.
+    private suspend fun listTools(active: Session): List<McpToolInfo> {
+        val tools = mutableListOf<McpToolInfo>()
+        val names = mutableSetOf<String>()
+        val cursors = mutableSetOf<String>()
+        var cursor: String? = null
+        var catalogChars = 0L
+        repeat(MAX_CATALOG_PAGES) {
+            currentCoroutineContext().ensureActive()
+            val params = buildJsonObject { cursor?.let { put("cursor", JsonPrimitive(it)) } }
+            val rpc = doPost("tools/list", params, active).rpc!!
+            val result = decodeResult("tools/list", rpc, McpToolsListResultDto.serializer())
+            catalogChars += rpc.result.toString().length
+            if (catalogChars > MAX_CATALOG_CHARS || result.tools.size > MAX_CATALOG_TOOLS - tools.size) {
+                throw McpError("MCP tools/list: превышен размер каталога")
+            }
+            result.tools.forEach { tool ->
+                if (!names.add(tool.name)) throw McpError("MCP tools/list: повтор имени инструмента")
+                tools += McpToolInfo(tool.name, tool.description, tool.inputSchema ?: JsonObject(emptyMap()))
+            }
+            cursor = result.nextCursor ?: return tools
+            if (!cursors.add(cursor!!)) throw McpError("MCP tools/list: повтор курсора")
+        }
+        throw McpError("MCP tools/list: превышено число страниц каталога")
     }
 
     suspend fun callTool(name: String, arguments: JsonObject): McpCallResultDto {
@@ -226,6 +255,9 @@ class McpClient(
         private const val ACCEPT_JSON = "application/json"
         private const val ACCEPT_SSE = "text/event-stream"
         private const val ERROR_LIMIT = 200
+        private const val MAX_CATALOG_PAGES = 100
+        private const val MAX_CATALOG_TOOLS = 10_000
+        private const val MAX_CATALOG_CHARS = 8_000_000L
 
         private val idCounter = java.util.concurrent.atomic.AtomicLong(1)
         private fun nextId(): Long = idCounter.getAndIncrement()

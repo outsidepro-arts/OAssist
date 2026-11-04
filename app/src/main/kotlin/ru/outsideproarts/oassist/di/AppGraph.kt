@@ -639,7 +639,7 @@ class AppGraph private constructor(context: Context) {
     /**
      * Человекочитаемое имя тула для нарратора (TalkBack не должен слышать сырой
      * идентификатор «web_fetch» / «device_state»). Ищем строковый ресурс
-     * `tool_<name>_title` в пакете; MCP-тулы (`mcp_<id>__<tool>`) оставляем как есть.
+     * `tool_<name>_title` в пакете; MCP уже передаёт подпись сервера и инструмента.
      */
     private fun displayToolName(context: android.content.Context, toolName: String): String {
         val resId = context.resources.getIdentifier(

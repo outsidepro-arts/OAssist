@@ -12,14 +12,14 @@ import org.junit.Test
 class McpToolNameTest {
 
     @Test
-    fun asciiName_prefixedWithShortId() {
-        assertEquals("mcp_abc123__read_file", McpTool.displayName("abc123", "read_file"))
+    fun asciiName_hasReadableLabelAndIdentity() {
+        assertTrue(McpTool.displayName("abc123", "read_file").matches(Regex("mcp2_read_file_[a-f0-9]{48}")))
     }
     @Test
     fun cyrillicAndSpaces_sanitized() {
         val name = McpTool.displayName("srv-1", "прочитать файл!")
         assertTrue("got: $name", name.matches(Regex("[a-zA-Z0-9_-]+")))
-        assertTrue(name.startsWith("mcp_srv-1__"))
+        assertTrue(name.startsWith("mcp2_"))
     }
 
     @Test
@@ -38,7 +38,7 @@ class McpToolNameTest {
 
     @Test
     fun blankInputs_fallBack() {
-        assertEquals("mcp_srv__tool", McpTool.displayName("", ""))
+        assertTrue(McpTool.displayName("", "").startsWith("mcp2_tool_"))
     }
 
     @Test

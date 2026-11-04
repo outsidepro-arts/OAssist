@@ -9,6 +9,7 @@ import ru.outsideproarts.oassist.core.model.ProviderUsage
  */
 interface AgentEvents {
     /**
+     * @param toolName — подпись для нарратива (для встроенных — ключ локализации), не dispatch id.
      * @param argumentsJson — сырой JSON аргументов (для timeline)
      * @param summary — human-readable описание (из `describeForConfirmation`, для речи)
      */

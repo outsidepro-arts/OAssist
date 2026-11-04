@@ -78,7 +78,8 @@ data class McpServerInfoDto(
 
 @Serializable
 data class McpToolsListResultDto(
-    val tools: List<McpToolDescriptionDto> = emptyList(),
+    val tools: List<McpToolDescriptionDto>,
+    val nextCursor: String? = null,
 )
 
 @Serializable

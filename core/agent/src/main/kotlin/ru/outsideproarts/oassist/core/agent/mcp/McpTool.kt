@@ -42,6 +42,9 @@ class McpTool(
     )
 
     override val groupKey: String = ToolGroups.mcp(serverId)
+    override val narrationName: String = "$serverName: $toolName"
+
+    internal val legacyDisabledName: String = legacyDisplayName(serverId, toolName)
 
     override fun describeForConfirmation(arguments: JsonObject): String =
         "MCP «$serverName» → $toolName: $arguments"
@@ -69,11 +72,24 @@ class McpTool(
         private const val CALL_TIMEOUT_MS = 60_000L
 
         /**
-         * Имя в реестре: `mcp_<первые 8 id>__<имя>`, санитизировано под
-         * `^[a-zA-Z0-9_-]{1,64}` (требование OpenAI function calling),
-         * стабильно при переименовании сервера.
+         * Provider-compatible name (ASCII, <=64), independent of catalog order.
+         * Hash the unambiguous full identity, not its shortened/sanitized label.
          */
         fun displayName(serverId: String, toolName: String): String {
+            val identity = kotlinx.serialization.json.JsonArray(listOf(
+                kotlinx.serialization.json.JsonPrimitive(serverId),
+                kotlinx.serialization.json.JsonPrimitive(toolName),
+            )).toString()
+            val hash = java.security.MessageDigest.getInstance("SHA-256")
+                .digest(identity.toByteArray(Charsets.UTF_8)).take(24)
+                .joinToString("") { "%02x".format(it.toInt() and 0xff) }
+            val label = toolName.take(10).map { if (it.isAsciiWord()) it else '_' }
+                .joinToString("").ifBlank { "tool" }
+            return "mcp2_${label}_$hash"
+        }
+
+        // Only a deny compatibility key. Never accept it for dispatch or approvals.
+        internal fun legacyDisplayName(serverId: String, toolName: String): String {
             // Только ASCII: `isLetterOrDigit` пропускает кириллицу, а OpenAI-гейт
             // требует `^[a-zA-Z0-9_-]{1,64}` — всё остальное в `_`.
             val short = serverId.filter { it.isAsciiWord() }.take(8).ifBlank { "srv" }
