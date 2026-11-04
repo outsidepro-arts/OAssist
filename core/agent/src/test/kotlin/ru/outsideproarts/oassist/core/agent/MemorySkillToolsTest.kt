@@ -1,6 +1,7 @@
 package ru.outsideproarts.oassist.core.agent
 
 import kotlinx.coroutines.test.runTest
+import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
 import org.junit.Assert.assertEquals
@@ -64,11 +65,39 @@ class MemoryToolsTest {
         assertTrue(appended.success)
         assertEquals("a\nb", memory.text)
 
-        MemoryPutTool(memory).execute(buildJsonObject {
+        val replaced = MemoryPutTool(memory).execute(buildJsonObject {
             put("text", "c")
             put("mode", "replace")
         })
+        assertTrue(replaced.success)
         assertEquals("c", memory.text)
+    }
+
+    @Test
+    fun put_invalidArgumentTypes_preserveMemory() = runTest {
+        val invalidValues = listOf("null", "42", "true", "{}", "[]")
+        for (value in invalidValues) {
+            for (arguments in listOf(
+                """{"text":$value,"mode":"replace"}""",
+                """{"text":"new fact","mode":$value}""",
+            )) {
+                val memory = FakeMemory("existing fact")
+                val result = MemoryPutTool(memory).execute(Json.parseToJsonElement(arguments) as kotlinx.serialization.json.JsonObject)
+
+                assertEquals(arguments, false, result.success)
+                assertEquals(arguments, "existing fact", MemoryGetTool(memory).execute(buildJsonObject { }).output)
+            }
+        }
+    }
+
+    @Test
+    fun put_stringValuesKeepExistingSemantics() = runTest {
+        val memory = FakeMemory("existing")
+        val tool = MemoryPutTool(memory)
+        for (mode in listOf("", "other", "append")) {
+            assertTrue(tool.execute(buildJsonObject { put("text", " null "); put("mode", mode) }).success)
+        }
+        assertEquals("existing\nnull\nnull\nnull", memory.text)
     }
 
     @Test

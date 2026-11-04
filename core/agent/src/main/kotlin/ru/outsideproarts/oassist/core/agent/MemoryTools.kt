@@ -1,6 +1,7 @@
 package ru.outsideproarts.oassist.core.agent
 
 import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.add
 import kotlinx.serialization.json.buildJsonArray
 import kotlinx.serialization.json.buildJsonObject
@@ -63,10 +64,17 @@ class MemoryPutTool(private val memory: MemoryStore) : Tool {
     }
 
     override suspend fun execute(arguments: JsonObject): ToolResult {
-        val text = runCatching { arguments["text"]?.jsonPrimitive?.content }
-            .getOrNull()?.trim().orEmpty()
+        val textArgument = arguments["text"] as? JsonPrimitive
+        if (textArgument == null || !textArgument.isString) {
+            return ToolResult(false, "text должен быть строкой")
+        }
+        val text = textArgument.content.trim()
         if (text.isEmpty()) return ToolResult(false, "Пустой text — нечего запоминать")
-        val mode = runCatching { arguments["mode"]?.jsonPrimitive?.content }.getOrNull()
+        val modeArgument = arguments["mode"]
+        if (modeArgument != null && (modeArgument !is JsonPrimitive || !modeArgument.isString)) {
+            return ToolResult(false, "mode должен быть строкой")
+        }
+        val mode = (modeArgument as? JsonPrimitive)?.content
         if (mode == "replace") {
             memory.write(text)
         } else {
