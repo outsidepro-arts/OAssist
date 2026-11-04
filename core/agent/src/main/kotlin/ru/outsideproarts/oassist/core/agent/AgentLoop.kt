@@ -78,7 +78,7 @@ class AgentLoop(
         audio: ru.outsideproarts.oassist.core.model.AudioPart? = null,
         /** Образы к user-сообщению (Share-вложения, скриншоты). Null — без образов. */
         images: List<ru.outsideproarts.oassist.core.model.ImagePart>? = null,
-        /** Транскрипт без system/user; передаётся до терминального Finish для сохранения истории. */
+        /** Ровно один терминальный transcript, включая ошибку/отмену; callback не должен бросать. */
         onTurnMessages: ((List<ChatMessage>) -> Unit)? = null,
         promptContext: List<ContextData> = emptyList(),
         modelUserInput: ModelUserInput? = null,
@@ -104,6 +104,14 @@ class AgentLoop(
         }.toMutableList()
         val currentUserIndex = history.size
         val turnStart = messages.size
+        var turnDelivered = false
+        var startedCallId: String? = null
+        fun deliverTurn() {
+            if (turnDelivered) return
+            turnDelivered = true
+            onTurnMessages?.invoke(messages.drop(turnStart).toList())
+        }
+        try {
         val liveSkillInstructions = linkedSetOf<String>()
         val liveToolStatuses = mutableMapOf<Int, Boolean>()
 
@@ -169,6 +177,7 @@ class AgentLoop(
                 tools = tools,
                 reasoningEnabled = reasoningEnabled,
             )
+            try {
             streamRound.retryEarlyFailure(resubscribe = {
                 // Та же история/инструменты раунда: модель ещё ничего не прислала.
                 modelClient.chatCompletionStream(
@@ -182,12 +191,12 @@ class AgentLoop(
                     is ChatChunk.Content -> contentSb.append(chunk.delta)
                     // Мысли — live (UI показывает процесс размышления), без буферизации.
                     is ChatChunk.Reasoning -> {
-                        emit(chunk)
                         if (chunk.delta.isNotEmpty()) reasoningSb.append(chunk.delta)
                         chunk.signature?.let { reasoningSignature = it }
                         chunk.replayJson?.let { replayItems += it }
                         chunk.anthropicReplay?.let { anthropicReplay = it }
                         chunk.geminiReplay?.let { geminiReplay = it }
+                        emit(chunk)
                     }
                     is ChatChunk.ProviderNotice -> emit(chunk)
                     is ChatChunk.ToolCall -> toolCalls.add(chunk)
@@ -200,6 +209,16 @@ class AgentLoop(
                     is ChatChunk.ToolResult -> {}
                 }
             }
+            } catch (failure: Throwable) {
+                // This round never reached dispatch. Pending calls and their provider envelopes
+                // are not a completed protocol turn; earlier executed rounds remain untouched.
+                val partialReasoning = buildReasoningBlock(reasoningSb, reasoningSignature, replayItems, null, null)
+                if (contentSb.isNotEmpty() || partialReasoning != null) {
+                    messages.add(ChatMessage(ChatRole.ASSISTANT, contentSb.toString(),
+                        reasoning = partialReasoning))
+                }
+                throw failure
+            }
             val reasoning = buildReasoningBlock(reasoningSb, reasoningSignature, replayItems, anthropicReplay, geminiReplay)
             diagnostics.emit(DiagnosticKind.PROVIDER_RESPONSE, diagnosticOperation,
                 attributes = mapOf("round" to rounds.toString(), "abrupt" to streamAbrupt.toString()),
@@ -208,19 +227,15 @@ class AgentLoop(
                     reasoning = reasoning)), secrets = diagnosticSecrets())
 
             if (toolCalls.isEmpty()) {
-                if (contentSb.isNotEmpty()) emit(ChatChunk.Content(contentSb.toString()))
-                val turn = messages.drop(turnStart).toList()
-                onTurnMessages?.invoke(
-                    if (contentSb.isNotEmpty() || reasoning != null) {
-                        turn + ChatMessage(
+                if (contentSb.isNotEmpty() || reasoning != null) {
+                    messages.add(ChatMessage(
                             role = ChatRole.ASSISTANT,
                             content = contentSb.toString(),
                             reasoning = reasoning,
-                        )
-                    } else {
-                        turn
-                    },
-                )
+                        ))
+                }
+                deliverTurn()
+                if (contentSb.isNotEmpty()) emit(ChatChunk.Content(contentSb.toString()))
                 val finalUsage = turnUsageWithRequests()
                 emit(ChatChunk.Finish(reason = "stop", abrupt = streamAbrupt, usage = finalUsage))
                 finalUsage?.let { events?.onTurnUsage(it) }
@@ -233,11 +248,6 @@ class AgentLoop(
             val terminalBye = includesBuiltinBye && toolCalls.size == 1
             val invalidByeBatch = includesBuiltinBye && toolCalls.size != 1
 
-            if (contentSb.isNotEmpty() && !includesBuiltinBye) {
-                // Текст перед тул-чунками — комментарий агента к вызовам
-                // («ищу контакт…»): UI решает, озвучивать ли его, по флагу режима.
-                emit(ChatChunk.Content(contentSb.toString(), isToolComment = true))
-            }
             // Ход ассистента с вызовами — одним сообщением с tool_calls,
             // чтобы сервер связал последующие tool-ответы с этим ходом.
             messages.add(
@@ -257,6 +267,9 @@ class AgentLoop(
                 ),
             )
 
+            if (contentSb.isNotEmpty() && !includesBuiltinBye) {
+                emit(ChatChunk.Content(contentSb.toString(), isToolComment = true))
+            }
             for (tc in toolCalls) {
                 if (!invalidByeBatch) {
                     emit(ChatChunk.ToolCall(id = tc.id, name = tc.name, argumentsJson = tc.argumentsJson,
@@ -289,8 +302,12 @@ class AgentLoop(
                     invalidFarewell -> ToolResult(false, "Некорректные аргументы bye: farewell должен быть строкой")
                     args == null -> ToolResult(false, "Некорректные аргументы инструмента: ожидается JSON-объект")
                     terminalBye && farewell == null -> ToolResult(false, "Для bye не задан текст прощания")
-                    else -> executeOneTool(tc, args, diagnosticOperation) { emit(it) }
+                    else -> executeOneTool(tc, args, diagnosticOperation, { startedCallId = tc.id }) { emit(it) }
                 }
+                // Commit the observed result before diagnostics, callbacks or cancellable UI emission.
+                messages.add(ChatMessage(ChatRole.TOOL, result.output, toolCallId = tc.id, images = result.images))
+                liveToolStatuses[messages.lastIndex] = result.success
+                startedCallId = null
                 diagnostics.emit(DiagnosticKind.TOOL_RESULT, diagnosticOperation,
                     attributes = mapOf("name" to tc.name, "call_id" to tc.id,
                         "success" to result.success.toString(), "images_omitted" to result.images.size.toString()),
@@ -315,20 +332,11 @@ class AgentLoop(
                 )
                 // Результат — отдельным tool-сообщением с tool_call_id,
                 // а не текстом от ассистента: иначе модель не узнаёт свой вызов и идёт по кругу.
-                messages.add(
-                    ChatMessage(
-                        role = ChatRole.TOOL,
-                        content = result.output,
-                        toolCallId = tc.id,
-                        images = result.images,
-                    ),
-                )
-                liveToolStatuses[messages.lastIndex] = result.success
                 if (terminalBye && result.success) {
                     val finalText = requireNotNull(farewell)
                     messages.add(ChatMessage(role = ChatRole.ASSISTANT, content = finalText))
                     emit(ChatChunk.Content(finalText, isTerminalFarewell = true))
-                    onTurnMessages?.invoke(messages.drop(turnStart).toList())
+                    deliverTurn()
                     val finalUsage = turnUsageWithRequests()
                     emit(ChatChunk.Finish(reason = "stop", abrupt = streamAbrupt, usage = finalUsage, closeSession = true))
                     finalUsage?.let { events?.onTurnUsage(it) }
@@ -340,12 +348,29 @@ class AgentLoop(
         }
 
         emit(ChatChunk.Content("Достигнут лимит вызовов инструментов."))
-        onTurnMessages?.invoke(messages.drop(turnStart).toList())
+        deliverTurn()
         val finalUsage = turnUsageWithRequests()
         emit(ChatChunk.Finish(reason = "max_tool_rounds", usage = finalUsage))
         finalUsage?.let { events?.onTurnUsage(it) }
         diagnostics.emit(DiagnosticKind.OPERATION_END, diagnosticOperation,
             attributes = mapOf("reason" to "max_tool_rounds"), secrets = diagnosticSecrets())
+        } finally {
+            if (!turnDelivered) {
+                val pending = messages.indexOfLast { it.role == ChatRole.ASSISTANT && !it.toolCalls.isNullOrEmpty() }
+                if (pending >= turnStart) {
+                    val answered = messages.drop(pending + 1).mapNotNull { it.toolCallId }.toSet()
+                    messages[pending].toolCalls.orEmpty().filter { it.id !in answered }.forEach { call ->
+                        val status = if (call.id == startedCallId) {
+                            "Execution interrupted: outcome unknown; an external action may already have occurred. Do not repeat without checking its state."
+                        } else {
+                            "Not executed: the turn ended before this call started."
+                        }
+                        messages.add(ChatMessage(ChatRole.TOOL, status, toolCallId = call.id))
+                    }
+                }
+                deliverTurn()
+            }
+        }
         } catch (e: kotlinx.coroutines.CancellationException) {
             diagnostics.emit(DiagnosticKind.OPERATION_CANCELLED, diagnosticOperation, secrets = diagnosticSecrets())
             throw e
@@ -407,6 +432,7 @@ class AgentLoop(
         tc: ChatChunk.ToolCall,
         args: JsonObject,
         diagnosticOperation: String,
+        onDispatch: () -> Unit,
         emitChunk: suspend (ChatChunk) -> Unit,
     ): ToolResult {
         if (toolRegistry == null) return ToolResult(false, "Инструменты недоступны")
@@ -428,10 +454,11 @@ class AgentLoop(
             attributes = mapOf("name" to tc.name, "call_id" to tc.id, "approval_state" to approvalState.name), secrets = diagnosticSecrets())
         return when (approvalState) {
             ApprovalState.ALLOW -> withContext(DiagnosticContext(diagnosticOperation)) {
+                onDispatch()
                 toolRegistry.execute(tc.name, args)
             }
             ApprovalState.DENY -> ToolResult(false, DENIED_MESSAGE)
-            ApprovalState.ASK -> askAndExecute(toolRegistry, tc, args, tool, groupKey, diagnosticOperation, emitChunk)
+            ApprovalState.ASK -> askAndExecute(toolRegistry, tc, args, tool, groupKey, diagnosticOperation, onDispatch, emitChunk)
         }
     }
 
@@ -474,6 +501,7 @@ class AgentLoop(
         tool: Tool?,
         groupKey: String,
         diagnosticOperation: String,
+        onDispatch: () -> Unit,
         emitChunk: suspend (ChatChunk) -> Unit,
     ): ToolResult {
         val summary = tool?.describeForConfirmation(args) ?: "${tc.name}: ${tc.argumentsJson}"
@@ -504,7 +532,10 @@ class AgentLoop(
         return if (decision == ApprovalDecision.DENY || decision == ApprovalDecision.ALWAYS_DENY) {
             ToolResult(false, DENIED_MESSAGE + note)
         } else {
-            val result = withContext(DiagnosticContext(diagnosticOperation)) { registry.execute(tc.name, args) }
+            val result = withContext(DiagnosticContext(diagnosticOperation)) {
+                onDispatch()
+                registry.execute(tc.name, args)
+            }
             result.copy(output = note + result.output)
         }
     }

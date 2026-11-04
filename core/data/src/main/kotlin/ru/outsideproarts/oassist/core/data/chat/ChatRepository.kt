@@ -128,7 +128,13 @@ class ChatRepository(
      * последней сессии. Пустой список — тоже перезапись (вызывать только когда
      * сессия непустая, см. вызывающего).
      */
-    suspend fun replaceAssistantTurns(turns: List<StoredTurn>) = diagnosticOwnershipLock.withLock {
+    private var assistantOwner = 0L
+
+    /** Serializes ownership changes with writes from a closing overlay. */
+    suspend fun beginAssistantSession(): Long = diagnosticOwnershipLock.withLock { ++assistantOwner }
+
+    suspend fun replaceAssistantTurns(turns: List<StoredTurn>, owner: Long? = null) = diagnosticOwnershipLock.withLock {
+        if (owner != null && owner != assistantOwner) return@withLock
         val oldTurns = database.turnDao().listForChat(ASSISTANT_CHAT_ID)
         val newTurnIds = mutableListOf<String>()
         var committed = false

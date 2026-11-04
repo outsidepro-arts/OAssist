@@ -24,6 +24,7 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 import ru.outsideproarts.oassist.core.data.secret.SecretStore
 import ru.outsideproarts.oassist.core.model.ProviderPreset
+import ru.outsideproarts.oassist.core.model.ChatMessage
 import ru.outsideproarts.oassist.core.model.ProviderProfile
 import ru.outsideproarts.oassist.core.model.diagnostics.Diagnostics
 import ru.outsideproarts.oassist.core.provider.ChatChunk
@@ -72,15 +73,15 @@ class GeminiPromptBlockIntegrationTest {
             val client = ModelClient.create(Diagnostics, ProviderProfile(id = "p", name = "P",
                 preset = ProviderPreset.CUSTOM, baseUrl = "https://h.test"), secrets, http)
             val chunks = mutableListOf<ChatChunk>()
-            var saved = false
+            val terminalTurns = mutableListOf<List<ChatMessage>>()
             val error = runCatching {
-                AgentLoop(client).stream("gemini-test", null, emptyList(), "hi", onTurnMessages = { saved = true })
+                AgentLoop(client).stream("gemini-test", null, emptyList(), "hi", onTurnMessages = terminalTurns::add)
                     .collect { chunks += it }
             }.exceptionOrNull()
             assertEquals("SAFETY", (ProviderError.from(error!!) as ProviderError.PromptBlocked).reason)
             assertEquals(1, requests)
             assertTrue(chunks.isEmpty())
-            assertTrue(!saved)
+            assertEquals(listOf(emptyList<ChatMessage>()), terminalTurns)
         } finally { http.close() }
     }
 }

@@ -11,6 +11,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.launch
 import ru.outsideproarts.oassist.core.agent.AgentFactory
 import ru.outsideproarts.oassist.core.agent.AgentLoop
 import ru.outsideproarts.oassist.core.model.ApprovalRequest
@@ -65,7 +66,19 @@ class ChatSessionViewModel : ViewModel() {
         internal set
 
     override fun onCleared() {
-        scope.cancel()
+        pendingRetry = null
+        historyJob?.cancel()
+        val finishingStream = streamJob
+        finishingStream?.cancel()
+        // The cancelling stream still owns its terminal transcript and can enqueue its save.
+        scope.launch {
+            try {
+                finishingStream?.join()
+                turnSavers.awaitSaved()
+            } finally {
+                scope.cancel()
+            }
+        }
         // Сессия чата заканчивается с закрытием приложения: «разрешено на
         // сессию» и агрегаты usage привязаны к жизни чата, а не к вкладке.
         runCatching {

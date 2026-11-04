@@ -445,27 +445,19 @@ fun ChatScreen(
                 isStreaming = false
                 pendingApproval = null
                 streamJob = null
-                if (timeline.isEmpty && (error != null || cancelled)) {
+                if (timeline.isEmpty && turnTranscript.isEmpty() && (error != null || cancelled)) {
                     messages.removeAt(assistantIndex)
                 } else {
                     publish(false)
-                    // Оборванный/ошибочный ход тоже попадает в историю (усечённо):
-                    // транскрипт с tool-парами есть только у завершённого Finish.
+                    // AgentLoop delivers the terminal transcript even when collection fails or is cancelled.
                     if (!turnRecorded) {
-                        val fallbackTurn = when {
-                            timeline.answerText.isNotBlank() ->
-                                listOf(ChatMessage(ChatRole.ASSISTANT, timeline.answerText))
-                            timeline.commentText.isNotBlank() ->
-                                listOf(ChatMessage(ChatRole.ASSISTANT, timeline.commentText))
-                            else -> emptyList()
-                        }
                         recordTurn(
                             userMsg = userMsg,
                             audio = audio,
                             work = timeline.work,
                             answer = timeline.answerText,
                             usage = timeline.usage,
-                            turn = fallbackTurn,
+                            turn = turnTranscript,
                             diagnosticOperationId = diagnosticId,
                         )
                         turnRecorded = true

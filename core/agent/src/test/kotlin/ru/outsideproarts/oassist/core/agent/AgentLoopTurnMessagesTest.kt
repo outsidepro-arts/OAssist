@@ -310,9 +310,10 @@ class AgentLoopTurnMessagesTest {
     }
 
     @Test
-    fun interruptedTurn_doesNotPublishCompletedTranscriptOrFinish() = runTest {
+    fun interruptedTurnPublishesOnePartialTranscriptWithoutFinish() = runTest {
         for (failure in listOf(CancellationException("cancelled"), IllegalStateException("stream failed"))) {
             var callbacks = 0
+            var terminal = emptyList<ChatMessage>()
             val chunks = mutableListOf<ChatChunk>()
             val client = object : ModelClient {
                 override suspend fun fetchModels(): List<ModelInfo> = emptyList()
@@ -327,11 +328,12 @@ class AgentLoopTurnMessagesTest {
                 }
             }
             val error = runCatching {
-                AgentLoop(client).stream("m", null, emptyList(), "вопрос", onTurnMessages = { callbacks++ })
+                AgentLoop(client).stream("m", null, emptyList(), "вопрос", onTurnMessages = { callbacks++; terminal = it })
                     .collect { chunks += it }
             }.exceptionOrNull()
             assertTrue(error === failure)
-            assertEquals(0, callbacks)
+            assertEquals(1, callbacks)
+            assertEquals("частичный ход", terminal.single().reasoning?.text)
             assertEquals(listOf(ChatChunk.Reasoning("частичный ход")), chunks)
         }
     }

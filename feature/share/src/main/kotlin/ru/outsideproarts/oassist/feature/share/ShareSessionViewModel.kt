@@ -365,7 +365,7 @@ class ShareSessionViewModel internal constructor(private val chatStore: ShareCha
         fun recordTurn() {
             if (turnRecorded) return
             turnRecorded = true
-            if (timeline.isEmpty) return
+            if (timeline.isEmpty && turnTranscript.isEmpty()) return
             val stored = StoredTurn(
                 diagnosticOperationId = diagnosticId,
                 userText = userMsg,
@@ -374,13 +374,7 @@ class ShareSessionViewModel internal constructor(private val chatStore: ShareCha
                 work = timeline.work,
                 answer = timeline.answerText,
                 usage = timeline.usage,
-                turn = turnTranscript.ifEmpty {
-                    if (timeline.answerText.isNotBlank()) {
-                        listOf(ChatMessage(ChatRole.ASSISTANT, timeline.answerText))
-                    } else {
-                        emptyList()
-                    }
-                },
+                turn = turnTranscript,
             )
             turns.add(stored)
             activeUserMsg = null

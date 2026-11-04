@@ -33,6 +33,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -78,6 +79,7 @@ class AssistantOverlayService : LifecycleService(), SavedStateRegistryOwner {
             // Неожиданное падение хода вне collectSafe: честный хинт вместо тишины
             // (finally хода уже сбросил isStreaming/фокус).
             runCatching {
+                isStreaming = false
                 hintText = runCatching {
                     ProviderError.from(e).userMessage(this)
                 }.getOrNull() ?: getString(R.string.assistant_no_provider)
@@ -101,9 +103,9 @@ class AssistantOverlayService : LifecycleService(), SavedStateRegistryOwner {
 
 /** Ходы текущей сессии для закреплённого диалога «Ассистент» (перезапись целиком). */
 private val sessionTurns = mutableListOf<ru.outsideproarts.oassist.core.model.StoredTurn>()
-
-/** Транскрипт текущего хода (assistant/tool пары) — для сохранённого диалога. */
-private var turnTranscript: List<ChatMessage> = emptyList()
+    private var assistantOwner: Long? = null
+    private var assistantSavePending = false
+    private var destroyed = false
     private var sttPreview by mutableStateOf("")
     private var isStreaming by mutableStateOf(false)
     private var providerNotice by mutableStateOf<ChatChunk.ProviderNotice.Kind?>(null)
@@ -278,6 +280,7 @@ private var turnTranscript: List<ChatMessage> = emptyList()
     }
 
     override fun onDestroy() {
+        destroyed = true
         pendingSttStart.cancel()
         ru.outsideproarts.oassist.core.agent.OverlayControl.unregister(overlayControlImpl)
         execute(voiceFlow.onClose())
@@ -473,7 +476,6 @@ private var turnTranscript: List<ChatMessage> = emptyList()
                 AssistVoiceEffect.CancelTurn -> {
                     speech?.stop()
                     turnJob?.cancel()
-                    turnJob = null
                     isStreaming = false
                 }
             }
@@ -588,6 +590,30 @@ private var turnTranscript: List<ChatMessage> = emptyList()
             return
         }
         pendingRetryText = null
+        val previousTurn = turnJob
+        previousTurn?.cancel()
+        isStreaming = true
+        val diagnosticId = ru.outsideproarts.oassist.core.model.diagnostics.Diagnostics.newOperationId()
+        val diagnosticRepo = ru.outsideproarts.oassist.core.data.chat.ChatHandle.get()
+        val diagnosticGeneration = diagnosticRepo?.diagnosticGeneration(
+            ru.outsideproarts.oassist.core.data.chat.ChatRepository.ASSISTANT_CHAT_ID,
+        )
+        turnJob = serviceScope.launchDiagnostic("ASSISTANT", diagnosticId) launch@ {
+        kotlinx.coroutines.withContext(kotlinx.coroutines.NonCancellable) { previousTurn?.join() }
+        kotlinx.coroutines.currentCoroutineContext().ensureActive()
+        if (destroyed) return@launch
+        if (assistantOwner == null) assistantOwner = diagnosticRepo?.beginAssistantSession()
+        if (assistantSavePending && diagnosticRepo != null) {
+            val saved = saveAssistantSnapshot(diagnosticRepo)
+            coroutineContext.ensureActive()
+            if (!saved) {
+                reportAssistantSaveFailure()
+                isStreaming = false
+                execute(voiceFlow.onTurnFinished(false))
+                return@launch
+            }
+        }
+        coroutineContext.ensureActive()
         isStreaming = true
         pendingBye = false
         pendingApproval = null
@@ -598,16 +624,10 @@ private var turnTranscript: List<ChatMessage> = emptyList()
         workEvents = emptyList()
         providerNotice = null
         turnUsage = null
-        turnTranscript = emptyList()
+        var turnTranscript: List<ChatMessage> = emptyList()
+        val timeline = ru.outsideproarts.oassist.core.agent.WorkTimelineBuilder()
         hintText = null
         speech?.stop()
-        turnJob?.cancel()
-        val diagnosticId = ru.outsideproarts.oassist.core.model.diagnostics.Diagnostics.newOperationId()
-        val diagnosticRepo = ru.outsideproarts.oassist.core.data.chat.ChatHandle.get()
-        val diagnosticGeneration = diagnosticRepo?.diagnosticGeneration(
-            ru.outsideproarts.oassist.core.data.chat.ChatRepository.ASSISTANT_CHAT_ID,
-        )
-        turnJob = serviceScope.launchDiagnostic("ASSISTANT", diagnosticId) launch@ {
             try {
                 if (diagnosticRepo != null && diagnosticGeneration != null) diagnosticRepo.bindDiagnosticOperation(
                     ru.outsideproarts.oassist.core.data.chat.ChatRepository.ASSISTANT_CHAT_ID, diagnosticId, diagnosticGeneration,
@@ -645,7 +665,6 @@ private var turnTranscript: List<ChatMessage> = emptyList()
                 val screenImage = session.screenImage
                 session.screenImage = null
                 val agent = factory.agentFor(profile, AssistMode.ASSISTANT)
-                val timeline = ru.outsideproarts.oassist.core.agent.WorkTimelineBuilder()
                 val prompt = factory.systemPromptFor(
                     AssistMode.ASSISTANT,
                     screenContext = session.screenContext,
@@ -669,6 +688,7 @@ private var turnTranscript: List<ChatMessage> = emptyList()
                 // ещё не в scope (там `error` — stdlib-функция), читаем флаг после сбора.
                 var sawAbrupt = false
                 val error = agentSession.chunks.collectSafe { chunk ->
+                    coroutineContext.ensureActive()
                     when (chunk) {
                         is ChatChunk.ProviderNotice -> providerNotice = chunk.kind
                         is ChatChunk.Reasoning -> {
@@ -791,10 +811,15 @@ private var turnTranscript: List<ChatMessage> = emptyList()
                 refreshSessionNotification(force = true)
                 execute(voiceFlow.onTurnFinished(continueDialog))
             } finally {
-                persistAssistantTurn(text, diagnosticId)
-                isStreaming = false
-                srKeepFocusable = false
-                refreshOverlayFocusable()
+                try {
+                    persistAssistantTurn(text, diagnosticId, timeline, turnTranscript)
+                } finally {
+                    if (!destroyed && turnJob === coroutineContext[Job]) {
+                        isStreaming = false
+                        srKeepFocusable = false
+                        refreshOverlayFocusable()
+                    }
+                }
             }
         }
     }
@@ -804,22 +829,43 @@ private var turnTranscript: List<ChatMessage> = emptyList()
      * перезаписью (новая сессия — новый набор ходов). Пустой ход не пишется:
      * случайно открытый оверлей не затирает сохранённую историю.
      */
-    private fun persistAssistantTurn(userText: String, diagnosticId: String) {
-        if (answer.isBlank() && workEvents.isEmpty()) return
+    private suspend fun persistAssistantTurn(
+        userText: String,
+        diagnosticId: String,
+        timeline: ru.outsideproarts.oassist.core.agent.WorkTimelineBuilder,
+        transcript: List<ChatMessage>,
+    ) {
+        if (timeline.isEmpty && transcript.isEmpty()) return
         val stored = ru.outsideproarts.oassist.core.model.StoredTurn(
             diagnosticOperationId = diagnosticId,
             userText = userText,
-            work = workEvents,
-            answer = answer,
-            usage = turnUsage,
-            turn = turnTranscript.ifEmpty {
-                if (answer.isNotBlank()) listOf(ChatMessage(ChatRole.ASSISTANT, answer)) else emptyList()
-            },
+            work = timeline.work,
+            answer = timeline.answerText,
+            usage = timeline.usage,
+            turn = transcript,
         )
         sessionTurns.add(stored)
         val repo = ru.outsideproarts.oassist.core.data.chat.ChatHandle.get() ?: return
-        val snapshot = sessionTurns.toList()
-        serviceScope.launch { repo.replaceAssistantTurns(snapshot) }
+        assistantSavePending = true
+        if (!saveAssistantSnapshot(repo) && !destroyed && turnJob === kotlinx.coroutines.currentCoroutineContext()[Job]) {
+            reportAssistantSaveFailure()
+        }
+    }
+
+    private suspend fun saveAssistantSnapshot(repo: ru.outsideproarts.oassist.core.data.chat.ChatRepository): Boolean =
+        kotlinx.coroutines.withContext(kotlinx.coroutines.NonCancellable) {
+            try {
+                repo.replaceAssistantTurns(sessionTurns.toList(), assistantOwner)
+                assistantSavePending = false
+                true
+            } catch (error: Exception) {
+                false
+            }
+        }
+
+    private fun reportAssistantSaveFailure() {
+        hintText = getString(R.string.assistant_history_save_failed)
+        android.widget.Toast.makeText(this, R.string.assistant_history_save_failed, android.widget.Toast.LENGTH_LONG).show()
     }
 
     private fun onSpeakAnswer() {

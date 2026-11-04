@@ -235,15 +235,16 @@ class RuntimeContextWireTest {
                         protocol = ModelProtocol.GEMINI_GENERATE, baseUrl = server.baseUrl)
                     suspend fun agent() = AgentLoop(ModelClient.create(ru.outsideproarts.oassist.core.model.diagnostics.Diagnostics,
                         profile, secrets, http), ToolRegistry(listOf(PingTool())))
-                    var published = false
+                    val terminalTurns = mutableListOf<List<ChatMessage>>()
                     val observed = mutableListOf<ru.outsideproarts.oassist.core.provider.ChatChunk>()
                     assertTrue(runCatching {
-                        agent().stream("model", null, emptyList(), "ping", onTurnMessages = { published = true }).collect { observed += it }
+                        agent().stream("model", null, emptyList(), "ping", onTurnMessages = terminalTurns::add).collect { observed += it }
                     }.isFailure)
-                    assertFalse(published)
+                    assertEquals(1, terminalTurns.size)
                     assertTrue(observed.none { it is ru.outsideproarts.oassist.core.provider.ChatChunk.ToolResult })
-                    val cancelled = agent().stream("model", null, emptyList(), "ping", onTurnMessages = { published = true }).take(1).toList()
-                    assertFalse(published)
+                    val cancelled = agent().stream("model", null, emptyList(), "ping", onTurnMessages = terminalTurns::add).take(1).toList()
+                    assertEquals(2, terminalTurns.size)
+                    assertTrue(terminalTurns.flatten().all { it.toolCalls.isNullOrEmpty() && it.reasoning?.geminiReplay == null })
                     assertTrue(cancelled.none { it is ru.outsideproarts.oassist.core.provider.ChatChunk.ToolResult })
                     assertEquals(2, server.requestBodies.size)
                 }
@@ -332,11 +333,12 @@ class RuntimeContextWireTest {
                     assertEquals("answer", saved.last().content)
                     assertEquals("partial", saved.last().reasoning!!.text)
                     assertEquals(null, saved.last().reasoning!!.geminiReplay)
-                    var published = false
-                    assertTrue(runCatching { agent().stream("model", null, emptyList(), "hello", onTurnMessages = { published = true }).toList() }.isFailure)
-                    assertFalse(published)
-                    val cancelled = agent().stream("model", null, emptyList(), "hello", onTurnMessages = { published = true }).take(1).toList()
-                    assertFalse(published)
+                    val terminalTurns = mutableListOf<List<ChatMessage>>()
+                    assertTrue(runCatching { agent().stream("model", null, emptyList(), "hello", onTurnMessages = terminalTurns::add).toList() }.isFailure)
+                    assertEquals(1, terminalTurns.size)
+                    val cancelled = agent().stream("model", null, emptyList(), "hello", onTurnMessages = terminalTurns::add).take(1).toList()
+                    assertEquals(2, terminalTurns.size)
+                    assertTrue(terminalTurns.flatten().all { it.reasoning?.geminiReplay == null && it.toolCalls.isNullOrEmpty() })
                     assertTrue(cancelled.filterIsInstance<ru.outsideproarts.oassist.core.provider.ChatChunk.Reasoning>().all { it.geminiReplay == null })
                 }
             }
@@ -455,13 +457,14 @@ class RuntimeContextWireTest {
                     assertTrue(chunks.none { it is ru.outsideproarts.oassist.core.provider.ChatChunk.ToolCall })
                     assertEquals("visible partial", saved.last().reasoning?.text)
                     assertEquals(null, saved.last().reasoning?.anthropicReplay)
-                    var published = false
-                    assertTrue(runCatching { agent().stream("model", null, emptyList(), "ping", onTurnMessages = { published = true }).toList() }.isFailure)
-                    assertFalse(published)
-                    agent().stream("model", null, emptyList(), "ping", onTurnMessages = { published = true }).take(1).toList()
-                    assertFalse(published)
-                    assertTrue(runCatching { agent().stream("model", null, emptyList(), "ping", onTurnMessages = { published = true }).toList() }.isFailure)
-                    assertFalse(published)
+                    val terminalTurns = mutableListOf<List<ChatMessage>>()
+                    assertTrue(runCatching { agent().stream("model", null, emptyList(), "ping", onTurnMessages = terminalTurns::add).toList() }.isFailure)
+                    assertEquals(1, terminalTurns.size)
+                    agent().stream("model", null, emptyList(), "ping", onTurnMessages = terminalTurns::add).take(1).toList()
+                    assertEquals(2, terminalTurns.size)
+                    assertTrue(runCatching { agent().stream("model", null, emptyList(), "ping", onTurnMessages = terminalTurns::add).toList() }.isFailure)
+                    assertEquals(3, terminalTurns.size)
+                    assertTrue(terminalTurns.flatten().all { it.reasoning?.anthropicReplay == null && it.toolCalls.isNullOrEmpty() })
                     assertEquals(4, server.requestBodies.size)
                 }
             }

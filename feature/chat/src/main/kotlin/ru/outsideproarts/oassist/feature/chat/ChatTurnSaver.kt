@@ -108,6 +108,10 @@ internal class ChatTurnSavers(private val scope: CoroutineScope) {
         all.filter { it.failure != null }.forEach { it.retry() }
     }
 
+    suspend fun awaitSaved() {
+        all.toList().forEach { it.awaitSaved() }
+    }
+
     fun discard(id: String): Boolean {
         val saver = byId.remove(id) ?: return false
         saver.discard()
