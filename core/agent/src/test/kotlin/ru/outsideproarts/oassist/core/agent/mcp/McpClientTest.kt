@@ -23,13 +23,15 @@ class McpClientTest {
     /** Сервер по порядку вызовов: initialize → initialized → tools/list → tools/call. */
     private fun scriptedEngine(): MockEngine {
         var calls = 0
-        return MockEngine {
+        return MockEngine { request ->
             calls++
+            val id = McpJson.parseToJsonElement((request.body as TextContent).text).jsonObject["id"]
+            if (id == null) return@MockEngine respond("", HttpStatusCode.Accepted)
             val body = when (calls) {
-                1 -> """{"jsonrpc":"2.0","id":1,"result":{"protocolVersion":"2025-06-18","serverInfo":{"name":"t","version":"1"}}}"""
-                3 -> """{"jsonrpc":"2.0","id":3,"result":{"tools":[{"name":"read","description":"Read file","inputSchema":{"type":"object"}}]}}"""
-                4 -> """{"jsonrpc":"2.0","id":4,"result":{"content":[{"type":"text","text":"file-bytes"}],"isError":false}}"""
-                else -> """{"jsonrpc":"2.0","id":$calls,"result":{}}"""
+                1 -> """{"jsonrpc":"2.0","id":$id,"result":{"protocolVersion":"2025-06-18","serverInfo":{"name":"t","version":"1"}}}"""
+                3 -> """{"jsonrpc":"2.0","id":$id,"result":{"tools":[{"name":"read","description":"Read file","inputSchema":{"type":"object"}}]}}"""
+                4 -> """{"jsonrpc":"2.0","id":$id,"result":{"content":[{"type":"text","text":"file-bytes"}],"isError":false}}"""
+                else -> """{"jsonrpc":"2.0","id":$id,"result":{}}"""
             }
             val headers = if (calls == 1) {
                 headersOf(
@@ -96,12 +98,14 @@ class McpClientTest {
     fun errorResult_mapsToFailure() = runBlocking {
         // runBlocking — см. комментарий в toolAdapter_isAskAndExecutes.
         var calls = 0
-        val engine = MockEngine {
+        val engine = MockEngine { request ->
             calls++
+            val id = McpJson.parseToJsonElement((request.body as TextContent).text).jsonObject["id"]
+            if (id == null) return@MockEngine respond("", HttpStatusCode.Accepted)
             val body = when (calls) {
-                1 -> """{"jsonrpc":"2.0","id":1,"result":{"protocolVersion":"2025-06-18"}}"""
-                3 -> """{"jsonrpc":"2.0","id":3,"result":{"tools":[{"name":"boom","inputSchema":{"type":"object"}}]}}"""
-                else -> """{"jsonrpc":"2.0","id":$calls,"result":{"content":[{"type":"text","text":"denied"}],"isError":true}}"""
+                1 -> """{"jsonrpc":"2.0","id":$id,"result":{"protocolVersion":"2025-06-18"}}"""
+                3 -> """{"jsonrpc":"2.0","id":$id,"result":{"tools":[{"name":"boom","inputSchema":{"type":"object"}}]}}"""
+                else -> """{"jsonrpc":"2.0","id":$id,"result":{"content":[{"type":"text","text":"denied"}],"isError":true}}"""
             }
             respond(body, HttpStatusCode.OK, headersOf("Content-Type" to listOf("application/json")))
         }
@@ -117,38 +121,30 @@ class McpClientTest {
     fun callTool_sessionLost_reinitializesAndRetriesOnce() = runTest {
         // Сервер забыл сессию (рестарт): 404 на tools/call → новый handshake → повтор вызова.
         var calls = 0
-        val engine = MockEngine {
+        val engine = MockEngine { request ->
             calls++
+            val id = McpJson.parseToJsonElement((request.body as TextContent).text).jsonObject["id"]
+            if (id == null) return@MockEngine respond("", HttpStatusCode.Accepted)
             when (calls) {
                 1 -> respond(
-                    """{"jsonrpc":"2.0","id":1,"result":{"protocolVersion":"2025-06-18"}}""",
+                    """{"jsonrpc":"2.0","id":$id,"result":{"protocolVersion":"2025-06-18"}}""",
                     HttpStatusCode.OK,
                     headersOf(
                         "Content-Type" to listOf("application/json"),
                         McpClient.SESSION_HEADER to listOf("sess-1"),
                     ),
                 )
-                2 -> respond(
-                    """{"jsonrpc":"2.0","id":2,"result":{}}""",
-                    HttpStatusCode.OK,
-                    headersOf("Content-Type" to listOf("application/json")),
-                )
                 3 -> respond("gone", HttpStatusCode.NotFound)
                 4 -> respond(
-                    """{"jsonrpc":"2.0","id":4,"result":{"protocolVersion":"2025-06-18"}}""",
+                    """{"jsonrpc":"2.0","id":$id,"result":{"protocolVersion":"2025-06-18"}}""",
                     HttpStatusCode.OK,
                     headersOf(
                         "Content-Type" to listOf("application/json"),
                         McpClient.SESSION_HEADER to listOf("sess-2"),
                     ),
                 )
-                5 -> respond(
-                    """{"jsonrpc":"2.0","id":5,"result":{}}""",
-                    HttpStatusCode.OK,
-                    headersOf("Content-Type" to listOf("application/json")),
-                )
                 else -> respond(
-                    """{"jsonrpc":"2.0","id":6,"result":{"content":[{"type":"text","text":"file-bytes"}],"isError":false}}""",
+                    """{"jsonrpc":"2.0","id":$id,"result":{"content":[{"type":"text","text":"file-bytes"}],"isError":false}}""",
                     HttpStatusCode.OK,
                     headersOf("Content-Type" to listOf("application/json")),
                 )
@@ -192,8 +188,10 @@ class McpClientTest {
             flags.add(
                 request.attributes.contains(ru.outsideproarts.oassist.core.net.NoAutoRetry),
             )
+            val id = McpJson.parseToJsonElement((request.body as TextContent).text).jsonObject["id"]
+            if (id == null) return@MockEngine respond("", HttpStatusCode.Accepted)
             respond(
-                """{"jsonrpc":"2.0","id":1,"result":{}}""",
+                """{"jsonrpc":"2.0","id":$id,"result":{"protocolVersion":"2025-06-18"}}""",
                 HttpStatusCode.OK,
                 headersOf(
                     "Content-Type" to listOf("application/json"),
@@ -218,8 +216,10 @@ class McpClientTest {
         val bodies = mutableListOf<String>()
         val engine = MockEngine { request ->
             bodies.add((request.body as TextContent).text)
+            val id = McpJson.parseToJsonElement((request.body as TextContent).text).jsonObject["id"]
+            if (id == null) return@MockEngine respond("", HttpStatusCode.Accepted)
             respond(
-                """{"jsonrpc":"2.0","id":1,"result":{}}""",
+                """{"jsonrpc":"2.0","id":$id,"result":{"protocolVersion":"2025-06-18"}}""",
                 HttpStatusCode.OK,
                 headersOf(
                     "Content-Type" to listOf("application/json"),

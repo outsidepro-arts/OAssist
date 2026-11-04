@@ -30,6 +30,13 @@ data class McpRequestDto(
 )
 
 @Serializable
+data class McpNotificationDto(
+    val jsonrpc: String = "2.0",
+    val method: String,
+    val params: JsonElement? = null,
+)
+
+@Serializable
 data class McpResponseDto(
     val jsonrpc: String? = null,
     val id: Long? = null,

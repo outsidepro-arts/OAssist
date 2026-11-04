@@ -2,9 +2,18 @@ package ru.outsideproarts.oassist.core.agent.mcp
 
 import io.ktor.client.HttpClient
 import io.ktor.client.request.headers
-import io.ktor.client.request.post
+import io.ktor.client.request.preparePost
+import io.ktor.client.plugins.expectSuccess
+import io.ktor.client.plugins.ClientRequestException
 import io.ktor.client.request.setBody
 import io.ktor.client.statement.bodyAsText
+import io.ktor.client.statement.bodyAsChannel
+import io.ktor.utils.io.readUTF8Line
+import kotlinx.coroutines.ensureActive
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
+import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.jsonObject
 import io.ktor.http.ContentType
 import io.ktor.http.HttpHeaders
 import io.ktor.http.contentType
@@ -55,11 +64,13 @@ class McpClient(
         listOf(value) + credentials
     }
 
-    /** Сессия Streamable HTTP: null — stateless-сервер. */
-    private var sessionId: String? = null
+    // Null session means no completed handshake; a null id inside Session is stateless.
+    private data class Session(val id: String?, val version: String)
+    private data class Exchange(val rpc: McpResponseDto?, val sessionId: String?)
+    private val sessionMutex = Mutex()
+    private var session: Session? = null
 
     suspend fun listTools(): List<McpToolInfo> {
-        ensureSession()
         val result = call("tools/list", buildJsonObject {}, McpToolsListResultDto.serializer())
         return result.tools.map { tool ->
             McpToolInfo(
@@ -71,7 +82,6 @@ class McpClient(
     }
 
     suspend fun callTool(name: String, arguments: JsonObject): McpCallResultDto {
-        ensureSession()
         val params = McpJson.encodeToJsonElement(
             McpCallParamsDto.serializer(),
             McpCallParamsDto(name = name, arguments = arguments),
@@ -79,8 +89,9 @@ class McpClient(
         return call("tools/call", params, McpCallResultDto.serializer())
     }
 
-    private suspend fun ensureSession() {
-        if (sessionId != null) return
+    private suspend fun ensureSession(expired: Session? = null): Session = sessionMutex.withLock {
+        if (expired != null && session === expired) session = null
+        session?.let { return@withLock it }
         val params = McpJson.encodeToJsonElement(
             McpInitializeParamsDto.serializer(),
             McpInitializeParamsDto(
@@ -88,15 +99,16 @@ class McpClient(
                 clientInfo = McpClientInfoDto(name = CLIENT_NAME, version = CLIENT_VERSION),
             ),
         )
-        postRpc("initialize", params)
-        // `notifications/initialized` — без ответа; 202/пустое тело — норма.
-        // Отмену не глотаем (иначе «Стоп» во время handshake залипает).
-        try {
-            postRpc("notifications/initialized", buildJsonObject {})
-        } catch (e: kotlinx.coroutines.CancellationException) {
-            throw e
-        } catch (_: Throwable) {
+        val initialized = doPost("initialize", params, null)
+        val result = decodeResult("initialize", initialized.rpc!!, McpInitializeResultDto.serializer())
+        if (result.protocolVersion != PROTOCOL_VERSION) {
+            throw McpError("MCP initialize: неподдерживаемая версия протокола ${result.protocolVersion?.take(ERROR_LIMIT) ?: "(отсутствует)"}; поддерживается $PROTOCOL_VERSION")
         }
+        val candidate = Session(initialized.sessionId, result.protocolVersion)
+        doPost("notifications/initialized", buildJsonObject {}, candidate, notification = true)
+        currentCoroutineContext().ensureActive()
+        session = candidate
+        candidate
     }
 
     private suspend fun <T> call(
@@ -104,28 +116,35 @@ class McpClient(
         params: JsonElement,
         deserializer: kotlinx.serialization.DeserializationStrategy<T>,
     ): T {
-        val rpc = postRpc(method, params)
+        val active = ensureSession()
+        val rpc = try {
+            doPost(method, params, active).rpc!!
+        } catch (e: ClientRequestException) {
+            // Only a 404 for an assigned session permits replay. A late 404 must
+            // reuse a replacement session, never invalidate that newer handshake.
+            if (e.response.status.value != 404 || active.id == null) throw e
+            doPost(method, params, ensureSession(expired = active)).rpc!!
+        }
+        return decodeResult(method, rpc, deserializer)
+    }
+
+    private fun <T> decodeResult(
+        method: String,
+        rpc: McpResponseDto,
+        deserializer: kotlinx.serialization.DeserializationStrategy<T>,
+    ): T {
         rpc.error?.let { throw McpError("MCP $method: ${it.message.take(ERROR_LIMIT)}") }
         val result = rpc.result ?: throw McpError("MCP $method: пустой result")
         return runCatching { McpJson.decodeFromJsonElement(deserializer, result) }
             .getOrElse { throw McpError("MCP $method: непонятный result", it) }
     }
 
-    private suspend fun postRpc(method: String, params: JsonElement): McpResponseDto {
-        try {
-            return doPost(method, params)
-        } catch (e: io.ktor.client.plugins.ResponseException) {
-            // Сервер забыл сессию (рестарт/эвикция): сбрасываем id, проходим
-            // handshake заново и повторяем вызов один раз. Чужие 404
-            // (неверный URL) — мимо: sessionId там null, пробрасываем как есть.
-            if (e.response.status != io.ktor.http.HttpStatusCode.NotFound || sessionId == null) throw e
-            sessionId = null
-            ensureSession()
-            return doPost(method, params)
-        }
-    }
-
-    private suspend fun doPost(method: String, params: JsonElement): McpResponseDto {
+    private suspend fun doPost(
+        method: String,
+        params: JsonElement,
+        active: Session?,
+        notification: Boolean = false,
+    ): Exchange {
         val operation = Diagnostics.newOperationId()
         val parent = currentCoroutineContext()[DiagnosticContext]?.operationId
         val secrets = diagnosticSecrets()
@@ -133,32 +152,60 @@ class McpClient(
             attributes = mapOf("operation" to "mcp", "method" to method),
             content = params.toString(), secrets = secrets)
         try {
-        val request = McpRequestDto(id = nextId(), method = method, params = params)
-        val httpResponse = http.post(url) {
-            attributes.put(ru.outsideproarts.oassist.core.net.DiagnosticOperationKey, operation)
-            attributes.put(ru.outsideproarts.oassist.core.net.DiagnosticAttemptKey, java.util.concurrent.atomic.AtomicInteger())
-            // tools/call может иметь сайд-эффект (отправить/создать): авто-повтор
-            // задвоит действие, если запрос дошёл, а ответ потерялся. initialize
-            // и tools/list идемпотентны — им повтор HttpRequestRetry полезен.
-            if (method == "tools/call") {
-                attributes.put(ru.outsideproarts.oassist.core.net.NoAutoRetry, Unit)
+            val requestId = if (notification) null else nextId()
+            val requestBody = if (notification) {
+                McpJson.encodeToString(McpNotificationDto.serializer(), McpNotificationDto(method = method, params = params))
+            } else {
+                McpJson.encodeToString(McpRequestDto.serializer(), McpRequestDto(id = requestId!!, method = method, params = params))
             }
-            headers {
-                append(HttpHeaders.ContentType, ContentType.Application.Json.toString())
-                append(HttpHeaders.Accept, "$ACCEPT_JSON, $ACCEPT_SSE")
-                sessionId?.let { append(SESSION_HEADER, it) }
-                this@McpClient.headers.forEach { (name, value) -> append(name, value) }
+            return http.preparePost(url) {
+                expectSuccess = false
+                attributes.put(ru.outsideproarts.oassist.core.net.DiagnosticOperationKey, operation)
+                attributes.put(ru.outsideproarts.oassist.core.net.DiagnosticAttemptKey, java.util.concurrent.atomic.AtomicInteger())
+                // tools/call может иметь сайд-эффект (отправить/создать): авто-повтор
+                // задвоит действие, если запрос дошёл, а ответ потерялся. initialize
+                // и tools/list идемпотентны — им повтор HttpRequestRetry полезен.
+                if (method == "tools/call") {
+                    attributes.put(ru.outsideproarts.oassist.core.net.NoAutoRetry, Unit)
+                }
+                headers {
+                    append(HttpHeaders.ContentType, ContentType.Application.Json.toString())
+                    append(HttpHeaders.Accept, "$ACCEPT_JSON, $ACCEPT_SSE")
+                    this@McpClient.headers.forEach { (name, value) -> append(name, value) }
+                    // Session/protocol are transport-owned, even when custom headers contain them.
+                    remove(SESSION_HEADER)
+                    remove(PROTOCOL_HEADER)
+                    active?.id?.let { append(SESSION_HEADER, it) }
+                    active?.version?.let { append(PROTOCOL_HEADER, it) }
+                }
+                contentType(ContentType.Application.Json)
+                setBody(requestBody)
+            }.execute { httpResponse ->
+                if (httpResponse.status.value >= 400) throw ClientRequestException(httpResponse, "MCP HTTP ${httpResponse.status.value}")
+                if (httpResponse.status.value !in 200..299) throw McpError("MCP $method: HTTP ${httpResponse.status.value}")
+                val parsed = if (notification) {
+                    if (httpResponse.status.value != 202 || httpResponse.bodyAsText().isNotEmpty()) {
+                        throw McpError("MCP $method: ожидался HTTP 202 без тела")
+                    }
+                    null
+                } else if (httpResponse.contentType()?.withoutParameters() == ContentType.Text.EventStream) {
+                    val parser = SseResponseParser(method, requestId!!)
+                    val channel = httpResponse.bodyAsChannel()
+                    var matched: McpResponseDto? = null
+                    while (matched == null) {
+                        val line = channel.readUTF8Line() ?: break
+                        matched = parser.line(line)
+                    }
+                    matched ?: throw McpError("MCP $method: SSE завершён без ответа на запрос")
+                } else {
+                    parseRpcBody(httpResponse.bodyAsText(), httpResponse.headers[HttpHeaders.ContentType], method, requestId!!)
+                }
+                currentCoroutineContext().ensureActive()
+                diagnostics.emit(DiagnosticKind.OPERATION_END, operation,
+                    attributes = mapOf("status" to httpResponse.status.value.toString(), "method" to method),
+                    content = parsed?.let { McpJson.encodeToString(McpResponseDto.serializer(), it) }, secrets = secrets)
+                Exchange(parsed, httpResponse.headers[SESSION_HEADER])
             }
-            contentType(ContentType.Application.Json)
-            setBody(McpJson.encodeToString(McpRequestDto.serializer(), request))
-        }
-        httpResponse.headers[SESSION_HEADER]?.let { sessionId = it }
-        val contentType = httpResponse.headers[HttpHeaders.ContentType]
-        val parsed = parseRpcBody(httpResponse.bodyAsText(), contentType, method)
-        diagnostics.emit(DiagnosticKind.OPERATION_END, operation,
-            attributes = mapOf("status" to httpResponse.status.value.toString(), "method" to method),
-            content = McpJson.encodeToString(McpResponseDto.serializer(), parsed), secrets = secrets)
-        return parsed
         } catch (e: kotlinx.coroutines.CancellationException) {
             diagnostics.emit(DiagnosticKind.OPERATION_CANCELLED, operation, secrets = secrets)
             throw e
@@ -171,6 +218,7 @@ class McpClient(
 
     companion object {
         const val SESSION_HEADER = "mcp-session-id"
+        const val PROTOCOL_HEADER = "MCP-Protocol-Version"
         const val PROTOCOL_VERSION = "2025-06-18"
         const val CLIENT_NAME = "oassist"
         const val CLIENT_VERSION = "1"
@@ -182,31 +230,47 @@ class McpClient(
         private val idCounter = java.util.concurrent.atomic.AtomicLong(1)
         private fun nextId(): Long = idCounter.getAndIncrement()
 
-        /**
-         * Чистый парсер тела ответа: plain JSON-RPC или SSE-обёртка
-         * (`data: {...}` строками). Тестируется без HTTP.
-         */
-        internal fun parseRpcBody(body: String, contentType: String?, method: String): McpResponseDto {
-            val json = if (contentType?.contains(ACCEPT_SSE) == true || isSseBody(body)) {
-                extractSseData(body) ?: throw McpError("MCP $method: пустой SSE-поток")
-            } else {
-                body
+        internal fun parseRpcBody(body: String, contentType: String?, method: String, expectedId: Long): McpResponseDto {
+            if (contentType?.substringBefore(';')?.trim()?.equals(ACCEPT_SSE, true) == true ||
+                body.lineSequence().any { it.startsWith("data:") || it.startsWith("event:") }
+            ) {
+                val parser = SseResponseParser(method, expectedId)
+                for (line in body.reader().readLines()) parser.line(line)?.let { return it }
+                throw McpError("MCP $method: SSE завершён без ответа на запрос")
             }
-            return runCatching { McpJson.decodeFromString(McpResponseDto.serializer(), json) }
+            return matchingResponse(body, method, expectedId)
+                ?: throw McpError("MCP $method: ответ не соответствует id запроса")
+        }
+
+        private fun matchingResponse(json: String, method: String, expectedId: Long): McpResponseDto? {
+            val message = runCatching { McpJson.parseToJsonElement(json).jsonObject }
+                .getOrElse { throw McpError("MCP $method: не JSON-RPC ответ", it) }
+            // Notifications, server requests and unrelated responses cannot satisfy this call.
+            if ("method" in message || message["id"] != JsonPrimitive(expectedId)) return null
+            if (message["jsonrpc"] != JsonPrimitive("2.0") ||
+                (("result" in message) == ("error" in message))
+            ) throw McpError("MCP $method: некорректный JSON-RPC ответ")
+            return runCatching { McpJson.decodeFromJsonElement(McpResponseDto.serializer(), message) }
                 .getOrElse { throw McpError("MCP $method: не JSON-RPC ответ", it) }
         }
 
-        private fun isSseBody(body: String): Boolean =
-            body.lineSequence().any { it.startsWith("data:") || it.startsWith("event:") }
+        private class SseResponseParser(private val method: String, private val expectedId: Long) {
+            private val data = mutableListOf<String>()
+            private var firstLine = true
 
-        private fun extractSseData(body: String): String? {
-            val payloads = body.lineSequence()
-                .filter { it.startsWith("data:") }
-                .map { it.removePrefix("data:").trim() }
-                .filter { it.isNotEmpty() && it != "[DONE]" }
-                .toList()
-            // Для result-объектов берём последний data (финальный ответ).
-            return payloads.lastOrNull()
+            fun line(raw: String): McpResponseDto? {
+                val line = if (firstLine) raw.removePrefix("\uFEFF") else raw
+                firstLine = false
+                if (line.isEmpty()) {
+                    if (data.isEmpty()) return null
+                    val payload = data.joinToString("\n")
+                    data.clear()
+                    return matchingResponse(payload, method, expectedId)
+                }
+                val field = line.substringBefore(':')
+                if (field == "data") data += line.substringAfter(':', "").removePrefix(" ")
+                return null
+            }
         }
     }
 }

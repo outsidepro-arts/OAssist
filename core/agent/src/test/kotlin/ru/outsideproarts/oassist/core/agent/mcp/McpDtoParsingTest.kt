@@ -11,18 +11,18 @@ class McpDtoParsingTest {
         val body = McpClient.parseRpcBody(
             """{"jsonrpc":"2.0","id":1,"result":{"tools":[{"name":"read","description":"Read","inputSchema":{"type":"object"}}]}}""",
             "application/json",
-            "tools/list",
+            "tools/list", 1,
         )
         val result = McpJson.decodeFromJsonElement(McpToolsListResultDto.serializer(), body.result!!)
         assertEquals("read", result.tools.single().name)
     }
 
     @Test
-    fun sseWrapped_parsesLastData() {
+    fun sseWrapped_parsesMatchingEvent() {
         val body = McpClient.parseRpcBody(
             "event: message\ndata: {\"jsonrpc\":\"2.0\",\"id\":1,\"result\":{\"tools\":[]}}\n\n",
             "text/event-stream",
-            "tools/list",
+            "tools/list", 1,
         )
         val result = McpJson.decodeFromJsonElement(McpToolsListResultDto.serializer(), body.result!!)
         assertTrue(result.tools.isEmpty())
@@ -31,9 +31,9 @@ class McpDtoParsingTest {
     @Test
     fun sseDetected_byBodyShape() {
         val body = McpClient.parseRpcBody(
-            "data: {\"jsonrpc\":\"2.0\",\"id\":3,\"result\":{\"content\":[{\"type\":\"text\",\"text\":\"hi\"}]}}",
+            "data: {\"jsonrpc\":\"2.0\",\"id\":3,\"result\":{\"content\":[{\"type\":\"text\",\"text\":\"hi\"}]}}\n\n",
             null,
-            "tools/call",
+            "tools/call", 3,
         )
         val result = McpJson.decodeFromJsonElement(McpCallResultDto.serializer(), body.result!!)
         assertEquals("hi", result.content.single().text)
@@ -44,7 +44,7 @@ class McpDtoParsingTest {
         val body = McpClient.parseRpcBody(
             """{"jsonrpc":"2.0","id":1,"error":{"code":-32601,"message":"Method not found"}}""",
             "application/json",
-            "tools/list",
+            "tools/list", 1,
         )
         assertEquals(-32601, body.error!!.code)
         assertEquals("Method not found", body.error.message)
@@ -52,11 +52,11 @@ class McpDtoParsingTest {
 
     @Test(expected = McpError::class)
     fun malformed_throwsMcpError() {
-        McpClient.parseRpcBody("not-json-{", "application/json", "tools/list")
+        McpClient.parseRpcBody("not-json-{", "application/json", "tools/list", 1)
     }
 
     @Test(expected = McpError::class)
     fun emptySse_throwsMcpError() {
-        McpClient.parseRpcBody("event: ping\n\n", "text/event-stream", "tools/list")
+        McpClient.parseRpcBody("event: ping\n\n", "text/event-stream", "tools/list", 1)
     }
 }

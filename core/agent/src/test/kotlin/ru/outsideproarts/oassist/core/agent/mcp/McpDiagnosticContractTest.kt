@@ -5,6 +5,8 @@ import io.ktor.client.engine.mock.MockEngine
 import io.ktor.client.engine.mock.respond
 import io.ktor.http.HttpStatusCode
 import io.ktor.http.headersOf
+import io.ktor.http.content.TextContent
+import kotlinx.serialization.json.jsonObject
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withContext
@@ -30,12 +32,14 @@ class McpDiagnosticContractTest {
     @Test fun mcpEmitsCorrelatedEventsAndSuppliesCredentialsForRawPayloads() = runBlocking {
         val recorder = Recorder()
         var count = 0
-        val engine = MockEngine {
+        val engine = MockEngine { request ->
             count++
+            val id = McpJson.parseToJsonElement((request.body as TextContent).text).jsonObject["id"]
+            if (id == null) return@MockEngine respond("", HttpStatusCode.Accepted)
             val body = when (count) {
-                1, 2 -> """{"jsonrpc":"2.0","id":1,"result":{}}"""
-                3 -> """{"jsonrpc":"2.0","id":3,"result":{"content":[{"type":"text","text":"$token $basic"}]}}"""
-                else -> """{"jsonrpc":"2.0","id":4,"error":{"code":-1,"message":"$token $basic"}}"""
+                1 -> """{"jsonrpc":"2.0","id":$id,"result":{"protocolVersion":"2025-06-18"}}"""
+                3 -> """{"jsonrpc":"2.0","id":$id,"result":{"content":[{"type":"text","text":"$token $basic"}]}}"""
+                else -> """{"jsonrpc":"2.0","id":$id,"error":{"code":-1,"message":"$token $basic"}}"""
             }
             respond(body, HttpStatusCode.OK, headersOf(
                 "Content-Type" to listOf("application/json"),

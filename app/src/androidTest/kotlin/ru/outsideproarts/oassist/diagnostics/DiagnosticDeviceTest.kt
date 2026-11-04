@@ -20,6 +20,9 @@ import io.ktor.utils.io.ByteReadChannel
 import io.ktor.utils.io.InternalAPI
 import io.ktor.http.HttpStatusCode
 import io.ktor.http.headersOf
+import io.ktor.http.content.TextContent
+import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.flow.toList
 import kotlinx.coroutines.runBlocking
@@ -168,12 +171,14 @@ class DiagnosticDeviceTest {
     @Test fun mcpCredentialEchoIsRemovedFromArchivedResponseAndFollowingAgentRound() = runBlocking {
         val token = "mcp-credential-${UUID.randomUUID()}"
         var requests = 0
-        val engine = MockEngine {
+        val engine = MockEngine { request ->
             requests++
+            val id = WireJson.parseToJsonElement((request.body as TextContent).text).jsonObject["id"]
+            if (id == null) return@MockEngine respond("", HttpStatusCode.Accepted)
             val body = when {
-                requests <= 2 -> """{"jsonrpc":"2.0","id":1,"result":{}}"""
-                requests == 3 -> """{"jsonrpc":"2.0","id":3,"result":{"content":[{"type":"text","text":"mcp-echo-marker $token"}]}}"""
-                else -> """{"jsonrpc":"2.0","id":4,"error":{"code":-1,"message":"mcp-error-marker $token"}}"""
+                requests == 1 -> """{"jsonrpc":"2.0","id":$id,"result":{"protocolVersion":"2025-06-18"}}"""
+                requests == 3 -> """{"jsonrpc":"2.0","id":$id,"result":{"content":[{"type":"text","text":"mcp-echo-marker $token"}]}}"""
+                else -> """{"jsonrpc":"2.0","id":$id,"error":{"code":-1,"message":"mcp-error-marker $token"}}"""
             }
             respond(body, HttpStatusCode.OK, headersOf(
                 "Content-Type" to listOf("application/json"),
@@ -235,9 +240,20 @@ class DiagnosticDeviceTest {
         val config = MockEngineConfig().apply {
             requestHandlers.add { request ->
                 if (request.url.host == "mcp.example.com") {
-                    val body = """{"jsonrpc":"2.0","id":1,"result":{"content":[{"type":"text","text":"tool-wire-marker $token"}]}}"""
-                    respond(body, HttpStatusCode.OK, headersOf(
-                        "Content-Type" to listOf("application/json"), McpClient.SESSION_HEADER to listOf("session")))
+                    val message = WireJson.parseToJsonElement((request.body as TextContent).text).jsonObject
+                    val id = message["id"]
+                    if (id == null) {
+                        respond("", HttpStatusCode.Accepted)
+                    } else {
+                        val result = if (message["method"]!!.jsonPrimitive.content == "initialize") {
+                            """{"protocolVersion":"2025-06-18"}"""
+                        } else {
+                            """{"content":[{"type":"text","text":"tool-wire-marker $token"}]}"""
+                        }
+                        val body = """{"jsonrpc":"2.0","id":$id,"result":$result}"""
+                        respond(body, HttpStatusCode.OK, headersOf(
+                            "Content-Type" to listOf("application/json"), McpClient.SESSION_HEADER to listOf("session")))
+                    }
                 } else {
                     var body = request.body
                     while (body is OutgoingContent.ContentWrapper) body = body.delegate()
