@@ -3,6 +3,9 @@
     <uses-permission android:name="android.permission.RECORD_AUDIO" />
     <application>
         <activity
+            android:name="ru.outsideproarts.oassist.vis.SessionBindProbeActivity"
+            android:exported="true" />
+        <activity
             android:name="ru.outsideproarts.oassist.vis.AssistScreenFixtureActivity"
             android:exported="true"
             android:theme="@android:style/Theme.Material.Light.NoActionBar" />

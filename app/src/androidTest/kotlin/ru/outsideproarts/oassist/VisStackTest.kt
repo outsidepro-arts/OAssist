@@ -75,7 +75,8 @@ class VisStackTest {
     @Test
     fun sessionService_declared() {
         val cn = ComponentName(context, OAssistVoiceInteractionSessionService::class.java)
-        assertNotNull(pm.getServiceInfo(cn, 0))
+        val info = pm.getServiceInfo(cn, 0)
+        assertEquals(android.Manifest.permission.BIND_VOICE_INTERACTION, info.permission)
     }
 
     @Test
