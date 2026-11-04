@@ -10,12 +10,16 @@ import ru.outsideproarts.oassist.core.provider.opencode.OpenCodeUsageExtensionDt
 @Serializable
 data class AnthropicModelsResponseDto(
     val data: List<AnthropicModelDto> = emptyList(),
+    @SerialName("has_more") val hasMore: Boolean = false,
+    @SerialName("last_id") val lastId: String? = null,
 )
 
 @Serializable
 data class AnthropicModelDto(
     val id: String,
     @SerialName("display_name") val displayName: String? = null,
+    val name: String? = null,
+    val type: String? = null,
 )
 
 /** Запрос POST /v1/messages. `content` — строка или массив блоков (см. маппер).

@@ -1360,9 +1360,9 @@ private fun protocolName(protocol: ModelProtocol): String = when (protocol) {
  */
 internal fun filteredModels(query: String, models: List<ModelInfo>): List<ModelInfo> =
     if (query.isBlank()) {
-        models
+        models.filter { it.isChatCompatible }
     } else {
-        FuzzyMatcher.rank(query, models) { modelSearchText(it) }
+        FuzzyMatcher.rank(query, models.filter { it.isChatCompatible }) { modelSearchText(it) }
     }
 
 private fun modelSearchText(model: ModelInfo): String =

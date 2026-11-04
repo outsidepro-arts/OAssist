@@ -39,6 +39,51 @@ import ru.outsideproarts.oassist.core.model.ProviderProfile
  */
 class RoutingModelClientTest {
 
+    @Test
+    fun fetchedNonChatModelIsRejectedBeforeProbeAndStreamDespiteOverride() = runTest {
+        var requests = 0
+        val engine = http {
+            requests++
+            respond("""{"data":[{"id":"m","type":"classification"}]}""", headers = headersOf("Content-Type", "application/json"))
+        }
+        try {
+            val client = ModelClient.create(ru.outsideproarts.oassist.core.model.diagnostics.Diagnostics,
+                profile(null), emptySecrets, engine, protocolOverride = { ModelProtocol.ANTHROPIC_MESSAGES })
+            client.fetchModels()
+            val probeError = runCatching { client.probeCapabilities("m") }.exceptionOrNull()
+            val streamError = runCatching { client.chatCompletionStream("m", emptyList(), emptyList(), false).collect() }.exceptionOrNull()
+            for (error in listOf(probeError, streamError)) {
+                assertTrue(error is ProviderError.InvalidInput)
+                assertEquals(ProviderError.InvalidInput.Reason.MODEL_NOT_CHAT_COMPATIBLE, (error as ProviderError.InvalidInput).reason)
+            }
+            assertEquals(1, requests)
+        } finally { engine.close() }
+    }
+
+    @Test
+    fun runtimeReadsCurrentCatalogMetadataAndKeepsUnknownModelsUsable() = runTest {
+        var requests = 0
+        var metadata: ru.outsideproarts.oassist.core.model.ModelInfo? = null
+        val engine = http {
+            requests++
+            respond(anthropicProbeOk, headers = headersOf("Content-Type", "application/json"))
+        }
+        try {
+            val client = ModelClient.create(ru.outsideproarts.oassist.core.model.diagnostics.Diagnostics,
+                profile(ModelProtocol.ANTHROPIC_MESSAGES), emptySecrets, engine, modelInfo = { metadata })
+            client.probeCapabilities("m")
+            val allowedRequests = requests
+            assertTrue(allowedRequests > 0)
+            metadata = ru.outsideproarts.oassist.core.model.ModelInfo("m", purpose = "embedding")
+            assertTrue(runCatching { client.probeCapabilities("m") }.exceptionOrNull() is ProviderError.InvalidInput)
+            assertTrue(runCatching { client.chatCompletionStream("m", emptyList(), emptyList(), false).collect() }.exceptionOrNull() is ProviderError.InvalidInput)
+            assertEquals(allowedRequests, requests)
+            metadata = ru.outsideproarts.oassist.core.model.ModelInfo("m", purpose = "future")
+            client.probeCapabilities("m")
+            assertTrue(requests > allowedRequests)
+        } finally { engine.close() }
+    }
+
     private val emptySecrets = object : SecretStore {
         override suspend fun putPair(firstAlias: String, first: CharArray?, secondAlias: String, second: CharArray?) {
             error("Pair writes are not used by this test")

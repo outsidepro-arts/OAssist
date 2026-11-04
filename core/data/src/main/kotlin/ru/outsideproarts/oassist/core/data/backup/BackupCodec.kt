@@ -60,6 +60,7 @@ fun SkillInfo.toBackup(): SkillBackup = SkillBackup(name, title, body, enabled)
  * (без значений они лишь вводят в заблуждение).
  */
 internal fun ProviderProfile.scrubbed(): ProviderProfile = copy(
+    credentialRevision = null,
     apiKeyRef = null,
     basicUserRef = null,
     basicPasswordRef = null,

@@ -9,13 +9,14 @@ import ru.outsideproarts.oassist.core.provider.opencode.OpenCodeUsageExtensionDt
 @Serializable
 data class GeminiModelsResponseDto(
     val models: List<GeminiModelDto> = emptyList(),
+    val nextPageToken: String? = null,
 )
 
 @Serializable
 data class GeminiModelDto(
     val name: String = "",
     @SerialName("displayName") val displayName: String? = null,
-    @SerialName("supportedGenerationMethods") val supportedGenerationMethods: List<String> = emptyList(),
+    @SerialName("supportedGenerationMethods") val supportedGenerationMethods: List<String>? = null,
 )
 
 /** Запрос POST /v1beta/models/{model}:streamGenerateContent. */

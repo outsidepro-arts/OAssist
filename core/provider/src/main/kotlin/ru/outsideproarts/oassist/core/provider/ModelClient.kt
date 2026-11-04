@@ -144,6 +144,7 @@ interface ModelClient {
             overrides: ProviderAuth? = null,
             protocolOverride: suspend (modelId: String) -> ModelProtocol? = { null },
             modelsDev: ru.outsideproarts.oassist.core.provider.modelsdev.ModelsDevCatalog? = null,
+            modelInfo: suspend (modelId: String) -> ModelInfo? = { null },
         ): ModelClient {
             val auth = resolveProviderAuth(profile, secretStore, overrides)
             // Старые Google-профили могли сохранить null вместо нативного протокола.
@@ -154,6 +155,7 @@ interface ModelClient {
                 fixedProtocol = protocol,
                 fetchScheme = profile.fetchScheme,
                 protocolOverride = protocolOverride,
+                modelInfo = modelInfo,
                 modelsDev = modelsDev,
                 catalogKey = profile.preset.catalogKeyResolver(),
                 diagnostics = diagnostics,

@@ -50,6 +50,7 @@ class RoutingModelClient internal constructor(
     private val fixedProtocol: ModelProtocol?,
     private val fetchScheme: ModelFetchScheme,
     private val protocolOverride: suspend (modelId: String) -> ModelProtocol?,
+    private val modelInfo: suspend (modelId: String) -> ModelInfo?,
     private val modelsDev: ModelsDevCatalog?,
     private val catalogKey: suspend (baseUrl: String) -> String?,
     private val diagnostics: DiagnosticRecorder,
@@ -69,6 +70,14 @@ class RoutingModelClient internal constructor(
      * override автоматический маршрут снова доступен.
      */
     private val learned = java.util.concurrent.ConcurrentHashMap<String, ModelProtocol>()
+    @Volatile private var fetchedModels: Map<String, ModelInfo> = emptyMap()
+
+    private suspend fun requireChatModel(modelId: String) {
+        val model = modelInfo(modelId) ?: fetchedModels[modelId]
+        if (model?.isChatCompatible == false) {
+            throw ProviderError.InvalidInput(ProviderError.InvalidInput.Reason.MODEL_NOT_CHAT_COMPATIBLE)
+        }
+    }
 
     private suspend fun resolveProtocol(modelId: String, override: ModelProtocol?): ModelProtocol {
         fixedProtocol?.let { return override ?: it }
@@ -97,6 +106,7 @@ class RoutingModelClient internal constructor(
         // иначе — OpenAI-совместимый (Bearer), как у агрегаторов.
         val endpoint = template.withProtocol(fixedProtocol ?: ModelProtocol.OPENAI_COMPLETIONS)
         val models = fetchModelCatalog(endpoint, http)
+        fetchedModels = models.associateBy { it.id }
         val key = catalogKey(template.baseUrl)
         val names = if (key != null) modelsDev?.namesFor(key).orEmpty() else emptyMap()
         return models.map { model ->
@@ -105,6 +115,7 @@ class RoutingModelClient internal constructor(
     }
 
     override suspend fun probeCapabilities(modelId: String): Set<ModelCapability> {
+        requireChatModel(modelId)
         val operation = Diagnostics.newOperationId()
         val context = currentCoroutineContext()[DiagnosticContext]
         val parent = context?.operationId
@@ -145,6 +156,7 @@ class RoutingModelClient internal constructor(
         tools: List<ToolSchemaDto>,
         reasoningEnabled: Boolean,
     ): Flow<ChatChunk> = flow {
+        requireChatModel(modelId)
         val operation = Diagnostics.newOperationId()
         val context = currentCoroutineContext()[DiagnosticContext]
         val parent = context?.operationId

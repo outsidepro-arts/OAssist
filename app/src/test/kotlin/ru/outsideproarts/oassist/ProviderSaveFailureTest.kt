@@ -11,6 +11,8 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.runTest
 import kotlinx.coroutines.withContext
@@ -21,12 +23,222 @@ import ru.outsideproarts.oassist.core.data.provider.ProviderRepository
 import ru.outsideproarts.oassist.core.data.secret.SecretStore
 import ru.outsideproarts.oassist.core.model.ProviderPreset
 import ru.outsideproarts.oassist.core.model.ProviderProfile
+import ru.outsideproarts.oassist.core.model.modelInfoFor
 import ru.outsideproarts.oassist.core.model.diagnostics.Diagnostics
 import ru.outsideproarts.oassist.core.provider.ModelClient
 import ru.outsideproarts.oassist.core.provider.ProviderValidator
 import ru.outsideproarts.oassist.feature.settings.ProviderSecretsInput
 
 class ProviderSaveFailureTest {
+    @Test fun clearingApiKeyValidatesAndCachesAnonymousCatalog() = runTest {
+        assertClearedCredentialsValidateAnonymousCatalog(basic = false)
+    }
+
+    @Test fun clearingBasicValidatesAnonymousCatalogAndDeletesTrustedPair() = runTest {
+        assertClearedCredentialsValidateAnonymousCatalog(basic = true)
+    }
+
+    @Test fun rejectedAnonymousValidationRetainsStoredCredentialsAndCatalog() = runTest {
+        for (basic in listOf(false, true)) assertClearedCredentialsValidateAnonymousCatalog(basic, denyAnonymous = true)
+    }
+
+    private suspend fun assertClearedCredentialsValidateAnonymousCatalog(basic: Boolean, denyAnonymous: Boolean = false) {
+        val preferences = MemoryPreferences()
+        val secrets = MemorySecrets()
+        val repository = ProviderRepository(ProviderConfigStore(preferences), secrets)
+        val apiAlias = ProviderRepository.aliasForApiKey("p")
+        val userAlias = "trusted.basic.user"
+        val passwordAlias = "trusted.basic.password"
+        if (basic) secrets.putPair(userAlias, "user".toCharArray(), passwordAlias, "password".toCharArray())
+        else secrets.put(apiAlias, "key".toCharArray())
+        val profile = ProviderProfile("p", "Provider", ProviderPreset.CUSTOM, "https://old.example/v1",
+            authScheme = if (basic) ru.outsideproarts.oassist.core.model.AuthScheme.BASIC else ru.outsideproarts.oassist.core.model.AuthScheme.BEARER,
+            apiKeyRef = if (basic) null else apiAlias,
+            basicUserRef = if (basic) userAlias else null,
+            basicPasswordRef = if (basic) passwordAlias else null)
+        repository.upsertProvider(profile)
+        val requests = mutableListOf<Pair<String, String?>>()
+        val http = HttpClient(MockEngine { request ->
+            val auth = request.headers["Authorization"]
+            requests += request.url.host to auth
+            if (auth == null && denyAnonymous) return@MockEngine respond("denied", io.ktor.http.HttpStatusCode.Unauthorized)
+            respond(if (auth == null) """{"data":[{"id":"public","type":"chat"}]}"""
+                else """{"data":[{"id":"private","type":"classification"}]}""",
+                headers = headersOf("Content-Type", "application/json"))
+        })
+        try {
+            val authenticated = ModelClient.create(Diagnostics, profile, secrets, http).fetchModels()
+            repository.refreshModelCatalog(profile, authenticated)
+            val desired = profile.copy(baseUrl = "https://new.example/v1")
+            val input = if (basic) ProviderSecretsInput(clearBasic = true) else ProviderSecretsInput(clearApiKey = true)
+            val result = saveProvider(repository, ProviderValidator(Diagnostics, secrets, http, null), secrets, desired, input)
+            assertTrue(requests.first().second?.startsWith(if (basic) "Basic " else "Bearer ") == true)
+            assertEquals("new.example" to null, requests[1])
+            if (denyAnonymous) {
+                assertTrue(result.isFailure)
+                assertEquals(profile, repository.getProvider("p"))
+                assertEquals(authenticated, repository.observeModelCatalog("p").first()!!.models)
+                assertNotNull(secrets.get(if (basic) userAlias else apiAlias))
+                if (basic) assertNotNull(secrets.get(passwordAlias))
+                return
+            }
+            assertTrue(result.toString(), result.isSuccess)
+            val stored = repository.getProvider("p")!!
+            assertNull(stored.apiKeyRef)
+            assertNull(stored.basicUserRef)
+            assertNull(stored.basicPasswordRef)
+            assertNull(secrets.get(if (basic) userAlias else apiAlias))
+            if (basic) assertNull(secrets.get(passwordAlias))
+            val reopened = ProviderRepository(ProviderConfigStore(preferences), secrets)
+            val catalog = reopened.observeModelCatalog("p").first()!!
+            assertEquals(listOf("public"), catalog.models.map { it.id })
+            assertTrue(reopened.modelInfo(stored, "public")!!.isChatCompatible)
+            assertEquals(catalog.models, reopened.modelsForSelection("p"))
+        } finally { http.close() }
+    }
+
+    @Test fun everySameAliasCredentialRotationInvalidatesCachedCompatibility() = runTest {
+        val fixture = Fixture()
+        try {
+            fixture.seed()
+            val writes: List<suspend (String) -> Unit> = listOf(
+                { value -> fixture.repository.setApiKey("p", value.toCharArray()) },
+                { value -> fixture.repository.setBasicCredentials("p", "user".toCharArray(), value.toCharArray()); Unit },
+                { value -> fixture.repository.setExtraHeader("p", "X-Private", value.toCharArray()) },
+            )
+            for (write in writes) {
+                write("a")
+                val old = fixture.repository.getProvider("p")!!
+                fixture.repository.refreshModelCatalog(old, listOf(ru.outsideproarts.oassist.core.model.ModelInfo("m", purpose = "classification")))
+                write("b")
+                val current = fixture.repository.getProvider("p")!!
+                assertEquals(old.apiKeyRef, current.apiKeyRef)
+                assertEquals(old.basicUserRef, current.basicUserRef)
+                assertEquals(old.basicPasswordRef, current.basicPasswordRef)
+                assertEquals(old.extraHeaders, current.extraHeaders)
+                assertNotEquals(old.credentialRevision, current.credentialRevision)
+                assertTrue(fixture.repository.modelsForSelection("p").isEmpty())
+                assertNull(fixture.repository.modelInfo(old, "m"))
+            }
+        } finally { fixture.http.close() }
+    }
+
+    @Test fun delayedRefreshWithOldCredentialsCannotOverwriteNewCredentialsCatalog() = runTest {
+        val fixture = Fixture()
+        val entered = CompletableDeferred<Unit>()
+        val finish = CompletableDeferred<Unit>()
+        val http = HttpClient(MockEngine {
+            entered.complete(Unit)
+            finish.await()
+            respond("""{"data":[{"id":"m","type":"classification"}]}""", headers = headersOf("Content-Type", "application/json"))
+        })
+        try {
+            fixture.seed()
+            fixture.repository.setApiKey("p", "a".toCharArray())
+            val before = fixture.repository.getProvider("p")!!
+            val client = ModelClient.create(Diagnostics, before, fixture.secrets, http)
+            val refresh = launch { fixture.repository.refreshModelCatalog(before, client.fetchModels()) }
+            entered.await()
+            fixture.repository.setApiKey("p", "b".toCharArray())
+            val after = fixture.repository.getProvider("p")!!
+            assertEquals(before.apiKeyRef, after.apiKeyRef)
+            assertNotEquals(before.credentialRevision, after.credentialRevision)
+            val models = listOf(ru.outsideproarts.oassist.core.model.ModelInfo("m", purpose = "chat"))
+            fixture.repository.refreshModelCatalog(after, models)
+            finish.complete(Unit)
+            refresh.join()
+            assertEquals(models, fixture.repository.modelsForSelection("p"))
+            assertEquals(models.single(), fixture.repository.modelInfo(after, "m"))
+            assertNull(fixture.repository.modelInfo(before, "m"))
+        } finally { http.close(); fixture.http.close() }
+    }
+
+    @Test fun newSettingsEntryDoesNotUsePreviousEndpointsCompatibilityAfterPartialSave() = runTest {
+        val fixture = Fixture()
+        try {
+            fixture.seed()
+            val old = fixture.repository.getProvider("p")!!
+            val restricted = listOf(ru.outsideproarts.oassist.core.model.ModelInfo("m", purpose = "classification",
+                supportedGenerationMethods = emptyList()))
+            fixture.repository.refreshModelCatalog(old, restricted)
+            fixture.secrets.putFailure = IllegalStateException("credential write failed")
+            val result = fixture.save(old.copy(baseUrl = "https://new.example/v1"), ProviderSecretsInput(apiKey = "new"))
+            assertTrue(result.isFailure)
+            val reopened = ProviderRepository(ProviderConfigStore(fixture.preferences), fixture.secrets)
+            assertEquals("https://new.example/v1", reopened.getProvider("p")!!.baseUrl)
+            assertEquals(restricted, reopened.observeModelCatalog("p").first()!!.models)
+            assertTrue(reopened.modelsForSelection("p").isEmpty())
+            // Legacy imports retain their IDs, but neither new restriction is trusted.
+            reopened.saveModelCatalog("p", restricted)
+            val legacy = reopened.modelsForSelection("p").single()
+            assertEquals("m", legacy.id)
+            assertNull(legacy.purpose)
+            assertNull(legacy.supportedGenerationMethods)
+            assertTrue(legacy.isChatCompatible)
+        } finally { fixture.http.close() }
+    }
+
+    @Test fun lateValidationCannotRetagOldCatalogAfterCredentialRotation() = runTest {
+        val fixture = Fixture()
+        val entered = CompletableDeferred<Unit>()
+        val finish = CompletableDeferred<Unit>()
+        val http = HttpClient(MockEngine {
+            entered.complete(Unit)
+            finish.await()
+            respond("""{"data":[{"id":"m","type":"classification"}]}""", headers = headersOf("Content-Type", "application/json"))
+        })
+        try {
+            fixture.seed()
+            fixture.repository.setApiKey("p", "a".toCharArray())
+            val before = fixture.repository.getProvider("p")!!
+            val job = launch {
+                val result = saveProvider(fixture.repository, ProviderValidator(Diagnostics, fixture.secrets, http, null),
+                    fixture.secrets, before, ProviderSecretsInput())
+                assertTrue(result.exceptionOrNull() is ru.outsideproarts.oassist.core.data.provider.CredentialRevisionMismatchException)
+            }
+            entered.await()
+            fixture.repository.setApiKey("p", "b".toCharArray())
+            val after = fixture.repository.getProvider("p")!!
+            val models = listOf(ru.outsideproarts.oassist.core.model.ModelInfo("m", purpose = "chat"))
+            fixture.repository.refreshModelCatalog(after, models)
+            finish.complete(Unit)
+            job.join()
+            assertEquals(models, fixture.repository.modelsForSelection("p"))
+            assertEquals(after.credentialRevision, fixture.repository.getProvider("p")!!.credentialRevision)
+        } finally { http.close(); fixture.http.close() }
+    }
+
+    @Test fun selectedNonChatModelRemainsBlockedAfterValidationSaveAndModeChange() = runTest {
+        val store = ProviderConfigStore(MemoryPreferences())
+        val secrets = MemorySecrets()
+        val repository = ProviderRepository(store, secrets)
+        val profile = ProviderProfile("p", "Provider", ProviderPreset.CUSTOM, "https://example.test/v1")
+        var requests = 0
+        val http = HttpClient(MockEngine {
+            requests++
+            respond("""{"data":[{"id":"chat","type":"chat"},{"id":"classifier","type":"classification"}]}""",
+                headers = headersOf("Content-Type", "application/json"))
+        })
+        try {
+            val result = saveProvider(repository, ProviderValidator(Diagnostics, secrets, http, null), secrets,
+                profile, ProviderSecretsInput(apiKey = "key"))
+            assertTrue(result.toString(), result.isSuccess)
+            val saved = repository.getProvider("p")!!
+            val mode = ru.outsideproarts.oassist.core.model.AssistMode.CHAT
+            repository.setModeConfig(repository.modeConfig(mode).copy(providerId = "p", modelId = "chat"))
+            repository.setModeConfig(repository.modeConfig(mode).copy(modelId = "classifier"))
+            val renamed = saved.copy(name = "Changed name", extraBody = """{"temperature":0.5}""")
+            repository.upsertProvider(renamed)
+            val client = ModelClient.create(Diagnostics, renamed, secrets, http,
+                modelInfo = { id -> repository.observeModelCatalog("p").first()?.modelInfoFor(renamed, id) })
+            val selected = repository.modeConfig(mode).modelId!!
+            val error = runCatching { client.chatCompletionStream(selected, emptyList(), emptyList(), false).collect() }.exceptionOrNull()
+            assertTrue(error is ru.outsideproarts.oassist.core.provider.ProviderError.InvalidInput)
+            assertEquals(1, requests)
+            assertNull(repository.observeModelCatalog("p").first()?.modelInfoFor(renamed.copy(baseUrl = "https://other.test"), selected))
+        } finally { http.close() }
+    }
+
     @Test fun partialBasicPairCanBeRepairedThroughValidationSaveAndHttp() = runTest {
         checkBasicRepair(cleanupFails = false)
     }

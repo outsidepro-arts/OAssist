@@ -59,6 +59,8 @@ data class ProviderProfile(
      */
     val extraBody: String? = null,
     val enabled: Boolean = true,
+    /** Store-owned opaque catalog identity; changes when credential values are written. */
+    val credentialRevision: String? = null,
 )
 
 /**
@@ -91,6 +93,7 @@ internal data class ProviderProfileWire(
     val catalogPath: String? = null,
     val extraBody: String? = null,
     val enabled: Boolean = true,
+    val credentialRevision: String? = null,
 )
 
 private fun ProviderProfile.toWire(): ProviderProfileWire = ProviderProfileWire(
@@ -109,6 +112,7 @@ private fun ProviderProfile.toWire(): ProviderProfileWire = ProviderProfileWire(
     catalogPath = catalogPath,
     extraBody = extraBody,
     enabled = enabled,
+    credentialRevision = credentialRevision,
 )
 
 private fun ProviderProfileWire.fromWire(): ProviderProfile = ProviderProfile(
@@ -127,6 +131,7 @@ private fun ProviderProfileWire.fromWire(): ProviderProfile = ProviderProfile(
     catalogPath = catalogPath,
     extraBody = extraBody,
     enabled = enabled,
+    credentialRevision = credentialRevision,
 )
 
 /**
@@ -262,7 +267,7 @@ object ProviderProfileSerializer : KSerializer<ProviderProfile> {
     private val WIRE_KEYS = setOf(
         "id", "name", "preset", "baseUrl", "protocol", "fetchScheme", "authScheme",
         "apiKeyHeaderName", "basicUserRef", "basicPasswordRef", "apiKeyRef",
-        "extraHeaders", "catalogPath", "extraBody", "enabled",
+        "extraHeaders", "catalogPath", "extraBody", "enabled", "credentialRevision",
     )
 }
 
@@ -418,7 +423,20 @@ data class ModelInfo(
     val label: String? = null,
     val capabilities: Set<ModelCapability> = emptySet(),
     val protocol: ModelProtocol? = null,
-)
+    /** Provider-declared purpose; null means the catalog supplied no information. */
+    val purpose: String? = null,
+    /** Gemini catalog methods; null differs from an explicitly empty list. */
+    val supportedGenerationMethods: List<String>? = null,
+) {
+    /** Unknown metadata is not evidence of incompatibility; never infer purpose from an ID. */
+    val isChatCompatible: Boolean
+        get() = purpose !in NON_CHAT_PURPOSES &&
+            (supportedGenerationMethods == null || "generateContent" in supportedGenerationMethods)
+
+    private companion object {
+        val NON_CHAT_PURPOSES = setOf("classification", "embedding", "image", "audio", "video", "tts", "stt")
+    }
+}
 
 /** Кэш списка моделей провайдера. */
 @Serializable
@@ -426,4 +444,25 @@ data class ModelCatalog(
     val providerId: String,
     val updatedAtEpochMs: Long,
     val models: List<ModelInfo> = emptyList(),
+    val sourceFingerprint: String? = null,
 )
+
+/** Binds catalog metadata to the profile that fetched it, without storing credentials. */
+fun ProviderProfile.catalogFingerprint(): String {
+    val canonical = copy(name = "", extraBody = null, enabled = true, extraHeaders = extraHeaders.toSortedMap())
+    val bytes = Json.encodeToString(ProviderProfile.serializer(), canonical).toByteArray(Charsets.UTF_8)
+    return java.security.MessageDigest.getInstance("SHA-256").digest(bytes)
+        .joinToString("") { "%02x".format(it) }
+}
+
+fun ModelCatalog.modelInfoFor(profile: ProviderProfile, modelId: String): ModelInfo? =
+    takeIf { providerId == profile.id && sourceFingerprint == profile.catalogFingerprint() }
+        ?.models?.firstOrNull { it.id == modelId }
+
+/** Legacy caches retain their selectable IDs, but cannot supply new compatibility restrictions. */
+fun ModelCatalog.modelsForSelection(profile: ProviderProfile): List<ModelInfo> = when {
+    providerId != profile.id -> emptyList()
+    sourceFingerprint == null -> models.map { it.copy(purpose = null, supportedGenerationMethods = null) }
+    sourceFingerprint == profile.catalogFingerprint() -> models
+    else -> emptyList()
+}

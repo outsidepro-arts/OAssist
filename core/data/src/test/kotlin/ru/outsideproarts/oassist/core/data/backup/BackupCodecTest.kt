@@ -89,10 +89,12 @@ class BackupCodecTest {
             id = "p", name = "P", preset = ProviderPreset.CUSTOM, baseUrl = "https://x",
             apiKeyRef = "provider.p.apiKey", extraHeaders = mapOf("X-K" to "alias"),
             basicUserRef = "provider.p.basicUser", basicPasswordRef = "provider.p.basicPassword",
+            credentialRevision = "local-revision",
         ).scrubbed()
         assertEquals(null, profile.apiKeyRef)
         assertEquals(null, profile.basicUserRef)
         assertEquals(null, profile.basicPasswordRef)
+        assertEquals(null, profile.credentialRevision)
         assertTrue(profile.extraHeaders.isEmpty())
         val mcp = McpServerConfig(id = "s", name = "S", url = "u", bearerRef = "mcp.s.bearer").scrubbed()
         assertEquals(null, mcp.bearerRef)

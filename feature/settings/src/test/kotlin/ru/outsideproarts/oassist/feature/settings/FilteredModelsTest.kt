@@ -7,6 +7,21 @@ import ru.outsideproarts.oassist.core.model.ModelInfo
 
 class FilteredModelsTest {
 
+    @Test
+    fun nonChatModelsExcludedFromBlankAndSearchQueries() {
+        val mixed = listOf(
+            ModelInfo("same-classifier", purpose = "classification"),
+            ModelInfo("same-embedding", supportedGenerationMethods = listOf("embedContent")),
+            ModelInfo("same-empty", supportedGenerationMethods = emptyList()),
+            ModelInfo("same-chat", purpose = "chat"),
+            ModelInfo("same-unknown"),
+            ModelInfo("same-future", purpose = "future"),
+        )
+        for (query in listOf("", "same")) {
+            assertEquals(setOf("same-chat", "same-unknown", "same-future"), filteredModels(query, mixed).map { it.id }.toSet())
+        }
+    }
+
     private val models = listOf(
         ModelInfo(id = "openai/gpt-4o", label = "GPT-4o"),
         ModelInfo(id = "anthropic/claude-3-5-sonnet", label = "Claude 3.5 Sonnet"),

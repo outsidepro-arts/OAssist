@@ -3,6 +3,9 @@ package ru.outsideproarts.oassist.core.data.secret
 import androidx.datastore.core.DataStore
 import androidx.datastore.preferences.core.Preferences
 import androidx.datastore.preferences.core.emptyPreferences
+import androidx.datastore.preferences.core.stringPreferencesKey
+import kotlinx.serialization.builtins.ListSerializer
+import kotlinx.serialization.json.Json
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.async
@@ -163,7 +166,13 @@ class BasicCredentialsTest {
         repository.upsertProvider(repository.getProvider("p")!!.copy(basicPasswordRef = null))
         val entered = CompletableDeferred<Unit>()
         val release = CompletableDeferred<Unit>()
-        config.beforeCommit = { entered.complete(Unit); release.await() }
+        config.beforeCommit = { next ->
+            if (hasPublishedBasicPair(next)) {
+                config.beforeCommit = {}
+                entered.complete(Unit)
+                release.await()
+            }
+        }
         val job = async { repository.setBasicCredentials("p", "new-user".toCharArray(), "new-password".toCharArray()) }
         entered.await()
         job.cancel()
@@ -175,7 +184,12 @@ class BasicCredentialsTest {
     @Test fun errorAfterRepairPublicationDoesNotDeletePublishedPair() = runTest {
         seed()
         repository.upsertProvider(repository.getProvider("p")!!.copy(basicPasswordRef = null))
-        config.afterCommit = { throw IllegalStateException("late commit failure") }
+        config.afterCommit = { next ->
+            if (hasPublishedBasicPair(next)) {
+                config.afterCommit = {}
+                throw IllegalStateException("late commit failure")
+            }
+        }
         try {
             repository.setBasicCredentials("p", "new-user".toCharArray(), "new-password".toCharArray())
             fail("Expected failure")
@@ -183,17 +197,22 @@ class BasicCredentialsTest {
         assertPair("new-user", "new-password")
     }
 
+    private fun hasPublishedBasicPair(preferences: Preferences): Boolean =
+        preferences[stringPreferencesKey("providers")]?.let {
+            Json.decodeFromString(ListSerializer(ProviderProfile.serializer()), it).single().basicPasswordRef != null
+        } == true
+
     // Tests the production encryption/commit boundary. This is not a disk/reopen test.
     private class ControlledPreferences : DataStore<Preferences> {
         val current = MutableStateFlow(emptyPreferences())
         override val data: Flow<Preferences> = flow { emit(current.value) }
-        var beforeCommit: suspend () -> Unit = {}
-        var afterCommit: suspend () -> Unit = {}
+        var beforeCommit: suspend (Preferences) -> Unit = {}
+        var afterCommit: suspend (Preferences) -> Unit = {}
         override suspend fun updateData(transform: suspend (Preferences) -> Preferences): Preferences {
             val updated = transform(current.value)
-            beforeCommit()
+            beforeCommit(updated)
             current.value = updated
-            afterCommit()
+            afterCommit(updated)
             return updated
         }
     }

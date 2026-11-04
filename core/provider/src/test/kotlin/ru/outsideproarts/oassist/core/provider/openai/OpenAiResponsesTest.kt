@@ -40,6 +40,9 @@ import ru.outsideproarts.oassist.core.model.ToolCallRef
 class OpenAiResponsesTest {
 
     private val fakeSecrets = object : ru.outsideproarts.oassist.core.data.secret.SecretStore {
+        override suspend fun putPair(firstAlias: String, first: CharArray?, secondAlias: String, second: CharArray?) = Unit
+        override suspend fun getPair(firstAlias: String?, secondAlias: String?): Pair<CharArray?, CharArray?> =
+            firstAlias?.let { get(it) } to secondAlias?.let { get(it) }
         override suspend fun put(alias: String, plaintext: CharArray) = Unit
         override suspend fun get(alias: String): CharArray? = "resp-key".toCharArray()
         override suspend fun contains(alias: String): Boolean = true

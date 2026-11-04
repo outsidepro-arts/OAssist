@@ -116,7 +116,7 @@ sealed class ProviderError(message: String, cause: Throwable? = null) : RuntimeE
 
     /** Локальная ошибка валидации полей профиля. */
     class InvalidInput(val reason: Reason) : ProviderError("Invalid input: $reason") {
-        enum class Reason { NAME_REQUIRED, BASE_URL_REQUIRED, BASE_URL_INVALID }
+        enum class Reason { NAME_REQUIRED, BASE_URL_REQUIRED, BASE_URL_INVALID, MODEL_NOT_CHAT_COMPATIBLE, PROVIDER_CHANGED }
     }
 
     /** Категория ошибки — по телу ответа (типизированные ошибки Zen/Go) и статусу. */
@@ -158,6 +158,8 @@ sealed class ProviderError(message: String, cause: Throwable? = null) : RuntimeE
             InvalidInput.Reason.NAME_REQUIRED -> context.getString(R.string.provider_error_name_required)
             InvalidInput.Reason.BASE_URL_REQUIRED -> context.getString(R.string.provider_error_base_url_required)
             InvalidInput.Reason.BASE_URL_INVALID -> context.getString(R.string.provider_error_base_url_invalid)
+            InvalidInput.Reason.MODEL_NOT_CHAT_COMPATIBLE -> context.getString(R.string.provider_error_model_not_chat)
+            InvalidInput.Reason.PROVIDER_CHANGED -> context.getString(R.string.provider_error_provider_changed)
         }
     }
 
@@ -175,6 +177,8 @@ sealed class ProviderError(message: String, cause: Throwable? = null) : RuntimeE
             while (cur != null) {
                 when (cur) {
                     is ProviderError -> return cur
+                    is ru.outsideproarts.oassist.core.data.provider.CredentialRevisionMismatchException ->
+                        return InvalidInput(InvalidInput.Reason.PROVIDER_CHANGED)
                     // Отмена может быть завёрнута (напр. в SSEClientException):
                     // бросаем именно её, иначе корутина «завершится ошибкой» вместо отмены.
                     is CancellationException -> throw cur

@@ -84,7 +84,9 @@ class BackupCredentialsTest {
         secrets.failDelete = true
         assertTrue(runCatching { providers.importProfiles(listOf(provider.copy(baseUrl = "https://imported.invalid"))) }.isFailure)
         assertTrue(runCatching { servers.importServers(listOf(server.copy(url = "https://imported.invalid"))) }.isFailure)
-        assertEquals(provider, providers.getProvider("p"))
+        val retained = providers.getProvider("p")!!
+        assertEquals(provider, retained.copy(credentialRevision = null))
+        assertTrue(retained.credentialRevision != null)
         assertEquals(server, servers.snapshot().single())
     }
 

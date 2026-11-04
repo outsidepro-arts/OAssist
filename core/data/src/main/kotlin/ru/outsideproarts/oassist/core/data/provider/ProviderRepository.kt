@@ -13,6 +13,7 @@ import ru.outsideproarts.oassist.core.model.ModeConfig
 import ru.outsideproarts.oassist.core.model.ModelCapability
 import ru.outsideproarts.oassist.core.model.ModelCatalog
 import ru.outsideproarts.oassist.core.model.ModelInfo
+import ru.outsideproarts.oassist.core.model.catalogFingerprint
 import ru.outsideproarts.oassist.core.model.ModelProtocol
 import ru.outsideproarts.oassist.core.model.ProviderProfile
 import ru.outsideproarts.oassist.core.model.Time
@@ -33,6 +34,10 @@ class ProviderRepository(
 
     fun observeModelCatalog(providerId: String): Flow<ModelCatalog?> = store.modelCatalog(providerId)
 
+    suspend fun modelsForSelection(providerId: String): List<ModelInfo> = store.modelsForSelection(providerId).first()
+
+    suspend fun modelInfo(profile: ProviderProfile, modelId: String): ModelInfo? = store.modelInfo(profile, modelId).first()
+
     suspend fun upsertProvider(profile: ProviderProfile) = store.upsertProviderProfile(profile)
 
     suspend fun getProvider(id: String): ProviderProfile? =
@@ -45,7 +50,7 @@ class ProviderRepository(
     }
 
     /** Clears credentials using only the current local profile, before backup replacement. */
-    suspend fun clearSecrets(id: String) {
+    suspend fun clearSecrets(id: String) = store.withCredentialMutation(id) {
         val profile = getProvider(id)
         profile?.let { p ->
             p.apiKeyRef?.let { secrets.delete(it) }
@@ -66,12 +71,12 @@ class ProviderRepository(
     suspend fun hasApiKey(providerId: String): Boolean =
         secrets.contains(aliasForApiKey(providerId))
 
-    suspend fun setApiKey(providerId: String, value: CharArray) {
+    suspend fun setApiKey(providerId: String, value: CharArray, token: CredentialUpdateToken? = null) = store.withCredentialMutation(providerId, token) {
         secrets.put(aliasForApiKey(providerId), value)
         updateProvider(providerId) { it.copy(apiKeyRef = aliasForApiKey(providerId)) }
     }
 
-    suspend fun clearApiKey(providerId: String) {
+    suspend fun clearApiKey(providerId: String, token: CredentialUpdateToken? = null) = store.withCredentialMutation(providerId, token) {
         secrets.delete(aliasForApiKey(providerId))
         updateProvider(providerId) { it.copy(apiKeyRef = null) }
     }
@@ -81,24 +86,26 @@ class ProviderRepository(
      * как секреты: логин и пароль пишутся только в [SecretStore].
      * Возвращает старые aliases для отслеживаемого владельцем сохранения cleanup после repair.
      */
-    suspend fun setBasicCredentials(providerId: String, user: CharArray, password: CharArray): Set<String> {
+    suspend fun setBasicCredentials(providerId: String, user: CharArray, password: CharArray, token: CredentialUpdateToken? = null): Set<String> {
         try {
-            val profile = requireNotNull(getProvider(providerId)) { "Provider does not exist" }
-            val partial = (profile.basicUserRef != null || profile.basicPasswordRef != null) &&
-                (profile.basicUserRef == null || profile.basicPasswordRef == null ||
-                    profile.basicUserRef == profile.basicPasswordRef)
-            if (partial) {
-                return repairBasicCredentials(profile, user, password)
-            }
-            val userAlias = profile.basicUserRef ?: aliasForBasicUser(providerId)
-            val passwordAlias = profile.basicPasswordRef ?: aliasForBasicPassword(providerId)
-            secrets.putPair(userAlias, user, passwordAlias, password)
-            if (profile.basicUserRef != userAlias || profile.basicPasswordRef != passwordAlias) {
-                updateProvider(providerId) {
-                    it.copy(basicUserRef = userAlias, basicPasswordRef = passwordAlias)
+            return store.withCredentialMutation(providerId, token) {
+                val profile = requireNotNull(getProvider(providerId)) { "Provider does not exist" }
+                val partial = (profile.basicUserRef != null || profile.basicPasswordRef != null) &&
+                    (profile.basicUserRef == null || profile.basicPasswordRef == null ||
+                        profile.basicUserRef == profile.basicPasswordRef)
+                if (partial) {
+                    return@withCredentialMutation repairBasicCredentials(profile, user, password)
                 }
+                val userAlias = profile.basicUserRef ?: aliasForBasicUser(providerId)
+                val passwordAlias = profile.basicPasswordRef ?: aliasForBasicPassword(providerId)
+                secrets.putPair(userAlias, user, passwordAlias, password)
+                if (profile.basicUserRef != userAlias || profile.basicPasswordRef != passwordAlias) {
+                    updateProvider(providerId) {
+                        it.copy(basicUserRef = userAlias, basicPasswordRef = passwordAlias)
+                    }
+                }
+                emptySet()
             }
-            return emptySet()
         } finally {
             user.fill('\u0000')
             password.fill('\u0000')
@@ -138,8 +145,8 @@ class ProviderRepository(
     }
 
     /** Удаляет сохранённую пару Basic-учётных данных. */
-    suspend fun clearBasicCredentials(providerId: String) {
-        val profile = getProvider(providerId) ?: return
+    suspend fun clearBasicCredentials(providerId: String, token: CredentialUpdateToken? = null) = store.withCredentialMutation(providerId, token) {
+        val profile = getProvider(providerId) ?: return@withCredentialMutation
         val userAlias = profile.basicUserRef ?: aliasForBasicUser(providerId)
         val passwordAlias = profile.basicPasswordRef ?: aliasForBasicPassword(providerId)
         if (userAlias == passwordAlias) secrets.delete(userAlias)
@@ -151,7 +158,7 @@ class ProviderRepository(
      * Сохраняет значение extra-заголовка как секрет. Имя заголовка в профиле — имя,
      * значение — alias в [ProviderProfile.extraHeaders].
      */
-    suspend fun setExtraHeader(providerId: String, headerName: String, value: CharArray) {
+    suspend fun setExtraHeader(providerId: String, headerName: String, value: CharArray, token: CredentialUpdateToken? = null) = store.withCredentialMutation(providerId, token) {
         val headers = getProvider(providerId)?.extraHeaders.orEmpty()
         val existingAlias = headers[headerName]?.takeUnless { alias ->
             headers.any { (name, ref) -> name != headerName && ref == alias }
@@ -168,9 +175,9 @@ class ProviderRepository(
         }
     }
 
-    suspend fun clearExtraHeader(providerId: String, headerName: String) {
+    suspend fun clearExtraHeader(providerId: String, headerName: String) = store.withCredentialMutation(providerId) {
         val headers = getProvider(providerId)?.extraHeaders.orEmpty()
-        val alias = headers[headerName] ?: return
+        val alias = headers[headerName] ?: return@withCredentialMutation
         // Older profiles can share a lossy alias; keep it while another header uses it.
         if (headers.none { (name, ref) -> name != headerName && ref == alias }) {
             secrets.delete(alias)
@@ -229,10 +236,14 @@ class ProviderRepository(
      * Свежий список с провайдера: merge с правками пользователя
      * (capabilities/protocol/label не теряются при «Обновить список»).
      */
-    suspend fun refreshModelCatalog(providerId: String, fetched: List<ModelInfo>) {
-        val current = store.modelCatalog(providerId).first()
+    suspend fun refreshModelCatalog(profile: ProviderProfile, fetched: List<ModelInfo>, rejectStale: Boolean = false) {
+        val current = store.modelCatalog(profile.id).first()
+            ?.takeIf { it.sourceFingerprint == null || it.sourceFingerprint == profile.catalogFingerprint() }
         store.saveModelCatalog(
-            mergeModelCatalog(current, providerId, fetched, Time.nowEpochMs()),
+            mergeModelCatalog(current, profile.id, fetched, Time.nowEpochMs())
+                .copy(sourceFingerprint = profile.catalogFingerprint()),
+            expectedProfile = profile,
+            rejectStale = rejectStale,
         )
     }
 
@@ -273,7 +284,7 @@ internal fun patchModelCapabilities(
     } else {
         models + ModelInfo(id = modelId, capabilities = capabilities)
     }
-    return ModelCatalog(providerId = providerId, updatedAtEpochMs = nowEpochMs, models = updated)
+    return ModelCatalog(providerId = providerId, updatedAtEpochMs = nowEpochMs, models = updated, sourceFingerprint = current?.sourceFingerprint)
 }
 
 /**
@@ -293,7 +304,7 @@ internal fun patchModelProtocol(
     } else {
         models + ModelInfo(id = modelId, protocol = protocol)
     }
-    return ModelCatalog(providerId = providerId, updatedAtEpochMs = nowEpochMs, models = updated)
+    return ModelCatalog(providerId = providerId, updatedAtEpochMs = nowEpochMs, models = updated, sourceFingerprint = current?.sourceFingerprint)
 }
 
 /**

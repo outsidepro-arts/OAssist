@@ -18,6 +18,29 @@ import ru.outsideproarts.oassist.core.model.ProviderProfile
 class ProviderValidatorTest {
 
     @Test
+    fun validationReturnsCompleteMetadataAndFailsOnLaterPageError() = runTest {
+        for (fail in listOf(false, true)) {
+            var requests = 0
+            val http = HttpClient(MockEngine {
+                if (++requests == 1) respond("""{"data":[{"id":"a","type":"classification"}],"has_more":true,"last_id":"opaque"}""")
+                else if (fail) respond("failure", HttpStatusCode.ServiceUnavailable)
+                else respond("""{"data":[{"id":"b","type":"chat"}],"has_more":false}""")
+            }) { expectSuccess = true }
+            try {
+                val validator = ProviderValidator(ru.outsideproarts.oassist.core.model.diagnostics.Diagnostics, emptySecrets, http, null)
+                val result = validator.validate(profile())
+                if (fail) assertTrue(result is ProviderValidationResult.Failure)
+                else {
+                    val models = (result as ProviderValidationResult.Success).models
+                    assertEquals(listOf("a", "b"), models.map { it.id })
+                    assertEquals(listOf(false, true), models.map { it.isChatCompatible })
+                }
+                assertEquals(2, requests)
+            } finally { http.close() }
+        }
+    }
+
+    @Test
     fun validationUsesSavedAndNewExtraHeaders() = runTest {
         val store = object : SecretStore {
             override suspend fun putPair(firstAlias: String, first: CharArray?, secondAlias: String, second: CharArray?) {

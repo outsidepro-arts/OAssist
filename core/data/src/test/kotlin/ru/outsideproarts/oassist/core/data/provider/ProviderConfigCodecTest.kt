@@ -45,6 +45,7 @@ class ProviderConfigCodecTest {
             apiKeyRef = "provider.p1.apiKey",
             extraHeaders = mapOf("X-Org" to "provider.p1.header.x-org"),
             enabled = true,
+            credentialRevision = "opaque-revision",
         )
 
         val decoded = json.decodeFromString<ProviderProfile>(json.encodeToString(profile))

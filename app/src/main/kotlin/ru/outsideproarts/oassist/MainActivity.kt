@@ -756,7 +756,7 @@ private fun OAssistApp(
                     models = if (providerId == null) {
                         emptyList()
                     } else {
-                        graph.providers.observeModelCatalog(providerId).first()?.models ?: emptyList()
+                        graph.providers.modelsForSelection(providerId)
                     }
                 }
 
@@ -784,7 +784,7 @@ private fun OAssistApp(
                                 runCatching {
                                     val client = graph.modelClientFor(profile)
                                     val fetched = client.fetchModels()
-                                    graph.providers.refreshModelCatalog(providerId, fetched)
+                                    graph.providers.refreshModelCatalog(profile, fetched)
                                     fetched
                                 }.onSuccess { fetched ->
                                     models = fetched
@@ -806,8 +806,7 @@ private fun OAssistApp(
                     },
                     onProviderSelected = { selectedId ->
                         scope.launch {
-                            models = graph.providers.observeModelCatalog(selectedId).first()?.models
-                                ?: emptyList()
+                            models = graph.providers.modelsForSelection(selectedId)
                         }
                     },
                     isProbing = isProbing,
@@ -824,7 +823,7 @@ private fun OAssistApp(
                                     graph.providers.updateModelCapabilities(probeProviderId, probeModelId, caps)
                                     caps
                                 }.onSuccess { caps ->
-                                    models = graph.providers.observeModelCatalog(probeProviderId).first()?.models ?: emptyList()
+                                    models = graph.providers.modelsForSelection(probeProviderId)
                                     showToast(
                                         context,
                                         if (ru.outsideproarts.oassist.core.model.ModelCapability.TOOLS in caps) {
@@ -850,13 +849,13 @@ private fun OAssistApp(
                     onSaveCapabilities = { capsProviderId, capsModelId, caps ->
                         scope.launch {
                             graph.providers.updateModelCapabilities(capsProviderId, capsModelId, caps)
-                            models = graph.providers.observeModelCatalog(capsProviderId).first()?.models ?: emptyList()
+                            models = graph.providers.modelsForSelection(capsProviderId)
                         }
                     },
                     onSaveProtocol = { protoProviderId, protoModelId, protocol ->
                         scope.launch {
                             graph.providers.updateModelProtocol(protoProviderId, protoModelId, protocol)
-                            models = graph.providers.observeModelCatalog(protoProviderId).first()?.models ?: emptyList()
+                            models = graph.providers.modelsForSelection(protoProviderId)
                         }
                     },
                     loadVoices = { pkg -> graph.speechOutput.availableVoices(pkg) },
@@ -899,15 +898,26 @@ internal suspend fun saveProvider(
     pendingCleanup: Set<String> = emptySet(),
     onCleanupPending: (Set<String>) -> Unit = {},
 ): Result<ProviderValidationResult> = try {
+    val validatedCredentialRevision = providers.getProvider(updated.id)?.credentialRevision
+    val credentialToken = ru.outsideproarts.oassist.core.data.provider.CredentialUpdateToken(updated.id, validatedCredentialRevision)
+    // Validation sees the desired credentials; persistence retains the original
+    // references until clear* has removed their secrets successfully.
+    val validationProfile = updated.copy(
+        apiKeyRef = updated.apiKeyRef.takeUnless { secrets.clearApiKey },
+        basicUserRef = updated.basicUserRef.takeUnless { secrets.clearBasic },
+        basicPasswordRef = updated.basicPasswordRef.takeUnless { secrets.clearBasic },
+    )
     val overrides = ProviderAuth(
-        apiKey = secrets.apiKey?.toCharArray(),
-        basicUser = secrets.basicUser,
-        basicPassword = secrets.basicPassword?.toCharArray(),
+        apiKey = secrets.apiKey?.takeUnless { secrets.clearApiKey }?.toCharArray(),
+        basicUser = secrets.basicUser.takeUnless { secrets.clearBasic },
+        basicPassword = secrets.basicPassword?.takeUnless { secrets.clearBasic }?.toCharArray(),
         extraHeaders = secrets.extraHeaders,
     )
-    when (val result = validator.validate(updated, overrides)) {
+    when (val result = validator.validate(validationProfile, overrides)) {
         is ProviderValidationResult.Failure -> Result.failure(result.error)
         else -> {
+            val catalogCredentialsUnchanged = providers.getProvider(updated.id)?.credentialRevision == validatedCredentialRevision
+            if (!catalogCredentialsUnchanged) throw ru.outsideproarts.oassist.core.data.provider.CredentialRevisionMismatchException()
             val oldHeaders = providers.getProvider(updated.id)?.extraHeaders.orEmpty()
             var removedAliases = pendingCleanup + secrets.clearedExtraHeaders.mapNotNull(oldHeaders::get)
             kotlinx.coroutines.currentCoroutineContext().ensureActive()
@@ -917,19 +927,19 @@ internal suspend fun saveProvider(
             }
             val apiKey = secrets.apiKey
             when {
-                secrets.clearApiKey -> providers.clearApiKey(updated.id)
-                apiKey != null -> providers.setApiKey(updated.id, apiKey.toCharArray())
+                secrets.clearApiKey -> providers.clearApiKey(updated.id, credentialToken)
+                apiKey != null -> providers.setApiKey(updated.id, apiKey.toCharArray(), credentialToken)
             }
             val basicUser = secrets.basicUser
             val basicPassword = secrets.basicPassword
             when {
-                secrets.clearBasic -> providers.clearBasicCredentials(updated.id)
+                secrets.clearBasic -> providers.clearBasicCredentials(updated.id, credentialToken)
                 // Парная запись: полная пара или ничего (частичный ввод не сохраняется).
                 basicUser != null && basicPassword != null -> {
                     kotlinx.coroutines.currentCoroutineContext().ensureActive()
                     kotlinx.coroutines.withContext(kotlinx.coroutines.NonCancellable) {
                         val retired = providers.setBasicCredentials(
-                            updated.id, basicUser.toCharArray(), basicPassword.toCharArray(),
+                            updated.id, basicUser.toCharArray(), basicPassword.toCharArray(), credentialToken,
                         )
                         removedAliases = removedAliases + retired
                         onCleanupPending(removedAliases)
@@ -937,10 +947,24 @@ internal suspend fun saveProvider(
                 }
             }
             secrets.extraHeaders.forEach { (headerName, value) ->
-                providers.setExtraHeader(updated.id, headerName, value.toCharArray())
+                providers.setExtraHeader(updated.id, headerName, value.toCharArray(), credentialToken)
             }
             if (result is ProviderValidationResult.Success) {
-                providers.refreshModelCatalog(updated.id, result.models)
+                val saved = providers.getProvider(updated.id)
+                    ?: throw ru.outsideproarts.oassist.core.data.provider.CredentialRevisionMismatchException()
+                // Secret writes may allocate aliases, but must not rebind a validation
+                // result to a concurrently edited endpoint or catalog configuration.
+                if (saved.extraHeaders.keys != updated.extraHeaders.keys + secrets.extraHeaders.keys) {
+                    throw ru.outsideproarts.oassist.core.data.provider.CredentialRevisionMismatchException()
+                }
+                val catalogProfile = updated.copy(
+                    apiKeyRef = saved.apiKeyRef,
+                    basicUserRef = saved.basicUserRef,
+                    basicPasswordRef = saved.basicPasswordRef,
+                    extraHeaders = saved.extraHeaders,
+                    credentialRevision = credentialToken.revision,
+                )
+                providers.refreshModelCatalog(catalogProfile, result.models, rejectStale = true)
             }
             try {
                 cleanupProviderHeaders(providers, secretStore, removedAliases, onCleanupPending)

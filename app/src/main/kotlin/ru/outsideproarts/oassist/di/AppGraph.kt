@@ -287,6 +287,9 @@ class AppGraph private constructor(context: Context) {
                     ?.models?.firstOrNull { it.id == modelId }?.protocol
             },
             modelsDev = modelsDevCatalog,
+            modelInfo = { modelId ->
+                data.providers.modelInfo(profile, modelId)
+            },
         )
 
     private val agentFactory = object : ru.outsideproarts.oassist.core.agent.AgentFactory {
