@@ -26,7 +26,7 @@ import java.util.ArrayDeque
  * Сервис поставляется приложением ([serviceProvider]); если он выключен —
  * явная ошибка с подсказкой, а не молчаливый пропуск.
  *
- * Фолбэк жестов (M5.1): если сервис есть, но жест отклонён/не сработал —
+ * Фолбэк жестов (M5.1): если сервис есть, но жест отклонён —
  * повтор через привилегии ([privProvider]: `input tap/swipe/keyevent`).
  * Без привилегий фолбэк честно недоступен (Noop).
  */
@@ -43,6 +43,8 @@ class UiActions(
     private val curtain = ScreenCurtain(privProvider)
     private val observationMutex = Mutex()
     private val observations = UiObservationRegistry<AccessibilityNodeInfo> { it.recycle() }
+    internal var dispatchSwipe: suspend (Int, Int, Int, Int, Long, (Boolean) -> Unit) -> Result<Boolean> =
+        ::dispatchAccessibilitySwipe
     private val STALE_SNAPSHOT_MESSAGE = "Снимок или элемент устарел — вызови ui_get_screen заново"
 
     private suspend fun serviceOrError(): Result<AccessibilityService> {
@@ -251,34 +253,44 @@ class UiActions(
     }
 
     private suspend fun swipeInternal(fromX: Int, fromY: Int, toX: Int, toY: Int, durationMs: Long): ToolResult {
-        val service = serviceOrError().getOrElse { return ToolResult(false, it.message ?: "Сервис недоступен") }
+        val duration = durationMs.coerceIn(1, 5000)
+        val done = CompletableDeferred<Boolean>()
+        val dispatched = dispatchSwipe(fromX, fromY, toX, toY, duration) { done.complete(it) }
+            .getOrElse { return ToolResult(false, it.message ?: "Сервис недоступен") }
+        if (!dispatched) {
+            return swipeFallback(fromX, fromY, toX, toY, durationMs, "Жест отклонён системой")
+        }
+        return when (withTimeoutOrNull(duration + GESTURE_TIMEOUT_MS) { done.await() }) {
+            true -> ToolResult(true, "Свайп выполнен")
+            false -> ToolResult(false, "Свайп отменён системой; он мог выполниться частично")
+            null -> ToolResult(false, "Результат свайпа неизвестен: время ожидания истекло; жест мог выполниться")
+        }
+    }
+
+    private suspend fun dispatchAccessibilitySwipe(
+        fromX: Int, fromY: Int, toX: Int, toY: Int, durationMs: Long, callback: (Boolean) -> Unit,
+    ): Result<Boolean> {
+        val service = serviceOrError().getOrElse { return Result.failure(it) }
         val path = Path().apply {
             moveTo(fromX.toFloat(), fromY.toFloat())
             lineTo(toX.toFloat(), toY.toFloat())
         }
         val gesture = GestureDescription.Builder()
-            .addStroke(GestureDescription.StrokeDescription(path, 0, durationMs.coerceIn(1, 5000)))
+            .addStroke(GestureDescription.StrokeDescription(path, 0, durationMs))
             .build()
-        val done = CompletableDeferred<Boolean>()
-        val dispatched = service.dispatchGesture(
+        return Result.success(service.dispatchGesture(
             gesture,
             object : AccessibilityService.GestureResultCallback() {
                 override fun onCompleted(gestureDescription: GestureDescription?) {
-                    done.complete(true)
+                    callback(true)
                 }
 
                 override fun onCancelled(gestureDescription: GestureDescription?) {
-                    done.complete(false)
+                    callback(false)
                 }
             },
             Handler(Looper.getMainLooper()),
-        )
-        if (!dispatched) {
-            return swipeFallback(fromX, fromY, toX, toY, durationMs, "Жест отклонён системой")
-        }
-        val ok = withTimeoutOrNull(GESTURE_TIMEOUT_MS) { done.await() } ?: false
-        if (ok) return ToolResult(true, "Свайп выполнен")
-        return swipeFallback(fromX, fromY, toX, toY, durationMs, "Свайп не завершён")
+        ))
     }
 
     /** Фолбэк свайпа через привилегии (`input swipe`). */
