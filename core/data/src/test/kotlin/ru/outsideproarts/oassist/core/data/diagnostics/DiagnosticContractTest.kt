@@ -6,6 +6,7 @@ import ru.outsideproarts.oassist.core.model.diagnostics.DiagnosticEvent
 import ru.outsideproarts.oassist.core.model.diagnostics.DiagnosticKind
 import java.io.ByteArrayInputStream
 import java.io.ByteArrayOutputStream
+import java.io.File
 import java.nio.file.Files
 import java.util.Base64
 import java.util.zip.ZipInputStream
@@ -28,6 +29,269 @@ class DiagnosticContractTest {
             }
         }
         return entries
+    }
+
+    private fun legacyEvent(dir: File, name: String, json: String) {
+        File(dir, "$name.event").writeBytes(cipher.encrypt(json.toByteArray()))
+    }
+
+    @Test fun `legacy orphan components are removed while anchored legacy chains remain`() {
+        val dir = Files.createTempDirectory("oassist-legacy-orphans").toFile()
+        legacyEvent(dir, "orphan-parent", """{"kind":"TOOL_RESULT","operationId":"orphan-parent","content":"orphan-parent-private"}""")
+        legacyEvent(dir, "orphan-child", """{"kind":"TOOL_RESULT","operationId":"orphan-child","parentOperationId":"orphan-parent","attributes":{"status":"orphan-attribute"},"content":"orphan-child-private"}""")
+        File(dir, "orphan-child.blob.media").writeBytes(cipher.encrypt("orphan-media".toByteArray()))
+        legacyEvent(dir, "valid-root", """{"kind":"OPERATION_START","operationId":"valid-root"}""")
+        legacyEvent(dir, "valid-child", """{"kind":"TOOL_RESULT","operationId":"valid-child","parentOperationId":"valid-root","content":"valid-private"}""")
+        legacyEvent(dir, "valid-followup", """{"kind":"AGENT_ROUND","operationId":"valid-child","content":"valid-followup"}""")
+        File(dir, "legacy.binding").writeBytes(cipher.encrypt("""{"kind":"STORAGE","operationId":"bound-root","attributes":{"chatId":"other-chat"}}""".toByteArray()))
+        legacyEvent(dir, "bound-child", """{"kind":"TOOL_RESULT","operationId":"bound-child","parentOperationId":"bound-root","content":"bound-private"}""")
+
+        val store = DiagnosticStore(dir, cipher)
+        val output = ByteArrayOutputStream()
+        store.export(output, 0, includeMedia = true)
+        val archive = unzip(output.toByteArray())
+        val events = archive.getValue("events.jsonl").decodeToString()
+        assertFalse(events.contains("orphan"))
+        assertTrue(events.contains("valid-private"))
+        assertTrue(events.contains("valid-followup"))
+        assertTrue(events.contains("bound-private"))
+        assertTrue(archive.keys.none { it.startsWith("media/") })
+        assertTrue(dir.listFiles()!!.none { it.name.startsWith("orphan-") })
+        store.close()
+    }
+
+    @Test fun `orphan left by deletion before upgrade is excluded after reopen`() {
+        val dir = Files.createTempDirectory("oassist-legacy-deleted").toFile()
+        legacyEvent(dir, "leftover", """{"kind":"PROVIDER_REQUEST","operationId":"child","parentOperationId":"lost-intermediate","content":"old-deleted-chat"}""")
+        val store = DiagnosticStore(dir, cipher)
+        val output = ByteArrayOutputStream()
+        store.export(output, 0, includeMedia = true)
+        assertFalse(unzip(output.toByteArray()).getValue("events.jsonl").decodeToString().contains("old-deleted-chat"))
+        assertFalse(File(dir, "leftover.event").exists())
+        store.close()
+    }
+
+    @Test fun `deleting conversation after reopen removes lost-start legacy child and media`() {
+        val dir = Files.createTempDirectory("oassist-legacy-delete").toFile()
+        File(dir, "chat.binding").writeBytes(cipher.encrypt("""{"kind":"STORAGE","operationId":"root","attributes":{"chatId":"chat"}}""".toByteArray()))
+        legacyEvent(dir, "lost-child", """{"kind":"PROVIDER_REQUEST","operationId":"child","parentOperationId":"lost-start","content":"deleted-private"}""")
+        File(dir, "lost-child.blob.media").writeBytes(cipher.encrypt("deleted-media".toByteArray()))
+        val reopened = DiagnosticStore(dir, cipher)
+        reopened.removeConversation("chat")
+        val output = ByteArrayOutputStream()
+        reopened.export(output, 0, includeMedia = true)
+        val archive = unzip(output.toByteArray())
+        assertFalse(archive.getValue("events.jsonl").decodeToString().contains("deleted-private"))
+        assertTrue(archive.keys.none { it.startsWith("media/") })
+        assertTrue(dir.listFiles()!!.none { it.name.startsWith("lost-child") })
+        reopened.close()
+    }
+
+    @Test fun `new standalone event remains exportable after reopen`() {
+        val dir = Files.createTempDirectory("oassist-self-root").toFile()
+        val first = DiagnosticStore(dir, cipher)
+        first.record(DiagnosticEvent(DiagnosticKind.PROVIDER_ERROR, "standalone", content = "standalone-private"))
+        first.export(ByteArrayOutputStream(), 0)
+        first.close()
+        val reopened = DiagnosticStore(dir, cipher)
+        val output = ByteArrayOutputStream()
+        reopened.export(output, 0)
+        val events = unzip(output.toByteArray()).getValue("events.jsonl").decodeToString()
+        assertTrue(events.contains("standalone-private"))
+        assertTrue(events.contains("\"rootOperationId\":\"standalone\""))
+        reopened.close()
+    }
+
+    @Test fun `partial conflict cleanup never reclassifies surviving private records`() {
+        val dir = Files.createTempDirectory("oassist-legacy-partial-conflict").toFile()
+        legacyEvent(dir, "root-a", """{"kind":"OPERATION_START","operationId":"root-a"}""")
+        legacyEvent(dir, "root-b", """{"kind":"OPERATION_START","operationId":"root-b"}""")
+        legacyEvent(dir, "conflict-a", """{"kind":"TOOL_RESULT","operationId":"conflict","parentOperationId":"root-a","content":"private-a"}""")
+        legacyEvent(dir, "conflict-b", """{"kind":"TOOL_RESULT","operationId":"conflict","parentOperationId":"root-b","content":"private-b"}""")
+        legacyEvent(dir, "child", """{"kind":"TOOL_RESULT","operationId":"child","parentOperationId":"conflict","content":"private-child"}""")
+        legacyEvent(dir, "sibling", """{"kind":"TOOL_RESULT","operationId":"sibling","parentOperationId":"root-b","content":"retained-sibling"}""")
+        val selectiveDelete: (File) -> Boolean = { it.name == "conflict-a.event" && it.delete() }
+        val store = DiagnosticStore(dir, cipher, deleteFile = selectiveDelete)
+        val first = ByteArrayOutputStream()
+        store.export(first, 0)
+        assertFalse(File(dir, "conflict-a.event").exists())
+        assertTrue(File(dir, "conflict-b.event").exists())
+        val firstEvents = unzip(first.toByteArray()).getValue("events.jsonl").decodeToString()
+        assertFalse(firstEvents.contains("private"))
+        assertTrue(firstEvents.contains("retained-sibling"))
+        store.close()
+        val reopened = DiagnosticStore(dir, cipher, deleteFile = { false })
+        val second = ByteArrayOutputStream()
+        reopened.export(second, 0)
+        val secondEvents = unzip(second.toByteArray()).getValue("events.jsonl").decodeToString()
+        assertFalse(secondEvents.contains("private"))
+        assertTrue(secondEvents.contains("retained-sibling"))
+        reopened.close()
+    }
+
+    @Test fun `conflicting ownership and unanchored cycle are excluded without losing unrelated roots`() {
+        val dir = Files.createTempDirectory("oassist-legacy-conflict").toFile()
+        legacyEvent(dir, "root-a", """{"kind":"OPERATION_START","operationId":"root-a"}""")
+        legacyEvent(dir, "root-b", """{"kind":"OPERATION_START","operationId":"root-b"}""")
+        legacyEvent(dir, "conflict-a", """{"kind":"TOOL_RESULT","operationId":"conflict","parentOperationId":"root-a","content":"conflict-private"}""")
+        legacyEvent(dir, "conflict-b", """{"kind":"TOOL_RESULT","operationId":"conflict","parentOperationId":"root-b"}""")
+        legacyEvent(dir, "descendant", """{"kind":"TOOL_RESULT","operationId":"descendant","parentOperationId":"conflict","content":"descendant-private"}""")
+        legacyEvent(dir, "cycle-a", """{"kind":"TOOL_RESULT","operationId":"cycle-a","parentOperationId":"cycle-b","content":"cycle-private"}""")
+        legacyEvent(dir, "cycle-b", """{"kind":"TOOL_RESULT","operationId":"cycle-b","parentOperationId":"cycle-a"}""")
+        legacyEvent(dir, "sibling", """{"kind":"TOOL_RESULT","operationId":"sibling","parentOperationId":"root-a","content":"sibling-retained"}""")
+        val store = DiagnosticStore(dir, cipher)
+        val output = ByteArrayOutputStream()
+        store.export(output, 0)
+        val events = unzip(output.toByteArray()).getValue("events.jsonl").decodeToString()
+        assertFalse(events.contains("conflict-private"))
+        assertFalse(events.contains("descendant-private"))
+        assertFalse(events.contains("cycle-private"))
+        assertTrue(events.contains("sibling-retained"))
+        store.close()
+    }
+
+    @Test fun `failed orphan cleanup never exposes event or media`() {
+        val dir = Files.createTempDirectory("oassist-orphan-delete-failure").toFile()
+        legacyEvent(dir, "leftover", """{"kind":"TOOL_RESULT","operationId":"orphan","attributes":{"status":"private-attribute"},"content":"private-content"}""")
+        File(dir, "leftover.blob.media").writeBytes(cipher.encrypt("private-media".toByteArray()))
+        val store = DiagnosticStore(dir, cipher, deleteFile = { false })
+        val output = ByteArrayOutputStream()
+        store.export(output, 0, includeMedia = true)
+        val archive = unzip(output.toByteArray())
+        assertFalse(archive.getValue("events.jsonl").decodeToString().contains("private"))
+        assertTrue(archive.keys.none { it.startsWith("media/") })
+        assertTrue(File(dir, "leftover.event").exists())
+        assertEquals("delete_failed", store.health().lastError)
+        store.close()
+        val reopened = DiagnosticStore(dir, cipher, deleteFile = { false })
+        val again = ByteArrayOutputStream()
+        reopened.export(again, 0, includeMedia = true)
+        assertFalse(unzip(again.toByteArray()).getValue("events.jsonl").decodeToString().contains("private"))
+        reopened.close()
+    }
+
+    @Test fun `deletion marker survives failed cleanup and reopen while siblings remain`() {
+        var now = System.currentTimeMillis()
+        val dir = Files.createTempDirectory("oassist-delete-marker").toFile()
+        val first = DiagnosticStore(dir, cipher, clock = { now }, deleteFile = { false })
+        first.bindConversation("chat", "root")
+        val encoded = Base64.getEncoder().encodeToString("private-media".toByteArray())
+        first.record(DiagnosticEvent(DiagnosticKind.OPERATION_START, "child", "root"))
+        first.record(DiagnosticEvent(DiagnosticKind.PROVIDER_REQUEST, "child", content = """{"image_url":"data:image/png;base64,$encoded","detail":"private-content"}"""))
+        first.record(DiagnosticEvent(DiagnosticKind.TOOL_RESULT, "other", content = "other-content"))
+        first.export(ByteArrayOutputStream(), 0)
+        first.removeConversation("chat")
+        assertEquals("delete_failed", first.health().lastError)
+        assertTrue(dir.listFiles()!!.any { it.extension == "deleted" })
+        assertTrue(dir.listFiles()!!.any { it.extension == "media" })
+        first.close()
+
+        now += 8L * 24 * 60 * 60 * 1000
+        val reopened = DiagnosticStore(dir, cipher, clock = { now }, deleteFile = { false })
+        reopened.record(DiagnosticEvent(DiagnosticKind.TOOL_RESULT, "late", "child", content = "late-private"))
+        val output = ByteArrayOutputStream()
+        reopened.export(output, 0, includeMedia = true)
+        val archive = unzip(output.toByteArray())
+        val events = archive.getValue("events.jsonl").decodeToString()
+        assertFalse(events.contains("private"))
+        assertTrue(events.contains("other-content"))
+        assertTrue(archive.keys.none { it.startsWith("media/") })
+        assertTrue(dir.listFiles()!!.any { it.extension == "deleted" })
+        reopened.close()
+
+        val retry = DiagnosticStore(dir, cipher, clock = { now })
+        retry.export(ByteArrayOutputStream(), 0, includeMedia = true)
+        assertTrue(dir.listFiles()!!.none { it.extension == "media" })
+        retry.close()
+    }
+
+    @Test fun `marker publication failure leaves owned files untouched`() {
+        val dir = Files.createTempDirectory("oassist-marker-failure").toFile()
+        val failingCipher = object : DiagnosticCipher {
+            override fun encrypt(data: ByteArray): ByteArray {
+                if (data.decodeToString().contains("\"operationIds\"")) error("marker failure")
+                return cipher.encrypt(data)
+            }
+            override fun decrypt(data: ByteArray) = cipher.decrypt(data)
+        }
+        val store = DiagnosticStore(dir, failingCipher)
+        store.bindConversation("chat", "root")
+        store.record(DiagnosticEvent(DiagnosticKind.TOOL_RESULT, "root", content = "retained-private"))
+        store.export(ByteArrayOutputStream(), 0)
+        val before = dir.listFiles()!!.map { it.name }.toSet()
+        assertTrue(runCatching { store.removeConversation("chat") }.isFailure)
+        assertEquals(before, dir.listFiles()!!.map { it.name }.toSet())
+        val output = ByteArrayOutputStream()
+        store.export(output, 0)
+        assertTrue(unzip(output.toByteArray()).getValue("events.jsonl").decodeToString().contains("retained-private"))
+        store.close()
+    }
+
+    @Test fun `unreadable deletion marker fails export closed`() {
+        val dir = Files.createTempDirectory("oassist-corrupt-marker").toFile()
+        val store = DiagnosticStore(dir, cipher)
+        store.record(DiagnosticEvent(DiagnosticKind.TOOL_RESULT, "root", content = "private"))
+        store.export(ByteArrayOutputStream(), 0)
+        store.close()
+        File(dir, "corrupt.deleted").writeBytes(byteArrayOf(1, 2, 3))
+        val reopened = DiagnosticStore(dir, cipher)
+        assertFalse(reopened.health().available)
+        assertEquals("deletion_marker_unreadable", reopened.health().lastError)
+        val failure = runCatching { reopened.export(ByteArrayOutputStream(), 0) }.exceptionOrNull()
+        assertEquals("deletion_marker_unreadable", failure?.message)
+        assertTrue(runCatching { reopened.bindConversation("chat", "new-root") }.isSuccess)
+        reopened.record(DiagnosticEvent(DiagnosticKind.TOOL_RESULT, "new-root", content = "new-private"))
+        assertTrue(runCatching { reopened.export(ByteArrayOutputStream(), 0) }.isFailure)
+        reopened.close()
+    }
+
+    @Test fun `in flight export is invalidated before marker publication`() {
+        val markerStarted = CountDownLatch(1)
+        val releaseMarker = CountDownLatch(1)
+        val pausedCipher = object : DiagnosticCipher {
+            override fun encrypt(data: ByteArray): ByteArray {
+                if (data.decodeToString().contains("\"operationIds\"")) {
+                    markerStarted.countDown()
+                    check(releaseMarker.await(10, TimeUnit.SECONDS))
+                }
+                return cipher.encrypt(data)
+            }
+            override fun decrypt(data: ByteArray) = cipher.decrypt(data)
+        }
+        val store = DiagnosticStore(Files.createTempDirectory("oassist-delete-export-race").toFile(), pausedCipher)
+        store.bindConversation("chat", "root")
+        store.record(DiagnosticEvent(DiagnosticKind.TOOL_RESULT, "root", content = "private"))
+        store.export(ByteArrayOutputStream(), 0)
+        val exportStarted = CountDownLatch(1)
+        val releaseExport = CountDownLatch(1)
+        val output = object : java.io.FilterOutputStream(ByteArrayOutputStream()) {
+            override fun write(value: Int) { exportStarted.countDown(); check(releaseExport.await(10, TimeUnit.SECONDS)); out.write(value) }
+            override fun write(value: ByteArray, offset: Int, length: Int) { exportStarted.countDown(); check(releaseExport.await(10, TimeUnit.SECONDS)); out.write(value, offset, length) }
+        }
+        val exportFailure = java.util.concurrent.atomic.AtomicReference<Throwable?>()
+        val deleteFailure = java.util.concurrent.atomic.AtomicReference<Throwable?>()
+        val generation = DiagnosticStore::class.java.getDeclaredField("generation").apply { isAccessible = true }
+            .get(store) as java.util.concurrent.atomic.AtomicLong
+        val beforeDelete = generation.get()
+        val exporter = thread { exportFailure.set(runCatching { store.export(output, 0) }.exceptionOrNull()) }
+        var deleter: Thread? = null
+        try {
+            assertTrue(exportStarted.await(10, TimeUnit.SECONDS))
+            deleter = thread { deleteFailure.set(runCatching { store.removeConversation("chat") }.exceptionOrNull()) }
+            assertTrue(markerStarted.await(10, TimeUnit.SECONDS))
+            assertTrue(generation.get() > beforeDelete)
+            releaseExport.countDown()
+        } finally {
+            releaseExport.countDown()
+            releaseMarker.countDown()
+            exporter.join(10000)
+            deleter?.join(10000)
+        }
+        assertFalse(deleter!!.isAlive)
+        assertFalse(exporter.isAlive)
+        assertEquals("export_invalidated", exportFailure.get()?.message)
+        assertNull(deleteFailure.get())
+        store.close()
     }
 
     @Test fun `secrets are cleaned before writing and export`() {
@@ -198,6 +462,49 @@ class DiagnosticContractTest {
         assertFalse(events.contains("late"))
     }
 
+    @Test fun `lost intermediate start retains ownership across reopen and conversation deletion`() {
+        val dir = Files.createTempDirectory("oassist-lost-start").toFile()
+        val failingCipher = object : DiagnosticCipher {
+            override fun encrypt(data: ByteArray): ByteArray {
+                if (data.decodeToString().contains("fail-intermediate-start")) error("injected write failure")
+                return cipher.encrypt(data)
+            }
+            override fun decrypt(data: ByteArray) = cipher.decrypt(data)
+        }
+        val first = DiagnosticStore(dir, failingCipher)
+        first.bindConversation("chat", "root")
+        first.record(DiagnosticEvent(DiagnosticKind.OPERATION_START, "intermediate", "root", attributes = mapOf("marker" to "fail-intermediate-start")))
+        first.export(ByteArrayOutputStream(), 0)
+        assertEquals("write_failed_IllegalStateException", first.health().lastError)
+        val encoded = Base64.getEncoder().encodeToString("private-media".toByteArray())
+        first.record(DiagnosticEvent(DiagnosticKind.PROVIDER_ERROR, "child", "intermediate", content = """{"detail":"\u006darker-secret","image_url":"data:image/png;base64,$encoded"}"""), listOf("marker-secret"))
+        first.record(DiagnosticEvent(DiagnosticKind.TOOL_RESULT, "other", content = "other-content"))
+        first.export(ByteArrayOutputStream(), 0)
+        first.close()
+
+        val reopened = DiagnosticStore(dir, cipher)
+        val before = ByteArrayOutputStream()
+        reopened.export(before, 0, includeMedia = true, operationIds = setOf("root"))
+        val entries = unzip(before.toByteArray())
+        val events = entries.getValue("events.jsonl").decodeToString()
+        assertTrue(events.contains("REDACTED"))
+        assertFalse(events.contains("marker-secret"))
+        assertTrue(entries.filterKeys { it.startsWith("media/") }.values.any { it.decodeToString() == "private-media" })
+        reopened.removeConversation("chat")
+        reopened.record(DiagnosticEvent(DiagnosticKind.TOOL_RESULT, "late", "child", content = "late-private"))
+        reopened.record(DiagnosticEvent(DiagnosticKind.AGENT_ROUND, "intermediate", content = "late-intermediate-private"))
+        val after = ByteArrayOutputStream()
+        reopened.export(after, 0, includeMedia = true)
+        val remaining = unzip(after.toByteArray())
+        val remainingEvents = remaining.getValue("events.jsonl").decodeToString()
+        assertFalse(remainingEvents.contains("child"))
+        assertFalse(remainingEvents.contains("late-private"))
+        assertFalse(remainingEvents.contains("late-intermediate-private"))
+        assertTrue(remainingEvents.contains("other-content"))
+        assertTrue(remaining.keys.none { it.startsWith("media/") })
+        reopened.close()
+    }
+
     @Test fun `failed turn ownership survives reopening without a binding event`() {
         val dir = Files.createTempDirectory("oassist-failed-owner").toFile()
         val first = DiagnosticStore(dir, cipher)
@@ -212,6 +519,24 @@ class DiagnosticContractTest {
         reopened.export(out, 0)
         assertFalse(unzip(out.toByteArray()).getValue("events.jsonl").decodeToString().contains("private"))
         reopened.close()
+    }
+
+    @Test fun `discarding a child keeps its parent and siblings writable`() {
+        val store = DiagnosticStore(Files.createTempDirectory("oassist-discard-child").toFile(), cipher)
+        store.record(DiagnosticEvent(DiagnosticKind.OPERATION_START, "root"))
+        store.record(DiagnosticEvent(DiagnosticKind.OPERATION_START, "parent", "root"))
+        store.record(DiagnosticEvent(DiagnosticKind.TOOL_RESULT, "child", "parent", content = "discarded"))
+        store.export(ByteArrayOutputStream(), 0)
+        store.discardOperation("child")
+        store.record(DiagnosticEvent(DiagnosticKind.TOOL_RESULT, "parent", content = "parent-kept"))
+        store.record(DiagnosticEvent(DiagnosticKind.TOOL_RESULT, "sibling", "parent", content = "sibling-kept"))
+        val output = ByteArrayOutputStream()
+        store.export(output, 0)
+        val events = unzip(output.toByteArray()).getValue("events.jsonl").decodeToString()
+        assertFalse(events.contains("discarded"))
+        assertTrue(events.contains("parent-kept"))
+        assertTrue(events.contains("sibling-kept"))
+        store.close()
     }
 
     @Test fun `binding failure drops later request content without failing the call`() {

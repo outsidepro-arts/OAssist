@@ -5,6 +5,7 @@ import android.content.ContextWrapper
 import android.content.SharedPreferences
 import android.database.DatabaseErrorHandler
 import android.database.sqlite.SQLiteDatabase
+import android.system.Os
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
 import java.io.ByteArrayInputStream
@@ -20,12 +21,67 @@ import org.junit.runner.RunWith
 import ru.outsideproarts.oassist.core.data.DataContainer
 import ru.outsideproarts.oassist.core.data.chat.ChatRepository
 import ru.outsideproarts.oassist.core.model.AssistMode
+import ru.outsideproarts.oassist.core.model.StoredTurn
 import ru.outsideproarts.oassist.core.model.diagnostics.DiagnosticEvent
 import ru.outsideproarts.oassist.core.model.diagnostics.DiagnosticKind
 import ru.outsideproarts.oassist.core.model.diagnostics.Diagnostics
 
 @RunWith(AndroidJUnit4::class)
 class ChatDiagnosticDeletionTest {
+    @Test fun markerPublicationFailureKeepsChatForRetry() = runBlocking {
+        val base = InstrumentationRegistry.getInstrumentation().targetContext
+        val directory = File(base.cacheDir, "chat-marker-${UUID.randomUUID()}").apply { check(mkdirs()) }
+        val context = object : ContextWrapper(base) {
+            override fun getNoBackupFilesDir() = File(directory, "no-backup").apply { mkdirs() }
+            override fun getFilesDir() = File(directory, "files").apply { mkdirs() }
+            override fun getCacheDir() = File(directory, "cache").apply { mkdirs() }
+            override fun getDatabasePath(name: String) = File(directory, "databases/$name").also { it.parentFile?.mkdirs() }
+            override fun openOrCreateDatabase(name: String, mode: Int, factory: SQLiteDatabase.CursorFactory?): SQLiteDatabase =
+                base.openOrCreateDatabase(getDatabasePath(name).absolutePath, mode, factory)
+            override fun openOrCreateDatabase(name: String, mode: Int, factory: SQLiteDatabase.CursorFactory?, errorHandler: DatabaseErrorHandler?): SQLiteDatabase =
+                base.openOrCreateDatabase(getDatabasePath(name).absolutePath, mode, factory, errorHandler)
+            override fun getSharedPreferences(name: String, mode: Int): SharedPreferences =
+                base.getSharedPreferences("${directory.name}-$name", mode)
+        }
+        val previous = Diagnostics.swapForTest(null)
+        val data = DataContainer(context, context)
+        val diagnosticDir = File(context.noBackupFilesDir, "diagnostics")
+        try {
+            val chat = data.chats.createChat(AssistMode.CHAT, "test")
+            data.chats.appendTurn(chat, StoredTurn(diagnosticOperationId = "root"))
+            data.chats.bindDiagnosticOperation(chat, "root")
+            data.diagnostics.record(DiagnosticEvent(DiagnosticKind.PROVIDER_REQUEST, "root", content = "private"))
+            data.diagnostics.export(ByteArrayOutputStream(), 0)
+            Os.chmod(diagnosticDir.absolutePath, 320) // Owner may read and traverse, but not create a marker.
+            try {
+                assertTrue(runCatching { data.chats.deleteChat(chat) }.isFailure)
+                assertTrue(data.chats.getChat(chat) != null)
+                assertTrue(data.chats.loadTurns(chat).single().diagnosticOperationId == "root")
+            } finally {
+                Os.chmod(diagnosticDir.absolutePath, 448)
+            }
+            data.chats.deleteChat(chat)
+            assertTrue(data.chats.getChat(chat) == null)
+            val output = ByteArrayOutputStream()
+            data.diagnostics.export(output, 0)
+            val events = ZipInputStream(ByteArrayInputStream(output.toByteArray())).use { zip ->
+                var result = ""
+                while (true) {
+                    val entry = zip.nextEntry ?: break
+                    if (entry.name == "events.jsonl") result = zip.readBytes().decodeToString()
+                }
+                result
+            }
+            assertFalse(events.contains("private"))
+        } finally {
+            Diagnostics.swapForTest(previous)
+            data.close()
+            base.deleteSharedPreferences("${directory.name}-diagnostics")
+            require(directory.canonicalFile.toPath().startsWith(base.cacheDir.canonicalFile.toPath()))
+            check(directory.deleteRecursively())
+        }
+    }
+
     @Test fun failedAndInFlightRootsAreDeletedThroughProductionRepository() = runBlocking {
         val base = InstrumentationRegistry.getInstrumentation().targetContext
         val directory = File(base.cacheDir, "chat-diagnostic-${UUID.randomUUID()}").apply { check(mkdirs()) }

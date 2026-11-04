@@ -25,6 +25,7 @@ data class DiagnosticEvent(
     val monotonicNanos: Long = System.nanoTime(),
     val sequence: Long = 0,
     val truncated: Boolean = false,
+    val rootOperationId: String? = null,
 )
 
 data class DiagnosticHealth(

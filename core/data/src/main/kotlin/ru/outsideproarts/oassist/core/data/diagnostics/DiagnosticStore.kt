@@ -5,12 +5,14 @@ import android.content.Intent
 import android.os.UserManager
 import androidx.core.content.FileProvider
 import kotlinx.serialization.encodeToString
+import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import ru.outsideproarts.oassist.core.data.secret.KeystoreAead
+import ru.outsideproarts.oassist.core.data.atomicWrite
 import ru.outsideproarts.oassist.core.model.Outcome
 import ru.outsideproarts.oassist.core.model.SecretRedactor
 import ru.outsideproarts.oassist.core.model.diagnostics.DiagnosticEvent
@@ -153,6 +155,7 @@ class DiagnosticStore private constructor(
     private val maxBytes: Long,
     private val reserveBytes: Long,
     private val maxMediaBytes: Long,
+    private val deleteFile: (File) -> Boolean,
 ) : DiagnosticRecorder {
     constructor(context: Context) : this(
         { File(context.noBackupFilesDir, "diagnostics") }, KeystoreDiagnosticCipher(),
@@ -173,10 +176,14 @@ class DiagnosticStore private constructor(
         MAX_BYTES,
         16L * 1024 * 1024,
         128L * 1024 * 1024,
+        { it.delete() },
     )
 
     internal constructor(root: File, cipher: DiagnosticCipher, clock: () -> Long = System::currentTimeMillis, maxBytes: Long = MAX_BYTES, reserveBytes: Long = 16L * 1024 * 1024, maxMediaBytes: Long = 128L * 1024 * 1024) :
-        this({ root }, cipher, { true }, {}, clock, {}, { true }, maxBytes, reserveBytes, maxMediaBytes)
+        this({ root }, cipher, { true }, {}, clock, {}, { true }, maxBytes, reserveBytes, maxMediaBytes, { it.delete() })
+
+    internal constructor(root: File, cipher: DiagnosticCipher, clock: () -> Long = System::currentTimeMillis, maxBytes: Long = MAX_BYTES, reserveBytes: Long = 16L * 1024 * 1024, maxMediaBytes: Long = 128L * 1024 * 1024, deleteFile: (File) -> Boolean) :
+        this({ root }, cipher, { true }, {}, clock, {}, { true }, maxBytes, reserveBytes, maxMediaBytes, deleteFile)
 
     private val lock = Any()
     private val dropped = AtomicLong()
@@ -193,6 +200,7 @@ class DiagnosticStore private constructor(
     @Volatile private var settingsLoaded = isAvailable()
     @Volatile private var failure: String? = null
     private val removedOperations = mutableSetOf<String>()
+    private val durablyRemovedOperations = mutableSetOf<String>()
     private val knownOperations = ConcurrentHashMap.newKeySet<String>()
     private val operationRoots = mutableMapOf<String, String>()
     private val liveRoots = mutableMapOf<String, String>()
@@ -204,6 +212,7 @@ class DiagnosticStore private constructor(
 
     private fun ensureStartupMaintenance() {
         if (startupMaintenanceDone || !isAvailable()) return
+        loadDeletionMarkers()
         var cleaned = true
         val existing = files()
         val eventNames = existing.filter { it.extension == "event" }.map { it.nameWithoutExtension }.toSet()
@@ -216,12 +225,15 @@ class DiagnosticStore private constructor(
                 failure = "delete_failed"
             }
         }
+        if (!cleanupDeletedEvents()) cleaned = false
+        if (!cleanupUnownedEvents()) cleaned = false
         startupMaintenanceDone = cleaned
     }
 
     data class OperationSummary(val operationId: String, val timestampMillis: Long, val mode: String?, val chatId: String?)
-    private data class EventIndex(val file: File, val operationId: String, val parent: String?, val chatId: String?, val hasContent: Boolean, val contentBytes: Long)
+    private data class EventIndex(val file: File, val operationId: String, val parent: String?, val root: String?, val kind: DiagnosticKind, val chatId: String?, val hasContent: Boolean, val contentBytes: Long)
     private data class ExportSnapshot(val health: DiagnosticHealth, val events: List<EventIndex>, val files: List<File>, val epoch: Long, val invalid: Int)
+    @Serializable private data class DeletionMarker(val operationIds: Set<String>)
     private val pinned = mutableMapOf<File, Int>()
 
     fun generationToken(): Long = generation.get()
@@ -249,19 +261,13 @@ class DiagnosticStore private constructor(
     }
 
     override fun record(event: DiagnosticEvent, secrets: Collection<String>) {
-        if (!isAvailable()) {
-            dropped.incrementAndGet()
-            failure = "credential_storage_locked"
-            return
-        }
-        if (!settingsLoaded) synchronized(lock) {
-            if (!settingsLoaded) {
-                enabled = loadEnabled()
-                settingsLoaded = true
-                if (failure == "credential_storage_locked") failure = null
-            }
-        }
         val liveRoot = synchronized(lock) {
+            try {
+                loadDeletionMarkers()
+            } catch (_: Exception) {
+                dropped.incrementAndGet()
+                return
+            }
             val rootId = liveRoots[event.operationId] ?: event.parentOperationId?.let { liveRoots[it] ?: it } ?: event.operationId
             if (event.operationId in removedOperations || event.parentOperationId in removedOperations || rootId in removedOperations) {
                 removedOperations.add(event.operationId)
@@ -274,6 +280,19 @@ class DiagnosticStore private constructor(
             pendingRoots[rootId] = (pendingRoots[rootId] ?: 0) + 1
             rootId
         }
+        if (!isAvailable()) {
+            dropped.incrementAndGet()
+            failure = "credential_storage_locked"
+            finishPending(event, liveRoot)
+            return
+        }
+        if (!settingsLoaded) synchronized(lock) {
+            if (!settingsLoaded) {
+                enabled = loadEnabled()
+                settingsLoaded = true
+                if (failure == "credential_storage_locked") failure = null
+            }
+        }
         val currentGeneration = generation.get()
         val rawContent = if (enabled) event.content?.let { DiagnosticSanitizer.clean(it, secrets) } else null
         val (cleanContent, media) = rawContent?.let(::extractMedia) ?: (null to emptyList())
@@ -281,6 +300,7 @@ class DiagnosticStore private constructor(
         val safe = event.copy(
             operationId = DiagnosticSanitizer.clean(event.operationId, secrets),
             parentOperationId = event.parentOperationId?.let { DiagnosticSanitizer.clean(it, secrets) },
+            rootOperationId = DiagnosticSanitizer.clean(liveRoot, secrets),
             attributes = DiagnosticSanitizer.attributes(event.attributes, secrets),
             content = limited,
             sequence = sequence.incrementAndGet(),
@@ -309,7 +329,7 @@ class DiagnosticStore private constructor(
                         ensureStartupMaintenance()
                         if (!root.exists() && !root.mkdirs()) error("storage_unavailable")
                         loadRunIndex()
-                        val runId = operationRoots[safe.operationId] ?: safe.parentOperationId?.let { operationRoots[it] ?: it } ?: safe.operationId
+                        val runId = safe.rootOperationId ?: operationRoots[safe.operationId] ?: safe.parentOperationId?.let { operationRoots[it] ?: it } ?: safe.operationId
                         operationRoots[safe.operationId] = runId
                         val used = runBytes[runId] ?: 0
                         val textBytes = safe.content?.toByteArray(StandardCharsets.UTF_8)?.size?.toLong() ?: 0
@@ -373,7 +393,11 @@ class DiagnosticStore private constructor(
     }
 
     override fun health(): DiagnosticHealth = synchronized(lock) {
-        ensureStartupMaintenance()
+        try {
+            ensureStartupMaintenance()
+        } catch (_: Exception) {
+            return@synchronized DiagnosticHealth(false, enabled, dropped.get(), files().sumOf { it.length() }, failure ?: "storage_unavailable")
+        }
         if (!isAvailable()) DiagnosticHealth(false, false, dropped.get(), 0, "credential_storage_locked")
         else DiagnosticHealth(failure == null, enabled, dropped.get(), files().sumOf { it.length() }, failure)
     }
@@ -396,12 +420,19 @@ class DiagnosticStore private constructor(
         activeOperations.clear()
         runBytes.clear()
         runIndexLoaded = true
-        files().filter { it.name != "sequence" }.forEach { if (!it.delete()) failure = "delete_failed" }
+        files().filter { it.name != "sequence" && it.extension != "deleted" }.forEach { if (!it.delete()) failure = "delete_failed" }
         invalidateExports()
     }
 
     /** Persist ownership outside the lossy event queue before recording request content. */
     fun bindConversation(chatId: String, operationId: String) = synchronized(lock) {
+        try {
+            loadDeletionMarkers()
+        } catch (_: Exception) {
+            removedOperations.add(operationId)
+            dropped.incrementAndGet()
+            return@synchronized
+        }
         if (operationId in removedOperations) return@synchronized
         var pending: File? = null
         try {
@@ -431,7 +462,8 @@ class DiagnosticStore private constructor(
             val affected = mutableSetOf(operationId)
             do {
                 val count = affected.size
-                events.filter { it.parent in affected }.forEach { affected.add(it.operationId) }
+                events.filter { it.parent in affected || it.root in affected }.forEach { affected.add(it.operationId) }
+                events.filter { it.root in affected }.mapNotNullTo(affected) { it.parent }
                 liveRoots.filterValues { it in affected }.keys.forEach { affected.add(it) }
             } while (affected.size != count)
             removedOperations.addAll(affected)
@@ -454,11 +486,12 @@ class DiagnosticStore private constructor(
     private fun removeOwnedOperations(chatId: String?, operationIds: Set<String>) {
         flush()
         synchronized(lock) {
-        ensureStartupMaintenance()
-        generation.incrementAndGet()
+        check(isAvailable()) { "storage_unavailable" }
+        check(root.isDirectory || (!root.exists() && root.mkdirs())) { "storage_unavailable" }
+        loadDeletionMarkers()
         val events = eventIndex()
-        val bindings = files().filter { it.extension == "binding" }.mapNotNull { file ->
-            runCatching { file to decode(file) }.getOrNull()
+        val bindings = files().filter { it.extension == "binding" }.map { file ->
+            file to decode(file)
         }
         val matchingBindings = bindings.filter {
             (chatId != null && it.second.attributes["chatId"] == chatId) || it.second.operationId in operationIds
@@ -469,17 +502,27 @@ class DiagnosticStore private constructor(
         }
         do {
             val count = affected.size
-            events.filter { it.parent in affected }.forEach { affected.add(it.operationId) }
+            events.filter { it.parent in affected || it.root in affected }.forEach { affected.add(it.operationId) }
+            events.filter { it.root in affected }.mapNotNullTo(affected) { it.parent }
             liveRoots.filterValues { it in affected }.keys.forEach { affected.add(it) }
         } while (affected.size != count)
+        generation.incrementAndGet()
+        if (affected.isNotEmpty()) {
+            if (!root.exists() && !root.mkdirs()) error("storage_unavailable")
+            publishDeletionMarker(affected)
+        }
         removedOperations.addAll(affected)
-        matchingBindings.forEach { if (!it.first.delete()) failure = "delete_failed" }
+        matchingBindings.forEach { if (!deleteFile(it.first)) failure = "delete_failed" }
         events.filter { it.operationId in affected }.forEach { entry ->
             val file = entry.file
             val prefix = file.nameWithoutExtension + "."
-            files().filter { it != file && it.name.startsWith(prefix) }.forEach { if (!it.delete()) failure = "delete_failed" }
-            if (!file.delete()) failure = "delete_failed"
+            var mediaDeleted = true
+            files().filter { it != file && it.name.startsWith(prefix) }.forEach {
+                if (!deleteFile(it)) { failure = "delete_failed"; mediaDeleted = false }
+            }
+            if (mediaDeleted && !deleteFile(file)) failure = "delete_failed"
         }
+        cleanupUnownedEvents()
         invalidateExports()
         }
     }
@@ -488,11 +531,14 @@ class DiagnosticStore private constructor(
         flush()
         val snapshot = synchronized(lock) {
             ensureStartupMaintenance()
+            loadDeletionMarkers()
             val all = files()
-            val events = eventIndex()
+            val indexed = eventIndex()
+            val owned = ownedOperationIds(indexed)
+            val events = indexed.filter { it.operationId in owned && it.operationId !in removedOperations && it.parent !in removedOperations && it.root !in removedOperations }
             val held = all.filter { it.extension == "event" || it.extension == "media" }
             held.forEach { pinned[it] = (pinned[it] ?: 0) + 1 }
-            ExportSnapshot(health(), events, held, generation.get(), all.count { it.extension == "event" } - events.size)
+            ExportSnapshot(health(), events, held, generation.get(), all.count { it.extension == "event" } - indexed.size)
         }
         try {
             val status = snapshot.health
@@ -503,7 +549,7 @@ class DiagnosticStore private constructor(
             if (selected != null) {
                 do {
                     val count = selected.size
-                    eventFiles.filter { it.parent in selected }.forEach { selected.add(it.operationId) }
+                    eventFiles.filter { it.parent in selected || it.root in selected }.forEach { selected.add(it.operationId) }
                 } while (selected.size != count)
             }
             ZipOutputStream(output).use { zip ->
@@ -582,7 +628,100 @@ class DiagnosticStore private constructor(
         json.decodeFromString<DiagnosticEvent>(cipher.decrypt(file.readBytes()).toString(StandardCharsets.UTF_8))
 
     private fun eventIndex(): List<EventIndex> = files().filter { it.extension == "event" }.mapNotNull { file ->
-        runCatching { decode(file) }.getOrNull()?.let { EventIndex(file, it.operationId, it.parentOperationId, it.attributes["chatId"], it.content != null, it.content?.toByteArray(StandardCharsets.UTF_8)?.size?.toLong() ?: 0) }
+        runCatching { decode(file) }.getOrNull()?.let { EventIndex(file, it.operationId, it.parentOperationId, it.rootOperationId, it.kind, it.attributes["chatId"], it.content != null, it.content?.toByteArray(StandardCharsets.UTF_8)?.size?.toLong() ?: 0) }
+    }
+
+    private fun loadDeletionMarkers() {
+        files().filter { it.extension == "deleted" }.forEach { file ->
+            val marker = try {
+                json.decodeFromString<DeletionMarker>(cipher.decrypt(file.readBytes()).toString(StandardCharsets.UTF_8))
+            } catch (error: Exception) {
+                failure = "deletion_marker_unreadable"
+                throw IllegalStateException("deletion_marker_unreadable", error)
+            }
+            removedOperations.addAll(marker.operationIds)
+            durablyRemovedOperations.addAll(marker.operationIds)
+        }
+    }
+
+    private fun publishDeletionMarker(operationIds: Set<String>) {
+        val marker = File(root, "${UUID.randomUUID()}.deleted")
+        val bytes = cipher.encrypt(json.encodeToString(DeletionMarker(operationIds)).toByteArray(StandardCharsets.UTF_8))
+        atomicWrite(marker) { it.write(bytes) }
+        durablyRemovedOperations.addAll(operationIds)
+    }
+
+    private fun cleanupDeletedEvents(): Boolean {
+        var cleaned = true
+        val entries = eventIndex()
+        val affected = removedOperations.toMutableSet()
+        do {
+            val count = affected.size
+            entries.filter { it.parent in affected || it.root in affected }.forEach { affected.add(it.operationId) }
+        } while (affected.size != count)
+        removedOperations.addAll(affected)
+        entries.filter { it.operationId in affected }.forEach { entry ->
+            val prefix = entry.file.nameWithoutExtension + "."
+            var mediaDeleted = true
+            files().filter { it != entry.file && it.name.startsWith(prefix) }.forEach {
+                if (!deleteFile(it)) { failure = "delete_failed"; cleaned = false; mediaDeleted = false }
+            }
+            if (mediaDeleted && !deleteFile(entry.file)) { failure = "delete_failed"; cleaned = false }
+        }
+        files().filter { it.extension == "binding" }.forEach { file ->
+            val event = runCatching { decode(file) }.getOrNull()
+            if (event?.operationId in affected && !deleteFile(file)) { failure = "delete_failed"; cleaned = false }
+        }
+        return cleaned
+    }
+
+    private fun ownedOperationIds(entries: List<EventIndex>): Set<String> {
+        val bindings = files().filter { it.extension == "binding" }.mapNotNull { file ->
+            runCatching { decode(file).operationId }.getOrNull()
+        }
+        val roots = mutableMapOf<String, MutableSet<String>>()
+        fun addRoot(operation: String, root: String) {
+            roots.getOrPut(operation) { mutableSetOf() }.add(root)
+        }
+        bindings.forEach { addRoot(it, it) }
+        entries.forEach { entry ->
+            entry.root?.let { addRoot(it, it); addRoot(entry.operationId, it) }
+            if (entry.kind == DiagnosticKind.OPERATION_START && entry.parent == null) addRoot(entry.operationId, entry.operationId)
+        }
+        do {
+            var changed = false
+            entries.forEach { entry ->
+                val parentRoots = roots[entry.parent] ?: return@forEach
+                if (roots.getOrPut(entry.operationId) { mutableSetOf() }.addAll(parentRoots)) changed = true
+            }
+        } while (changed)
+        return roots.filterValues { it.size == 1 }.keys
+    }
+
+    private fun cleanupUnownedEvents(): Boolean {
+        val entries = eventIndex()
+        val owned = ownedOperationIds(entries)
+        val unowned = entries.filter { it.operationId !in owned }.map { it.operationId }.toSet()
+        if (unowned.isEmpty()) return true
+        val unmarked = unowned - durablyRemovedOperations
+        if (unmarked.isNotEmpty()) {
+            try {
+                generation.incrementAndGet()
+                publishDeletionMarker(unmarked)
+                removedOperations.addAll(unmarked)
+            } catch (_: Exception) {
+                failure = "deletion_marker_write_failed"
+                return false
+            }
+        }
+        var cleaned = true
+        entries.filter { it.operationId in unowned }.forEach { entry ->
+            val prefix = entry.file.nameWithoutExtension + "."
+            files().filter { it == entry.file || it.name.startsWith(prefix) }.forEach { file ->
+                if (!deleteFile(file)) { failure = "delete_failed"; cleaned = false }
+            }
+        }
+        return cleaned
     }
 
     private fun pruneExpiredBindings() {
@@ -601,7 +740,7 @@ class DiagnosticStore private constructor(
             while (seen.add(current)) current = parents[current] ?: break
             return liveRoots[current] ?: current
         }
-        val retained = entries.map { rootOf(it.operationId) }.toSet() +
+        val retained = entries.map { it.root ?: rootOf(it.operationId) }.toSet() +
             activeOperations.map { liveRoots[it] ?: it } + pendingRoots.keys
         bindings.forEach { (file, binding) ->
             if (binding.timestampMillis < clock() - RETENTION_MILLIS && binding.operationId !in retained) {
@@ -615,7 +754,7 @@ class DiagnosticStore private constructor(
         val entries = eventIndex()
         val parents = entries.groupBy { it.operationId }.mapValues { (_, events) -> events.firstNotNullOfOrNull { it.parent } }
         entries.forEach { entry ->
-            var rootId = entry.operationId
+            var rootId = entry.root ?: entry.operationId
             val seen = mutableSetOf<String>()
             while (seen.add(rootId)) rootId = parents[rootId] ?: break
             operationRoots[entry.operationId] = rootId
@@ -677,7 +816,7 @@ class DiagnosticStore private constructor(
             return current
         }
         val allMedia = files().filter { it.extension == "media" }
-        val groups = entries.filter { !contentOnly || it.hasContent }.groupBy { root(it.operationId) }
+        val groups = entries.filter { !contentOnly || it.hasContent }.groupBy { it.root ?: root(it.operationId) }
             .filterKeys { it != protectedRun }
             .values.map { group ->
                 val eventFiles = group.map { it.file }
