@@ -833,10 +833,10 @@ private val sessionTurns = mutableListOf<ru.outsideproarts.oassist.core.model.St
                     stopSelf()
                     return@launch
                 }
-                finishSpokenTurn(awaitIdle = { speech?.awaitIdle() }, continueTurn = { drained ->
+                finishSpokenTurn(awaitIdle = { speech?.awaitIdle() }, continueTurn = { shouldContinue ->
                     refreshSessionNotification(force = true)
-                    execute(voiceFlow.onTurnFinished(continueDialog && drained))
-                })
+                    execute(voiceFlow.onTurnFinished(shouldContinue))
+                }, continueDialog = continueDialog, channel = tts.channel)
             } finally {
                 try {
                     persistAssistantTurn(text, diagnosticId, timeline, turnTranscript)

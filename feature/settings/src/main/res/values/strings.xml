@@ -440,6 +440,7 @@
     <string name="mode_assistant_show_overlay">Показывать панель поверх экрана</string>
     <string name="mode_assistant_show_overlay_hint">Уведомление сервиса остаётся в обоих режимах — этого требует Android. Без панели управление сессией идёт из уведомления, требуется разрешение на уведомления.</string>
     <string name="mode_assistant_continue_dialog">Продолжать диалог автоматически</string>
+    <string name="mode_assistant_continue_dialog_hint">Если экранный чтец выбран как канал озвучивания, продолжайте диалог вручную кнопкой микрофона или кнопкой гарнитуры.</string>
     <string name="mode_share_extras">Поведение отправки</string>
     <string name="mode_share_action">Что делать с контентом</string>
     <string name="mode_share_show_in_chat">Показывать в чате</string>

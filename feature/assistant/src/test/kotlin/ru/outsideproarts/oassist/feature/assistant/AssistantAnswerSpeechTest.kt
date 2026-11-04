@@ -9,12 +9,59 @@ import kotlinx.coroutines.runBlocking
 import ru.outsideproarts.oassist.core.agent.AssistVoiceEffect
 import ru.outsideproarts.oassist.core.agent.AssistVoiceFlow
 import ru.outsideproarts.oassist.core.agent.AssistVoiceState
+import ru.outsideproarts.oassist.core.model.SpeechOutputChannel
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class AssistantAnswerSpeechTest {
+    @Test
+    fun screenReaderRequiresManualResumeEvenAfterAnnouncementsAreDelivered() = runBlocking {
+        for (autoSpeak in listOf(false, true)) {
+            for (continueDialog in listOf(false, true)) {
+                val events = mutableListOf<String>()
+                val flow = AssistVoiceFlow().apply { onUserSubmit("Вопрос") }
+                val speaker = AssistantAnswerSpeech { if (autoSpeak) events += "announcement:$it" }
+                val answer = "Длинный ответ. ".repeat(100)
+                speaker.onText(answer, false)
+                speaker.onFinish(answer, false)
+
+                finishSpokenTurn(
+                    awaitIdle = { events += "delivered" },
+                    continueTurn = { if (AssistVoiceEffect.StartStt in flow.onTurnFinished(it)) events += "startStt" },
+                    continueDialog = continueDialog,
+                    channel = SpeechOutputChannel.SCREEN_READER,
+                )
+                assertEquals(autoSpeak, events.any { it.startsWith("announcement:") })
+                assertTrue("startStt" !in events)
+                assertEquals(AssistVoiceState.Idle, flow.state.value)
+                assertEquals(listOf(AssistVoiceEffect.StartStt), flow.onPlayPause())
+            }
+        }
+    }
+
+    @Test
+    fun systemTtsRespectsContinueDialogAfterReceipt() = runBlocking {
+        for (continueDialog in listOf(false, true)) {
+            val flow = AssistVoiceFlow().apply { onUserSubmit("Вопрос") }
+            val receipt = CompletableDeferred<Unit>()
+            var effects = emptyList<AssistVoiceEffect>()
+            val job = launch(start = CoroutineStart.UNDISPATCHED) {
+                finishSpokenTurn(
+                    awaitIdle = { receipt.await() },
+                    continueTurn = { effects = flow.onTurnFinished(it) },
+                    continueDialog = continueDialog,
+                    channel = SpeechOutputChannel.SYSTEM_TTS,
+                )
+            }
+            assertTrue(effects.isEmpty())
+            receipt.complete(Unit)
+            job.join()
+            assertEquals(continueDialog, AssistVoiceEffect.StartStt in effects)
+        }
+    }
+
     @Test
     fun regularTurnWaitsForAcceptedSpeechBeforeContinuing() = runBlocking {
         val receipt = CompletableDeferred<Unit>()

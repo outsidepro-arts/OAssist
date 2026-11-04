@@ -539,6 +539,10 @@ fun ModeConfigScreen(
                     onState = onState,
                     offState = offState,
                 )
+                Text(
+                    text = stringResource(R.string.mode_assistant_continue_dialog_hint),
+                    style = MaterialTheme.typography.bodySmall,
+                )
                 ModeSwitch(
                     title = stringResource(R.string.mode_assistant_show_overlay),
                     checked = showOverlay,

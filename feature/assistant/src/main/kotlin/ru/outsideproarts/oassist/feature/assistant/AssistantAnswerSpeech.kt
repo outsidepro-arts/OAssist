@@ -1,6 +1,7 @@
 package ru.outsideproarts.oassist.feature.assistant
 
 import kotlinx.coroutines.withTimeoutOrNull
+import ru.outsideproarts.oassist.core.model.SpeechOutputChannel
 import ru.outsideproarts.oassist.core.speech.SentenceSplitter
 import ru.outsideproarts.oassist.core.speech.StreamSpeaker
 
@@ -8,9 +9,12 @@ internal suspend fun finishSpokenTurn(
     awaitIdle: suspend () -> Unit,
     continueTurn: (Boolean) -> Unit,
     timeoutMs: Long = 30_000L,
+    continueDialog: Boolean = true,
+    channel: SpeechOutputChannel = SpeechOutputChannel.SYSTEM_TTS,
 ) {
     val drained = withTimeoutOrNull(timeoutMs) { awaitIdle(); true } ?: false
-    continueTurn(drained)
+    // Announcement delivery does not confirm that the screen reader finished speaking.
+    continueTurn(drained && continueDialog && channel != SpeechOutputChannel.SCREEN_READER)
 }
 
 internal class AssistantAnswerSpeech(
