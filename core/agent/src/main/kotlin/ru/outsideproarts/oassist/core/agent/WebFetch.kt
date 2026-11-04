@@ -3,13 +3,18 @@ package ru.outsideproarts.oassist.core.agent
 import io.ktor.client.HttpClient
 import io.ktor.client.plugins.ResponseException
 import io.ktor.client.plugins.RedirectResponseException
+import io.ktor.client.plugins.ClientRequestException
+import io.ktor.client.plugins.ServerResponseException
+import io.ktor.client.plugins.HttpRequestRetryEvent
 import io.ktor.client.request.accept
-import io.ktor.client.request.get
+import io.ktor.client.request.prepareGet
+import io.ktor.client.statement.HttpResponse
 import io.ktor.client.statement.bodyAsChannel
 import io.ktor.client.statement.request
 import io.ktor.http.ContentType
 import io.ktor.http.contentType
 import io.ktor.utils.io.ByteReadChannel
+import io.ktor.utils.io.InternalAPI
 import io.ktor.utils.io.readAvailable
 import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.coroutines.job
@@ -35,36 +40,52 @@ data class RawFetch(
  * Без JS-рендера — для JS-страниц есть [WebRenderActions].
  */
 class WebContentActions(private val httpClient: HttpClient) {
-    private val redirectClient = httpClient.config { followRedirects = false }
+    private var validateStatus = false
+    private val redirectClient = httpClient.config {
+        validateStatus = expectSuccess
+        followRedirects = false
+        // Ktor's default validator saves the entire error body before throwing.
+        expectSuccess = false
+    }
 
     init {
+        // Ktor 3.3.1 does not close response bodies discarded by its retry plugin.
+        redirectClient.monitor.subscribe(HttpRequestRetryEvent) { event ->
+            event.response?.let(::closeDiscardedResponse)
+        }
         // The configured client shares the engine and lives as long as its owner.
         httpClient.coroutineContext.job.invokeOnCompletion { redirectClient.close() }
+    }
+
+    // Ktor 3.3.1 exposes synchronous cancellation of the discarded stream via rawContent.
+    @OptIn(InternalAPI::class)
+    private fun closeDiscardedResponse(response: HttpResponse) {
+        response.rawContent.cancel(null)
     }
 
     suspend fun fetchStatic(rawUrl: String, userAgent: String? = null): Result<RawFetch> {
         val url = try { checkedUrl(rawUrl) } catch (e: Exception) { return Result.failure(e) }
         return runCatching {
-            val response = withTimeoutOrNull(STATIC_TIMEOUT_MS) {
-                getFollowingCheckedRedirects(url, "text/markdown, text/html;q=0.9, text/plain;q=0.8", userAgent)
+            withTimeoutOrNull(STATIC_TIMEOUT_MS) {
+                getFollowingCheckedRedirects(url, "text/markdown, text/html;q=0.9, text/plain;q=0.8", userAgent) { response ->
+                    val contentLength = response.headers["Content-Length"]?.toLongOrNull()
+                    if (contentLength != null && contentLength > MAX_BODY_BYTES * 8) {
+                        throw IllegalStateException("Страница слишком большая (${contentLength / 1024 / 1024} МБ)")
+                    }
+                    val charset = responseCharset(response)
+                    // Медленная докачка («капельный» ответ) раньше висела до общеклиентских
+                    // 120 с: ограничиваем время чтения тела.
+                    val (text, truncated) = withTimeoutOrNull(BODY_TIMEOUT_MS) {
+                        readResponseCapped(response, charset)
+                    } ?: throw java.util.concurrent.TimeoutException("Таймаут чтения тела $BODY_TIMEOUT_MS мс: $url")
+                    RawFetch(
+                        finalUrl = response.request.url.toString(),
+                        contentType = response.contentType()?.toString(),
+                        body = text,
+                        bodyTruncated = truncated,
+                    )
+                }
             } ?: throw java.util.concurrent.TimeoutException("Таймаут $STATIC_TIMEOUT_MS мс: $url")
-            val contentLength = response.headers["Content-Length"]?.toLongOrNull()
-            if (contentLength != null && contentLength > MAX_BODY_BYTES * 8) {
-                throw IllegalStateException("Страница слишком большая (${contentLength / 1024 / 1024} МБ)")
-            }
-            val charset = responseCharset(response)
-            val channel = response.bodyAsChannel()
-            // Медленная докачка («капельный» ответ) раньше висела до общеклиентских
-            // 120 с: у тела свой бюджет поверх таймаута заголовков.
-            val (text, truncated) = withTimeoutOrNull(BODY_TIMEOUT_MS) {
-                readCapped(channel, charset, MAX_BODY_BYTES)
-            } ?: throw java.util.concurrent.TimeoutException("Таймаут чтения тела $BODY_TIMEOUT_MS мс: $url")
-            RawFetch(
-                finalUrl = response.request.url.toString(),
-                contentType = response.contentType()?.toString(),
-                body = text,
-                bodyTruncated = truncated,
-            )
         }
     }
 
@@ -75,18 +96,19 @@ class WebContentActions(private val httpClient: HttpClient) {
     suspend fun fetchMarkdownVariant(url: String): Result<RawFetch> {
         val variant = url.trimEnd('/') + ".md"
         return runCatching {
-            val response = withTimeoutOrNull(STATIC_TIMEOUT_MS) {
-                getFollowingCheckedRedirects(variant, "text/markdown", null)
+            withTimeoutOrNull(STATIC_TIMEOUT_MS) {
+                getFollowingCheckedRedirects(variant, "text/markdown", null) { response ->
+                    val type = response.contentType()?.toString() ?: ""
+                    if (!type.contains("markdown") && !type.contains("plain")) {
+                        throw IllegalStateException("Нет Markdown-варианта ($type)")
+                    }
+                    val body = withTimeoutOrNull(BODY_TIMEOUT_MS) {
+                        readResponseCapped(response, responseCharset(response))
+                    } ?: throw java.util.concurrent.TimeoutException("Таймаут чтения тела: $variant")
+                    if (body.text.length < MIN_MARKDOWN_CHARS) throw IllegalStateException("Markdown-вариант пуст")
+                    RawFetch(response.request.url.toString(), type, body.text, body.truncated)
+                }
             } ?: throw java.util.concurrent.TimeoutException("Таймаут: $variant")
-            val type = response.contentType()?.toString() ?: ""
-            if (!type.contains("markdown") && !type.contains("plain")) {
-                throw IllegalStateException("Нет Markdown-варианта ($type)")
-            }
-            val body = withTimeoutOrNull(BODY_TIMEOUT_MS) {
-                readCapped(response.bodyAsChannel(), responseCharset(response), MAX_BODY_BYTES)
-            } ?: throw java.util.concurrent.TimeoutException("Таймаут чтения тела: $variant")
-            if (body.text.length < MIN_MARKDOWN_CHARS) throw IllegalStateException("Markdown-вариант пуст")
-            RawFetch(response.request.url.toString(), type, body.text, body.truncated)
         }
     }
 
@@ -94,36 +116,53 @@ class WebContentActions(private val httpClient: HttpClient) {
         initialUrl: String,
         acceptType: String,
         userAgent: String?,
-    ): io.ktor.client.statement.HttpResponse {
+        consume: suspend (HttpResponse) -> RawFetch,
+    ): RawFetch {
         var url = checkedUrl(initialUrl)
         repeat(20) { hop ->
-            var redirectError: RedirectResponseException? = null
-            val response = try {
-                redirectClient.get(url) {
-                    accept(ContentType.parse(acceptType))
-                    userAgent?.let { headers.append(io.ktor.http.HttpHeaders.UserAgent, it) }
+            var nextUrl: String? = null
+            val result = redirectClient.prepareGet(url) {
+                accept(ContentType.parse(acceptType))
+                userAgent?.let { headers.append(io.ktor.http.HttpHeaders.UserAgent, it) }
+            }.execute { response ->
+                val location = response.headers[io.ktor.http.HttpHeaders.Location]
+                if (response.status.value in REDIRECT_STATUSES && location != null) {
+                    val next = checkedUrl(URI(url).resolve(location).toString())
+                    if (!(URI(url).scheme.equals("https", true) && URI(next).scheme.equals("http", true))) {
+                        if (hop == 19) throw IllegalStateException("Слишком много перенаправлений")
+                        nextUrl = next
+                        return@execute null
+                    }
                 }
-            } catch (e: RedirectResponseException) {
-                redirectError = e
-                e.response
+                if (validateStatus && response.status.value >= 300) {
+                    val text = withTimeoutOrNull(BODY_TIMEOUT_MS) {
+                        readResponseCapped(response, responseCharset(response)).text
+                    } ?: throw java.util.concurrent.TimeoutException("Таймаут чтения тела: $url")
+                    throw when (response.status.value) {
+                        in 300..399 -> RedirectResponseException(response, text)
+                        in 400..499 -> ClientRequestException(response, text)
+                        in 500..599 -> ServerResponseException(response, text)
+                        else -> ResponseException(response, text)
+                    }
+                }
+                consume(response)
             }
-            val location = response.headers[io.ktor.http.HttpHeaders.Location]
-            if (response.status.value !in REDIRECT_STATUSES || location == null) {
-                redirectError?.let { throw it }
-                return response
-            }
-            val next = checkedUrl(URI(url).resolve(location).toString())
-            if (URI(url).scheme.equals("https", true) && URI(next).scheme.equals("http", true)) {
-                redirectError?.let { throw it }
-                return response
-            }
-            if (hop == 19) throw IllegalStateException("Слишком много перенаправлений")
-            url = next
+            if (nextUrl == null) return checkNotNull(result)
+            url = nextUrl!!
         }
         error("Недостижимый переход")
     }
 
     private data class CappedText(val text: String, val truncated: Boolean)
+
+    private suspend fun readResponseCapped(response: HttpResponse, charset: Charset): CappedText {
+        val channel = response.bodyAsChannel()
+        return try {
+            readCapped(channel, charset, MAX_BODY_BYTES)
+        } finally {
+            channel.cancel(null)
+        }
+    }
 
     /** Прочитать канал с капом: защита от гигантских страниц. */
     private suspend fun readCapped(
