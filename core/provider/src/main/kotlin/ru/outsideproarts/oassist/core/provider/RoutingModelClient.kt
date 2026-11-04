@@ -59,7 +59,7 @@ class RoutingModelClient internal constructor(
 
     private val clients: Map<ModelProtocol, ModelClient> =
         ModelProtocol.entries.associateWith { protocol ->
-            protocolClient(protocol, template.withProtocol(protocol), http)
+            protocolClient(protocol, template.withProtocol(protocol), http) { id -> modelInfo(id) ?: fetchedModels[id] }
         }
 
     /**
@@ -209,10 +209,11 @@ internal fun protocolClient(
     protocol: ModelProtocol,
     endpoint: EndpointConfig,
     http: HttpClient,
+    modelInfo: suspend (String) -> ModelInfo? = { null },
 ): ModelClient = when (protocol) {
     ModelProtocol.OPENAI_COMPLETIONS -> OpenAiCompatibleClient(endpoint, http)
     ModelProtocol.OPENAI_RESPONSES -> OpenAiResponsesClient(endpoint, http)
-    ModelProtocol.ANTHROPIC_MESSAGES -> AnthropicClient(endpoint, http)
+    ModelProtocol.ANTHROPIC_MESSAGES -> AnthropicClient(endpoint, http, modelInfo)
     ModelProtocol.GEMINI_GENERATE -> GeminiClient(endpoint, http)
 }
 

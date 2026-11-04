@@ -106,6 +106,7 @@ private val sessionTurns = mutableListOf<ru.outsideproarts.oassist.core.model.St
 private var turnTranscript: List<ChatMessage> = emptyList()
     private var sttPreview by mutableStateOf("")
     private var isStreaming by mutableStateOf(false)
+    private var providerNotice by mutableStateOf<ChatChunk.ProviderNotice.Kind?>(null)
     private var expanded by mutableStateOf(false)
     private var hintText by mutableStateOf<String?>(null)
 
@@ -595,6 +596,7 @@ private var turnTranscript: List<ChatMessage> = emptyList()
         refreshOverlayFocusable()
         answer = ""
         workEvents = emptyList()
+        providerNotice = null
         turnUsage = null
         turnTranscript = emptyList()
         hintText = null
@@ -668,6 +670,7 @@ private var turnTranscript: List<ChatMessage> = emptyList()
                 var sawAbrupt = false
                 val error = agentSession.chunks.collectSafe { chunk ->
                     when (chunk) {
+                        is ChatChunk.ProviderNotice -> providerNotice = chunk.kind
                         is ChatChunk.Reasoning -> {
                             // Мысли модели: live в полотно, без озвучки (дельты частые).
                             if (timeline.onChunk(chunk)) workEvents = timeline.work
@@ -867,6 +870,7 @@ private var turnTranscript: List<ChatMessage> = emptyList()
                         AssistPill(
                             answer = answer,
                             work = workEvents,
+                            thinkingContextReduced = providerNotice != null,
                             usage = turnUsage,
                             usageTotals = runCatching { AgentFactory.get().usageTotals() }.getOrNull(),
                             statusHint = hintText,

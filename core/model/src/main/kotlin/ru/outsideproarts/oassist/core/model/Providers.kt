@@ -427,6 +427,8 @@ data class ModelInfo(
     val purpose: String? = null,
     /** Gemini catalog methods; null differs from an explicitly empty list. */
     val supportedGenerationMethods: List<String>? = null,
+    /** Provider-declared Anthropic modes; independent of the user's capability flags. */
+    val anthropicThinking: AnthropicThinkingCapabilities? = null,
 ) {
     /** Unknown metadata is not evidence of incompatibility; never infer purpose from an ID. */
     val isChatCompatible: Boolean
@@ -437,6 +439,14 @@ data class ModelInfo(
         val NON_CHAT_PURPOSES = setOf("classification", "embedding", "image", "audio", "video", "tts", "stt")
     }
 }
+
+/** Missing metadata is unknown, not a declaration that a mode is unsupported. */
+@Serializable
+data class AnthropicThinkingCapabilities(
+    val adaptive: Boolean? = null,
+    val enabled: Boolean? = null,
+    val disabled: Boolean? = null,
+)
 
 /** Кэш списка моделей провайдера. */
 @Serializable

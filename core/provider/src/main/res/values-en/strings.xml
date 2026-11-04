@@ -21,4 +21,7 @@
     <string name="provider_stream_truncated">Response was cut off — it may be truncated</string>
     <string name="provider_error_model_not_chat">This model does not support chat. Select another model.</string>
     <string name="provider_error_provider_changed">Provider settings have changed. Reopen the profile and save again.</string>
+    <string name="provider_error_thinking_unknown">The supported thinking mode is unknown. Refresh the provider’s model catalog.</string>
+    <string name="provider_error_thinking_unsupported">This model does not support the available thinking modes. Clear the Thinking flag or select another model.</string>
+    <string name="provider_error_model_override_invalid">The model field in additional parameters must be a nonempty string.</string>
 </resources>

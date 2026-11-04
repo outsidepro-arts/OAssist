@@ -10,6 +10,18 @@ import ru.outsideproarts.oassist.core.model.WorkEvent
 import ru.outsideproarts.oassist.core.provider.ChatChunk
 
 class WorkTimelineBuilderTest {
+    @Test fun providerNoticeIsNotAnAnswerThoughtOrPersistedWorkEvent() {
+        val timeline = WorkTimelineBuilder()
+        val assembler = AgentMessageAssembler()
+        val notice = ChatChunk.ProviderNotice(ChatChunk.ProviderNotice.Kind.THINKING_CONTEXT_REDUCED)
+        assertFalse(timeline.onChunk(notice))
+        assembler.onChunk(notice)
+        assertTrue(timeline.isEmpty)
+        assertEquals("", timeline.answerText)
+        assertEquals("", timeline.commentText)
+        assertTrue(timeline.work.isEmpty())
+        assertEquals("", assembler.thoughtText())
+    }
 
     @Test
     fun reasoningAndTools_interleaveChronologically() {

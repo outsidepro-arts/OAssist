@@ -270,6 +270,7 @@ private fun ShareFlow(payload: SharePayload) {
             response = vm.response,
             usage = vm.turnUsage,
             isStreaming = vm.isStreaming,
+            thinkingContextReduced = vm.providerNotice != null,
             question = vm.question,
             onQuestionChange = { vm.question = it },
             onSend = {
@@ -361,6 +362,7 @@ private fun ShareChatList(
                 .oassistHeading(),
         )
         ShareReceivedPanel(payload = payload, compact = true)
+
         ChatPickerList(
             chats = chats,
             sortOrder = sortOrder,
@@ -404,6 +406,7 @@ private fun ShareConversation(
     response: String,
     usage: ru.outsideproarts.oassist.core.model.ProviderUsage?,
     isStreaming: Boolean,
+    thinkingContextReduced: Boolean,
     question: TextFieldValue,
     onQuestionChange: (TextFieldValue) -> Unit,
     onSend: () -> Unit,
@@ -512,6 +515,7 @@ private fun ShareConversation(
 
         ShareReceivedPanel(payload = payload, compact = true)
 
+        ru.outsideproarts.oassist.core.ui.components.ThinkingContextNotice(thinkingContextReduced)
         Row(
             modifier = Modifier.fillMaxWidth(),
             verticalAlignment = Alignment.CenterVertically,

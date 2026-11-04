@@ -3,6 +3,9 @@ package ru.outsideproarts.oassist.core.provider.anthropic
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.JsonElement
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.booleanOrNull
 import ru.outsideproarts.oassist.core.provider.mapProviderUsage
 import ru.outsideproarts.oassist.core.provider.opencode.OpenCodeUsageExtensionDto
 
@@ -20,7 +23,17 @@ data class AnthropicModelDto(
     @SerialName("display_name") val displayName: String? = null,
     val name: String? = null,
     val type: String? = null,
+    val capabilities: JsonElement? = null,
 )
+
+internal fun AnthropicModelDto.thinkingCapabilities(): ru.outsideproarts.oassist.core.model.AnthropicThinkingCapabilities? {
+    val thinking = (capabilities as? JsonObject)?.get("thinking") as? JsonObject ?: return null
+    val types = thinking["types"] as? JsonObject ?: return null
+    fun supported(mode: String): Boolean? = ((types[mode] as? JsonObject)?.get("supported") as? JsonPrimitive)
+        ?.takeUnless { it.isString }?.booleanOrNull
+    return ru.outsideproarts.oassist.core.model.AnthropicThinkingCapabilities(
+        adaptive = supported("adaptive"), enabled = supported("enabled"), disabled = supported("disabled"))
+}
 
 /** Запрос POST /v1/messages. `content` — строка или массив блоков (см. маппер).
  *  [maxTokens] и [stream] — БЕЗ дефолтов: encodeDefaults=false не пишет
@@ -34,7 +47,7 @@ data class AnthropicMessagesRequest(
     val messages: List<AnthropicMessageDto>,
     val tools: List<AnthropicToolDto>? = null,
     val stream: Boolean,
-    /** Extended thinking: только при флаге REASONING у модели; null-поле не сериализуется. */
+    /** Effective thinking configuration; null preserves the provider's default. */
     val thinking: AnthropicThinkingDto? = null,
 ) {
     companion object {
@@ -43,14 +56,17 @@ data class AnthropicMessagesRequest(
     }
 }
 
-/** Включённый extended thinking: budget < max_tokens запроса (см. клиента).
- *  [type] — без дефолта: encodeDefaults=false не пишет равное-дефолту значение,
- *  а API требует `"type": "enabled"` (урок StreamOptionsDto). */
+/** Manual thinking has a budget; adaptive thinking must not inherit that budget.
+ * [type] has no default so the wire serializer always includes the selected mode. */
 @Serializable
 data class AnthropicThinkingDto(
     val type: String,
-    @SerialName("budget_tokens") val budgetTokens: Int,
+    @SerialName("budget_tokens") val budgetTokens: Int? = null,
+    @SerialName("block_binding") val blockBinding: AnthropicBlockBindingDto? = null,
 )
+
+@Serializable
+data class AnthropicBlockBindingDto(@SerialName("prefix_mismatch_behavior") val prefixMismatchBehavior: String)
 
 @Serializable
 data class AnthropicMessageDto(
@@ -105,6 +121,7 @@ data class AnthropicMessageDeltaEvent(
     val delta: AnthropicDelta? = null,
     /** Кумулятивный output_tokens на конец хода (приходит только здесь). */
     val usage: AnthropicUsageDto? = null,
+    @SerialName("input_transformations") val inputTransformations: List<AnthropicInputTransformationDto>? = null,
 )
 
 /** Usage-поля Anthropic: input — в message_start, output — кумулятивно в message_delta. */
@@ -184,6 +201,14 @@ data class AnthropicMessageStartEvent(
 @Serializable
 data class AnthropicMessageStartBody(
     val usage: AnthropicUsageDto? = null,
+    @SerialName("input_transformations") val inputTransformations: List<AnthropicInputTransformationDto>? = null,
+)
+
+@Serializable
+data class AnthropicInputTransformationDto(
+    val type: String? = null,
+    val path: String? = null,
+    val reason: String? = null,
 )
 
 @Serializable

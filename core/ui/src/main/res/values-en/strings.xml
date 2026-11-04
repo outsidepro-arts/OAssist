@@ -107,4 +107,5 @@
     <string name="chats_unsaved_message">The current chat is not saved. What should happen to it before continuing?</string>
     <string name="chats_unsaved_save">Save and continue</string>
     <string name="chats_unsaved_continue">Continue without saving</string>
+    <string name="thinking_context_reduced">The provider is continuing without some earlier model reasoning. The response may take more time and tokens.</string>
 </resources>

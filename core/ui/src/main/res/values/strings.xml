@@ -107,4 +107,5 @@
     <string name="chats_unsaved_message">Текущий диалог не сохранён. Что сделать с ним перед продолжением?</string>
     <string name="chats_unsaved_save">Сохранить и продолжить</string>
     <string name="chats_unsaved_continue">Продолжить без сохранения</string>
+    <string name="thinking_context_reduced">Провайдер продолжает без части прежних рассуждений модели. Ответ может потребовать больше времени и токенов.</string>
 </resources>

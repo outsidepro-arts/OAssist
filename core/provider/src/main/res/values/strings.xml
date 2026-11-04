@@ -21,4 +21,7 @@
     <string name="provider_stream_truncated">Ответ оборвался — мог быть усечён</string>
     <string name="provider_error_model_not_chat">Эта модель не поддерживает чат. Выберите другую модель.</string>
     <string name="provider_error_provider_changed">Настройки провайдера изменились. Откройте профиль заново и повторите сохранение.</string>
+    <string name="provider_error_thinking_unknown">Не удалось определить поддерживаемый режим мышления. Обновите каталог моделей провайдера.</string>
+    <string name="provider_error_thinking_unsupported">Модель не поддерживает доступные режимы мышления. Отключите флаг «Мышление» или выберите другую модель.</string>
+    <string name="provider_error_model_override_invalid">Поле model в дополнительных параметрах должно быть непустой строкой.</string>
 </resources>

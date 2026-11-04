@@ -40,6 +40,7 @@ import ru.outsideproarts.oassist.core.provider.isProtocolUnsupportedMessage
 import ru.outsideproarts.oassist.core.provider.resolveProviderAuth
 import ru.outsideproarts.oassist.core.provider.withRateLimits
 import ru.outsideproarts.oassist.core.provider.openai.ToolSchemaDto
+import ru.outsideproarts.oassist.core.model.diagnostics.emit
 
 /**
  * Нативный клиент Anthropic Messages API.
@@ -49,7 +50,9 @@ import ru.outsideproarts.oassist.core.provider.openai.ToolSchemaDto
 class AnthropicClient internal constructor(
     private val endpoint: EndpointConfig,
     private val http: HttpClient,
+    modelInfo: suspend (String) -> ModelInfo? = { null },
 ) : ModelClient {
+    private val thinkingPolicy = AnthropicThinkingPolicy(endpoint, http, modelInfo)
     override fun diagnosticSecrets(): Collection<String> = endpoint.diagnosticSecrets()
 
     override suspend fun fetchModels(): List<ModelInfo> = fetchModelCatalog(endpoint, http)
@@ -94,19 +97,25 @@ class AnthropicClient internal constructor(
         reasoningEnabled: Boolean,
     ): Flow<ChatChunk> = flow {
         val diagnosticParent = kotlinx.coroutines.currentCoroutineContext()[ru.outsideproarts.oassist.core.model.diagnostics.DiagnosticContext]
+        val modelOverride = endpoint.extraBody?.get("model")
+        val effectiveModelId = if (modelOverride == null) modelId else {
+            (modelOverride as? JsonPrimitive)?.takeIf { it.isString && it.content.isNotBlank() }?.content
+                ?: throw ProviderError.InvalidInput(ProviderError.InvalidInput.Reason.MODEL_OVERRIDE_INVALID)
+        }
         val replayOrigin = ProviderJson.encodeToString(kotlinx.serialization.builtins.ListSerializer(kotlinx.serialization.serializer<String>()),
-            listOf("anthropic_messages", endpoint.baseUrl.trimEnd('/'), endpoint.replayIdentity.orEmpty(), modelId))
-        val (system, mapped) = mapAnthropicMessages(messages, thinkingEnabled = reasoningEnabled, replayOrigin = replayOrigin)
+            listOf("anthropic_messages", endpoint.baseUrl.trimEnd('/'), endpoint.replayIdentity.orEmpty(), effectiveModelId))
+        // A capability flag is not an instruction to discard actual native always-on thinking.
+        // Only a validated same-origin snapshot can establish this continuation; never legacy signatures.
+        val continuation = endpoint.isNativeAnthropic() && endpoint.extraBody?.containsKey("thinking") != true &&
+            hasMatchingThinkingReplay(messages, replayOrigin)
+        val effectiveThinking = reasoningEnabled || continuation
+        val (system, mapped) = mapAnthropicMessages(messages, thinkingEnabled = effectiveThinking, replayOrigin = replayOrigin)
         // budget_tokens обязан быть < max_tokens: при включённом thinking
         // поднимаем потолок, иначе API 400 ("max_tokens must exceed budget").
-        val thinking = if (reasoningEnabled) {
-            AnthropicThinkingDto(type = "enabled", budgetTokens = THINKING_BUDGET_TOKENS)
-        } else {
-            null
-        }
+        val thinking = thinkingPolicy.configuration(effectiveModelId, effectiveThinking)
         val requestDto = AnthropicMessagesRequest(
-            model = modelId,
-            maxTokens = if (thinking != null) THINKING_MAX_TOKENS else AnthropicMessagesRequest.DEFAULT_MAX_TOKENS,
+            model = effectiveModelId,
+            maxTokens = if (effectiveThinking) THINKING_MAX_TOKENS else AnthropicMessagesRequest.DEFAULT_MAX_TOKENS,
             system = system,
             messages = mapped,
             tools = mapAnthropicTools(tools),
@@ -120,6 +129,11 @@ class AnthropicClient internal constructor(
                 method = HttpMethod.Post
                 url.takeFrom(messagesUrl(endpoint.baseUrl))
                 applyAuth(dialogKey = dialogKey(messages))
+                if (thinking?.blockBinding != null) {
+                    val existing = headers["anthropic-beta"].orEmpty().split(',').map(String::trim).filter(String::isNotEmpty)
+                    headers.remove("anthropic-beta")
+                    headers.append("anthropic-beta", (existing + THINKING_BINDING_BETA).distinct().joinToString(","))
+                }
                 contentType(ContentType.Application.Json)
                 setBodyDecorated(endpoint, requestDto, diagnosticParent)
             },
@@ -131,6 +145,21 @@ class AnthropicClient internal constructor(
             var callsFlushed = false
             var startUsage: AnthropicUsageDto? = null
             var deltaUsage: AnthropicUsageDto? = null
+            val seenTransformations = mutableSetOf<AnthropicInputTransformationDto>()
+            var lossNoticeSent = false
+            suspend fun observeTransformations(items: List<AnthropicInputTransformationDto>) {
+                val fresh = items.filter { it.type in setOf("thinking_dropped", "thinking_mismatch_allowed") && seenTransformations.add(it) }
+                for (item in fresh) {
+                    val reason = item.reason?.takeIf { it in setOf("prefix_binding_mismatch", "model_binding_mismatch", "organization_binding_mismatch") } ?: "other"
+                    endpoint.diagnostics.emit(ru.outsideproarts.oassist.core.model.diagnostics.DiagnosticKind.PROVIDER_RESPONSE,
+                        parentOperationId = diagnosticParent?.operationId,
+                        attributes = mapOf("stage" to "input_transformation", "type" to item.type.orEmpty(), "reason" to reason))
+                }
+                if (!lossNoticeSent && fresh.any { it.type == "thinking_dropped" }) {
+                    lossNoticeSent = true
+                    emit(ChatChunk.ProviderNotice(ChatChunk.ProviderNotice.Kind.THINKING_CONTEXT_REDUCED))
+                }
+            }
             // «Сколько осталось до ограничения» — из заголовков ответа.
             val rateLimits = RateLimitHeaders.parse(call.response.headers)
             suspend fun flushCalls() {
@@ -157,14 +186,14 @@ class AnthropicClient internal constructor(
                 capture.add(data)
                 when (type) {
                     "message_start" -> {
-                        runCatching {
+                        val start = runCatching {
                             ProviderJson.decodeFromString(
                                 AnthropicMessageStartEvent.serializer(),
                                 data,
                             )
-                        }.getOrNull()?.message?.usage?.let { u ->
-                            startUsage = u
-                        }
+                        }.getOrNull()?.message
+                        start?.usage?.let { startUsage = it }
+                        observeTransformations(start?.inputTransformations.orEmpty())
                     }
                     "content_block_start" -> {
                         val start = runCatching {
@@ -226,6 +255,7 @@ class AnthropicClient internal constructor(
                         deltaEvent.delta?.stopReason?.let { stopReason = it }
                         // Кумулятивный итог — берём последнее событие целиком.
                         deltaEvent.usage?.let { deltaUsage = it }
+                        observeTransformations(deltaEvent.inputTransformations.orEmpty())
                     }
                     "message_stop" -> {
                         val blocks = content.complete()
@@ -276,8 +306,8 @@ class AnthropicClient internal constructor(
         private const val PROBE_TEXT = "hi"
         private const val PROBE_MAX_TOKENS = 1
 
-        /** Бюджет extended thinking; с [THINKING_MAX_TOKENS] выполняется budget < max_tokens. */
-        private const val THINKING_BUDGET_TOKENS = 4096
+        /** Native documented stopgap: the server reports any removed reasoning in the stream. */
+        internal const val THINKING_BINDING_BETA = "thinking-binding-controls-2026-08-01"
         private const val THINKING_MAX_TOKENS = 8192
 
         private fun probeTool() = AnthropicToolDto(

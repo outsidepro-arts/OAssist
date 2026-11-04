@@ -1,6 +1,11 @@
 package ru.outsideproarts.oassist.core.agent
 
 import io.ktor.client.HttpClient
+import io.ktor.client.plugins.plugin
+import ru.outsideproarts.oassist.core.model.SkillInfo
+import ru.outsideproarts.oassist.core.model.ModelInfo
+import ru.outsideproarts.oassist.core.model.AnthropicThinkingCapabilities
+import ru.outsideproarts.oassist.core.model.ApprovalDecision
 import io.ktor.client.engine.okhttp.OkHttp
 import io.ktor.client.plugins.contentnegotiation.ContentNegotiation
 import io.ktor.client.plugins.sse.SSE
@@ -50,6 +55,70 @@ import ru.outsideproarts.oassist.core.provider.ModelClient
 class RuntimeContextWireTest {
 
     @get:Rule val temporaryFolder = TemporaryFolder()
+
+    @Test
+    fun nativeAlwaysOnThinkingContinuesThroughSkillSystemChangeAndDiskReopenWithVisibleNotice() = runBlocking {
+        withTimeout(30_000) {
+            val blocks = Json.parseToJsonElement("""[{"type":"thinking","thinking":"","signature":"native+/="},{"type":"tool_use","id":"read-skill","name":"skill_get","input":{"name":"report"}}]""").jsonArray
+            val final = Json.parseToJsonElement("""[{"type":"text","text":"done"}]""").jsonArray
+            val notice = "event: message_delta\ndata: {\"delta\":{\"stop_reason\":\"end_turn\"},\"input_transformations\":[{\"type\":\"thinking_dropped\",\"path\":\"messages.1.content.0\",\"reason\":\"prefix_binding_mismatch\"}]}\n\n"
+            val response = anthropicSse(final).replace("event: message_stop", notice + "event: message_stop")
+            var reads = 0
+            val store = object : ru.outsideproarts.oassist.core.data.skill.SkillStore {
+                override suspend fun list() = listOf(SkillInfo("report", "Report", "Owner procedure"))
+                override suspend fun get(name: String): SkillInfo? { reads++; return list().single().takeIf { it.name == name } }
+                override suspend fun upsert(name: String, title: String, body: String) = Unit
+                override suspend fun setEnabled(name: String, enabled: Boolean) = Unit
+                override suspend fun delete(name: String) = Unit
+            }
+            LoopbackSseServer(listOf(anthropicSse(blocks), response, response)).use { server ->
+                httpClient().use { http ->
+                    http.plugin(io.ktor.client.plugins.HttpSend).intercept { request ->
+                        request.url.protocol = io.ktor.http.URLProtocol.HTTP
+                        request.url.host = "127.0.0.1"
+                        request.url.port = java.net.URI(server.baseUrl).port
+                        execute(request)
+                    }
+                    val profile = ProviderProfile(id = "native", name = "Native", preset = ProviderPreset.CUSTOM,
+                        protocol = ModelProtocol.ANTHROPIC_MESSAGES, baseUrl = "https://api.anthropic.com/v1")
+                    suspend fun agent() = AgentLoop(ModelClient.create(ru.outsideproarts.oassist.core.model.diagnostics.Diagnostics,
+                        profile, secrets, http, modelInfo = { ModelInfo(it, anthropicThinking = AnthropicThinkingCapabilities(true, false)) }),
+                        ToolRegistry(listOf(SkillGetTool(store))), reasoningEnabled = false)
+                    val first = agent()
+                    var transcript = emptyList<ChatMessage>()
+                    val chunks = mutableListOf<ru.outsideproarts.oassist.core.provider.ChatChunk>()
+                    first.stream("alias", null, emptyList(), "create report", onTurnMessages = { transcript = it }).collect {
+                        chunks += it
+                        if (it is ru.outsideproarts.oassist.core.provider.ChatChunk.ApprovalNeeded) {
+                            first.resolveApproval(it.request.callId, ApprovalDecision.ALLOW_ONCE)
+                        }
+                    }
+                    assertFalse(server.requestBodies.first().parseJsonObject().containsKey("thinking"))
+                    val continuation = server.requestBodies[1].parseJsonObject()
+                    assertTrue(continuation["system"].toString().contains("Owner procedure"))
+                    assertFalse(server.requestBodies.first().contains("Owner procedure"))
+                    assertEquals(blocks, continuation.anthropicAssistantBlocks().first())
+                    assertEquals("drop_block", continuation["thinking"]!!.jsonObject["block_binding"]!!.jsonObject["prefix_mismatch_behavior"]!!.jsonPrimitive.content)
+                    assertEquals(1, chunks.filterIsInstance<ru.outsideproarts.oassist.core.provider.ChatChunk.ProviderNotice>().size)
+                    assertEquals(1, chunks.filterIsInstance<ru.outsideproarts.oassist.core.provider.ChatChunk.ToolResult>().size)
+                    val folder = temporaryFolder.newFolder()
+                    val file = java.io.File(folder, "native.json")
+                    file.writeText(TurnCodec.encode(StoredTurn(userText = "create report", turn = transcript), "chat", "turn", ChatMediaStore(folder)))
+                    val restored = requireNotNull(TurnCodec.decode(file.readText(), ChatMediaStore(folder)))
+                    assertEquals(transcript, restored.turn)
+                    val readsBeforeReopen = reads
+                    val reopened = agent().stream("alias", null, restored.modelMessages(), "continue").toList()
+                    assertEquals(readsBeforeReopen, reads)
+                    assertEquals(1, reopened.filterIsInstance<ru.outsideproarts.oassist.core.provider.ChatChunk.ProviderNotice>().size)
+                    val after = server.requestBodies[2].parseJsonObject()
+                    assertEquals(blocks, after.anthropicAssistantBlocks().first())
+                    assertTrue(after["thinking"].toString().contains("drop_block"))
+                    assertTrue(server.requestBodies[2].contains("Owner procedure"))
+                    assertFalse(file.readText().contains("THINKING_CONTEXT_REDUCED"))
+                }
+            }
+        }
+    }
 
     @Test
     fun geminiUnsignedServerIdsSurviveSplitStreamEarlyEofAndReopenWithoutInventingIds() = runBlocking {

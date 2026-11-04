@@ -51,6 +51,7 @@ class AgentMessageAssembler {
                 if (pending >= 0) toolEvents[pending] = event else toolEvents.add(event)
             }
             is ChatChunk.ApprovalNeeded,
+            is ChatChunk.ProviderNotice,
             is ChatChunk.Finish,
             // Мысли — отдельный поток (WorkTimelineBuilder в UI-поверхностях).
             is ChatChunk.Reasoning,

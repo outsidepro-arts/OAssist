@@ -38,6 +38,7 @@ class WorkTimelineBuilder {
      * @return true — полотно/ответ изменились, UI нужно опубликовать.
      */
     fun onChunk(chunk: ChatChunk): Boolean = when (chunk) {
+        is ChatChunk.ProviderNotice -> false
         is ChatChunk.Reasoning -> {
             if (chunk.delta.isNotEmpty()) appendThought(chunk.delta, Kind.REASONING) else false
         }

@@ -36,6 +36,10 @@ class ProviderAuth(
 
 /** Элемент потока ответа. */
 sealed interface ChatChunk {
+    /** Service status, never model output or replay context. */
+    data class ProviderNotice(val kind: Kind) : ChatChunk {
+        enum class Kind { THINKING_CONTEXT_REDUCED }
+    }
     /**
      * Кусок текста. [isToolComment] ставит только [ru.outsideproarts.oassist.core.agent.AgentLoop]:
      * текст, которым агент сопровождает вызовы инструментов («ищу контакт…»).

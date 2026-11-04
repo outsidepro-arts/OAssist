@@ -42,7 +42,8 @@
 * **OpenAI-совместимые API** (`/v1/chat/completions` и `/v1/responses`).
 
 
-* **Anthropic** (`/v1/messages`, включая поддержку extended thinking).
+* **Anthropic** (`/v1/messages`, extended/adaptive thinking по возможностям из каталога). Если нативный API не сообщает режим, при включённом «Мышлении» запрос останавливается с ошибкой настройки. Для proxy без metadata сохраняется прежний manual-режим; его совместимость зависит от proxy. Флаг «Мышление» не запрещает собственное мышление модели по умолчанию.
+  Нативное adaptive-продолжение использует временный механизм `drop_block`: провайдер может исключить прежние рассуждения при изменении контекста. Приложение показывает отдельное уведомление; это может увеличить время и расход токенов. Сохранённые блоки не удаляются. Явный объект `thinking` в дополнительных параметрах остаётся пользовательской политикой и не дополняется автоматически.
 
 
 * **Google Gemini** (`/v1beta/models/{id}:streamGenerateContent`).
@@ -354,7 +355,8 @@ Android SDK и command-line tools явно подготавливает `android
 **OAssist** is an open-source LLM agent client for Android that can replace the system voice assistant. It is invoked with the standard assistant gesture over any screen, performs on-device actions through intents, the AccessibilityService and privileged interfaces (Shizuku / Root), and also works as a classic chat and as a share-sheet target.
 
 * **Three modes** — Assistant (overlay panel or notification mode, continuous voice dialog), Chat (local history with fuzzy search, auto-titling, reasoning stream, token/cost stats) and Share (text, images, files from other apps). Each mode has its own provider, model, system prompt and speech settings.
-* **Providers** — any OpenAI-compatible API (Completions / Responses), Anthropic (`/v1/messages`, extended thinking), Google Gemini, and the OpenCode aggregator with automatic per-model protocol routing. No hardcoded model lists: models are fetched from the provider or entered manually. Vision and audio input supported.
+* **Providers** — any OpenAI-compatible API (Completions / Responses), Anthropic (`/v1/messages`, extended/adaptive thinking), Google Gemini, and the OpenCode aggregator with automatic per-model protocol routing. No hardcoded model lists: models are fetched from the provider or entered manually. Vision and audio input supported.
+  Anthropic thinking modes follow provider metadata. Native requests with the Thinking flag fail with a configuration error when the mode remains unknown; proxies without metadata retain legacy manual mode, subject to proxy support. The flag does not disable a model’s default thinking. Native adaptive continuation uses the temporary `drop_block` mechanism: a separate notice appears when the provider removes earlier reasoning after context changes. This may increase latency and token use; saved blocks remain intact. An explicit extra-body `thinking` object remains user-controlled and receives no automatic additions.
 * **50+ built-in tools** across three privilege tiers: system intents (calls, SMS, alarms, calendar, apps, notifications, media, web search/fetch), Accessibility UI automation (screen snapshot, taps, text input, scrolling, screenshots, hidden node actions) and privileged shell commands via Shizuku / Root. Plus an MCP client, long-term memory and Markdown skills.
 * **Accessibility-first** — full TalkBack support (WCAG 2.2), two independent speech streams (answer TTS or screen reader, work narration), audio focus handling, optional sound effects.
 * **Security** — secrets encrypted with Android Keystore (AES-256-GCM), excluded from backups and logs; category-based approval gate with per-action, per-session and persistent grants.

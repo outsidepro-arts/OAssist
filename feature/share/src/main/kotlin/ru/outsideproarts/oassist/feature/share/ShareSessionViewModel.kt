@@ -92,6 +92,8 @@ class ShareSessionViewModel : ViewModel() {
     var response by mutableStateOf("")
     var turnUsage by mutableStateOf<ProviderUsage?>(null)
     var isStreaming by mutableStateOf(false)
+    var providerNotice by mutableStateOf<ChatChunk.ProviderNotice.Kind?>(null)
+        private set
 
     /** Запрос, отложенный до появления сети (пре-чек или ранний обрыв без сети). */
     private var pendingRetry by mutableStateOf<ShareAskRequest?>(null)
@@ -144,6 +146,7 @@ class ShareSessionViewModel : ViewModel() {
 
     /** Вход в разговор с сохранённым диалогом: история читается из БД. */
     fun openChat(summary: ChatSummary) {
+        providerNotice = null
         diagnosticOperations = mutableListOf()
         chatId = summary.id
         chatTitle = summary.title
@@ -159,6 +162,7 @@ class ShareSessionViewModel : ViewModel() {
 
     /** Новый незакреплённый разговор. */
     fun newChat() {
+        providerNotice = null
         diagnosticOperations = mutableListOf()
         chatId = null
         chatTitle = ""
@@ -183,6 +187,7 @@ class ShareSessionViewModel : ViewModel() {
 
     /** Уход со экрана разговора к списку (снимок pending-диалога живёт в UI). */
     fun leaveConversation() {
+        providerNotice = null
         activeUserMsg = null
         inConversation = false
     }
@@ -210,6 +215,7 @@ class ShareSessionViewModel : ViewModel() {
      * состояние чистится до «Нового чата», панель полученного остаётся.
      */
     fun deleteCurrentChat() {
+        providerNotice = null
         val id = chatId
         chatId = null
         chatTitle = ""
@@ -271,6 +277,7 @@ class ShareSessionViewModel : ViewModel() {
         response = ""
         turnUsage = null
         var turnTranscript: List<ChatMessage> = emptyList()
+        providerNotice = null
         val diagnosticId = Diagnostics.newOperationId()
         diagnosticOperations.add(diagnosticId)
         val diagnosticChatId = chatId
@@ -363,6 +370,7 @@ class ShareSessionViewModel : ViewModel() {
             val error = try {
                 session.chunks.collectSafe { chunk ->
                     when (chunk) {
+                        is ChatChunk.ProviderNotice -> providerNotice = chunk.kind
                         is ChatChunk.Reasoning -> {
                             // Мысли модели: в полотно, без озвучки (дельты частые).
                             if (timeline.onChunk(chunk)) workEvents = timeline.work

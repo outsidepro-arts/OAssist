@@ -128,6 +128,8 @@ PW-006 исправлен: additive nullable серверный ID через д
 
 После RT-001/002 и PW-002, `core/provider/anthropic` и capability model: manual/adaptive по проверенным возможностям endpoint/model. Проверить фактические тела manual, adaptive и unknown; не создавать статический каталог и не переносить native контракт на proxy.
 
+Локально реализованы metadata modes, native unknown lookup/error, proxy legacy fallback, сохранение явного extraBody и native observed-thinking continuation при false capability. Native adaptive использует документированный временный drop_block с отдельным in-memory visible/polite notice из start/final delta; потеря reasoning и рост расхода — принятый tradeoff до отдельного append-only решения. Успешные HTTP/SSE/tool/history/reopen границы проверяются здесь; ошибочные завершения после внешнего действия обязательно закрыть fixture этапа 39, прежде чем объявлять ветку интеграционно завершённой.
+
 ## 29. PW-001 — Текст отказа OpenAI
 
 После PW-002, `core/provider/openai` и agent/history: сохранять и показывать refusal. Проверить refusal-only и смешанные SSE Chat/Responses, UI/history и следующий запрос.
@@ -171,6 +173,8 @@ PW-006 исправлен: additive nullable серверный ID через д
 ## 39. AP-004 — История выполненных инструментов при ошибке
 
 После PW-002, AP-005, DS-006/007 и UI-002/008 переоценить `core/agent`, chat/share/assistant consumers и data. Проверить внешний эффект → ошибка/отмена → reopen/следующий запрос во всех режимах, без дублей и выдуманного результата; добавить сквозной fixture metadata и partial history.
+
+Обязательный integration gate для PW-003: completed external tool → provider/prefix error или отмена → один terminal transcript → disk/reopen → следующий POST в CHAT/SHARE/ASSISTANT без повторного действия и потери metadata. Также проверить успешное продолжение с `drop_block` и видимым notice. До закрытия AP-004 сохранность выполненных действий при ошибке не подтверждена; порядок этапов 28 → 37 → 38 → 39 сохраняется.
 
 ## 40. DU-001 — Долговечное владение диагностикой
 

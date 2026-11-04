@@ -116,7 +116,8 @@ sealed class ProviderError(message: String, cause: Throwable? = null) : RuntimeE
 
     /** Локальная ошибка валидации полей профиля. */
     class InvalidInput(val reason: Reason) : ProviderError("Invalid input: $reason") {
-        enum class Reason { NAME_REQUIRED, BASE_URL_REQUIRED, BASE_URL_INVALID, MODEL_NOT_CHAT_COMPATIBLE, PROVIDER_CHANGED }
+        enum class Reason { NAME_REQUIRED, BASE_URL_REQUIRED, BASE_URL_INVALID, MODEL_NOT_CHAT_COMPATIBLE, PROVIDER_CHANGED,
+            THINKING_CAPABILITIES_UNKNOWN, THINKING_NOT_SUPPORTED, MODEL_OVERRIDE_INVALID }
     }
 
     /** Категория ошибки — по телу ответа (типизированные ошибки Zen/Go) и статусу. */
@@ -160,6 +161,9 @@ sealed class ProviderError(message: String, cause: Throwable? = null) : RuntimeE
             InvalidInput.Reason.BASE_URL_INVALID -> context.getString(R.string.provider_error_base_url_invalid)
             InvalidInput.Reason.MODEL_NOT_CHAT_COMPATIBLE -> context.getString(R.string.provider_error_model_not_chat)
             InvalidInput.Reason.PROVIDER_CHANGED -> context.getString(R.string.provider_error_provider_changed)
+            InvalidInput.Reason.THINKING_CAPABILITIES_UNKNOWN -> context.getString(R.string.provider_error_thinking_unknown)
+            InvalidInput.Reason.THINKING_NOT_SUPPORTED -> context.getString(R.string.provider_error_thinking_unsupported)
+            InvalidInput.Reason.MODEL_OVERRIDE_INVALID -> context.getString(R.string.provider_error_model_override_invalid)
         }
     }
 

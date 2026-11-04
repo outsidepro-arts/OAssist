@@ -187,6 +187,7 @@ class AgentLoop(
                         chunk.anthropicReplay?.let { anthropicReplay = it }
                         chunk.geminiReplay?.let { geminiReplay = it }
                     }
+                    is ChatChunk.ProviderNotice -> emit(chunk)
                     is ChatChunk.ToolCall -> toolCalls.add(chunk)
                     is ChatChunk.Finish -> {
                         streamAbrupt = chunk.abrupt

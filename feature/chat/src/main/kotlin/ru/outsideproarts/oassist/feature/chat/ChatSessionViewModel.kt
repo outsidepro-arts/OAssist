@@ -44,6 +44,7 @@ class ChatSessionViewModel : ViewModel() {
     var autoSaveChats by mutableStateOf(true)
     var input by mutableStateOf(TextFieldValue(""))
     var isStreaming by mutableStateOf(false)
+    var providerNotice by mutableStateOf<ru.outsideproarts.oassist.core.provider.ChatChunk.ProviderNotice.Kind?>(null)
     var streamJob by mutableStateOf<Job?>(null)
     /** Ход, отложенный до появления сети (пре-чек или ранний обрыв без сети). */
     internal var pendingRetry by mutableStateOf<PendingChatTurn?>(null)

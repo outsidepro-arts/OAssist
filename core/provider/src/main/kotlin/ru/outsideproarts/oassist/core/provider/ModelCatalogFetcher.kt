@@ -12,6 +12,7 @@ import ru.outsideproarts.oassist.core.model.ModelInfo
 import ru.outsideproarts.oassist.core.model.ModelProtocol
 import ru.outsideproarts.oassist.core.provider.anthropic.AnthropicClient
 import ru.outsideproarts.oassist.core.provider.anthropic.AnthropicModelsResponseDto
+import ru.outsideproarts.oassist.core.provider.anthropic.thinkingCapabilities
 import ru.outsideproarts.oassist.core.provider.gemini.GeminiModelsResponseDto
 import ru.outsideproarts.oassist.core.model.diagnostics.DiagnosticKind
 import ru.outsideproarts.oassist.core.model.diagnostics.Diagnostics
@@ -132,7 +133,8 @@ private fun parseModelCatalog(raw: String): CatalogPage {
             } else null
             CatalogPage("data", dto.data.map {
                 if (it.id.isBlank()) throw ProviderError.Protocol("model catalog: empty model id")
-                ModelInfo(id = it.id, label = it.displayName ?: it.name, purpose = it.type)
+                ModelInfo(id = it.id, label = it.displayName ?: it.name, purpose = it.type,
+                    anthropicThinking = it.thinkingCapabilities())
             }, next)
         }
         "models" in root -> {

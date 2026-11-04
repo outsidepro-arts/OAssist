@@ -23,7 +23,7 @@ import ru.outsideproarts.oassist.core.provider.openai.ToolSchemaDto
  * (UI туда не доводит: без флага AUDIO_IN уходит в STT-текст).
  * Неподдерживаемых ролей у [ChatRole] нет — ветка exhaustive.
  *
- * [thinkingEnabled] — extended thinking включён в запросе: assistant-сообщения
+ * [thinkingEnabled] — effective thinking, including validated native continuation: assistant-сообщения
  * с [ChatMessage.reasoning] возвращают исходные блоки того же origin без изменений.
  * Legacy-истории содержат только одну пару text/signature: потерянные границы
  * и redacted-блоки из неё восстановить нельзя. Выключенный thinking не отправляет
@@ -48,8 +48,7 @@ internal fun mapAnthropicMessages(
             ChatRole.ASSISTANT -> {
                 val calls = msg.toolCalls.orEmpty()
                 val reasoning = msg.reasoning
-                val replay = reasoning?.anthropicReplay?.takeIf { thinkingEnabled && it.origin == replayOrigin }
-                    ?.let { completeReplayContent(msg, it.blocksJson) }
+                val replay = if (thinkingEnabled) matchingReplayContent(msg, replayOrigin) else null
                 val thinkingBlock = if (
                     thinkingEnabled && reasoning != null &&
                     reasoning.anthropicReplay == null && reasoning.signature != null
@@ -102,6 +101,21 @@ internal fun mapAnthropicMessages(
         }
     }
     return system to out
+}
+
+internal fun matchingReplayContent(message: ChatMessage, origin: String?): JsonArray? =
+    message.reasoning?.anthropicReplay?.takeIf { it.origin == origin }
+        ?.let { completeReplayContent(message, it.blocksJson) }
+
+internal fun hasMatchingThinkingReplay(messages: List<ChatMessage>, origin: String): Boolean = messages.any { message ->
+    if (message.role != ChatRole.ASSISTANT) return@any false
+    val blocks = matchingReplayContent(message, origin)?.map { it.jsonObject } ?: return@any false
+    val thinking = blocks.filter { it["type"]?.jsonPrimitive?.contentOrNull in setOf("thinking", "redacted_thinking") }
+    thinking.isNotEmpty() && thinking.all { block ->
+        val field = if (block["type"]?.jsonPrimitive?.contentOrNull == "thinking") "signature" else "data"
+        val value = block[field] as? JsonPrimitive
+        value?.isString == true && !value.contentOrNull.isNullOrBlank()
+    }
 }
 
 /** Never let an opaque snapshot override edited text or remapped/removed tool calls. */

@@ -185,6 +185,7 @@ fun ChatScreen(
     /** Ход, отложенный до появления сети (пре-чек или ранний обрыв без сети). */
     var pendingRetry by viewModel::pendingRetry
     var pendingApproval by viewModel::pendingApproval
+    var providerNotice by viewModel::providerNotice
     // Скоуп сессии: корутины чата не прерываются при уходе на вкладку настроек.
     val scope = viewModel.scope
     // UI-скоуп композиции: только для анимаций Compose (drawerState.open/close).
@@ -345,6 +346,7 @@ fun ChatScreen(
         streamJob = scope.launchDiagnostic(sendMode().name, diagnosticId) launch@ {
             // Хронологическое полотно (мыслевые блоки ↔ тулы) + ответ + usage.
             val timeline = ru.outsideproarts.oassist.core.agent.WorkTimelineBuilder()
+            providerNotice = null
             // Разделение в синтезе: комментарии и ответ — два независимых спикера
             // с собственными счётчиками; reasoning и тулы немы всегда.
             val thoughtSpeaker = StreamSpeaker(
@@ -376,6 +378,7 @@ fun ChatScreen(
                 val session = sendMessage(sendMode(), userMsg, history, audio) { turnTranscript = it }
                 error = session.chunks.collectSafe { chunk ->
                     when (chunk) {
+                        is ChatChunk.ProviderNotice -> providerNotice = chunk.kind
                         is ChatChunk.Reasoning -> {
                             // Мысли модели: live в полотно, без озвучки и без звука
                             // (дельты частые — звук затапил бы очередь).
@@ -535,6 +538,7 @@ fun ChatScreen(
 
     fun loadTurnsIntoUi(turns: List<StoredTurn>) {
         messages.clear()
+        providerNotice = null
         turns.forEach { turn ->
             messages.add(ChatItem(ChatRole.USER, answer = turn.userText, audio = turn.userAudio))
             messages.add(
@@ -571,6 +575,7 @@ fun ChatScreen(
                 titleLocked = true
                 turnStore.clear()
                 messages.clear()
+                providerNotice = null
                 turnStore.addAll(turns)
                 loadTurnsIntoUi(turns)
             } catch (cancel: kotlinx.coroutines.CancellationException) {
@@ -612,6 +617,7 @@ fun ChatScreen(
             titleLocked = false
             turnStore.clear()
             messages.clear()
+            providerNotice = null
             pendingApproval = null
             viewModel.isLoadingHistory = false
         }
@@ -1089,6 +1095,7 @@ fun ChatScreen(
                 }
             }
 
+            ru.outsideproarts.oassist.core.ui.components.ThinkingContextNotice(providerNotice != null)
             if (capturing) {
                 // Статус захвата — уместный live region (не стрим контента).
                 // Preview распознавания — здесь, не в поле ввода.

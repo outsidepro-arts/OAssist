@@ -79,6 +79,7 @@ fun AssistPill(
     onSpeakAnswer: () -> Unit,
     onInputFocusChanged: (Boolean) -> Unit,
     modifier: Modifier = Modifier,
+    thinkingContextReduced: Boolean = false,
 ) {
     val title = stringResource(R.string.assistant_title)
     val askLabel = stringResource(R.string.assistant_ask)
@@ -233,6 +234,7 @@ fun AssistPill(
                 }
             }
 
+            ru.outsideproarts.oassist.core.ui.components.ThinkingContextNotice(thinkingContextReduced)
             if (expanded) {
                 val emptyTotals = remember {
                     kotlinx.coroutines.flow.MutableStateFlow(ru.outsideproarts.oassist.core.model.UsageTotalsState())

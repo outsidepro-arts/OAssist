@@ -124,7 +124,7 @@ object ChatTitler {
                         chunk.usage?.takeUnless { it.isEmpty }?.let { usage = it }
                     }
                     is ChatChunk.ApprovalNeeded, is ChatChunk.ToolResult -> malformedResponse = true
-                    is ChatChunk.Reasoning -> Unit
+                    is ChatChunk.Reasoning, is ChatChunk.ProviderNotice -> Unit
                 }
             }
         } catch (e: CancellationException) {
