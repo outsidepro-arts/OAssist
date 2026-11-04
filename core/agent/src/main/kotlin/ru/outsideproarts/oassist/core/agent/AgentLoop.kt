@@ -257,12 +257,12 @@ class AgentLoop(
                 val parsedArgs = runCatching {
                     Json.parseToJsonElement(tc.argumentsJson).jsonObject
                 }
-                val args = parsedArgs.getOrElse { kotlinx.serialization.json.buildJsonObject { } }
+                val args = parsedArgs.getOrNull()
                 diagnostics.emit(DiagnosticKind.TOOL_CALL, diagnosticOperation,
                     attributes = mapOf("name" to tc.name, "call_id" to tc.id,
                         "arguments_valid" to parsedArgs.isSuccess.toString()),
                     content = tc.argumentsJson, secrets = diagnosticSecrets())
-                val farewellElement = if (terminalBye) args["farewell"] else null
+                val farewellElement = if (terminalBye) args?.get("farewell") else null
                 val invalidFarewell = terminalBye && (
                     parsedArgs.isFailure || (farewellElement != null &&
                         (farewellElement !is JsonPrimitive || !farewellElement.isString))
@@ -272,12 +272,13 @@ class AgentLoop(
                         ?: contentSb.toString().trim().takeIf { it.isNotBlank() }
                         ?: fallbackFarewell?.trim()?.takeIf { it.isNotBlank() }
                 } else null
-                val toolSummary = toolRegistry?.find(tc.name)?.describeForConfirmation(args)
+                val toolSummary = args?.let { toolRegistry?.find(tc.name)?.describeForConfirmation(it) }
                     ?: "${tc.name}: ${tc.argumentsJson}"
                 if (!includesBuiltinBye) events?.onToolCall(tc.name, tc.argumentsJson, toolSummary)
                 val result = when {
                     invalidByeBatch -> ToolResult(false, "bye должен быть единственным вызовом раунда; повторите запрос отдельно")
                     invalidFarewell -> ToolResult(false, "Некорректные аргументы bye: farewell должен быть строкой")
+                    args == null -> ToolResult(false, "Некорректные аргументы инструмента: ожидается JSON-объект")
                     terminalBye && farewell == null -> ToolResult(false, "Для bye не задан текст прощания")
                     else -> executeOneTool(tc, args, diagnosticOperation) { emit(it) }
                 }

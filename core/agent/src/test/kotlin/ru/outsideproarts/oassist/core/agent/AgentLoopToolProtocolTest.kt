@@ -5,6 +5,9 @@ import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.flow.toList
 import kotlinx.coroutines.test.runTest
 import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
 import org.junit.Assert.assertEquals
@@ -17,6 +20,8 @@ import ru.outsideproarts.oassist.core.model.ChatMessage
 import ru.outsideproarts.oassist.core.model.ChatRole
 import ru.outsideproarts.oassist.core.provider.ModelClient
 import ru.outsideproarts.oassist.core.provider.openai.ToolSchemaDto
+import ru.outsideproarts.oassist.core.data.memory.MemoryStore
+import ru.outsideproarts.oassist.core.model.ApprovalState
 
 /**
  * Регрессия зацикливания «один тул × N раундов»: результат тула возвращается
@@ -41,6 +46,7 @@ class AgentLoopToolProtocolTest {
 
     private class PingTool : Tool {
         var executions = 0
+        var descriptions = 0
         override val groupKey = ru.outsideproarts.oassist.core.model.ToolGroups.SERVICE
         override val schema = ToolSchema(
             name = "ping",
@@ -50,6 +56,69 @@ class AgentLoopToolProtocolTest {
         override suspend fun execute(arguments: JsonObject): ToolResult {
             executions++
             return ToolResult(true, "pong")
+        }
+        override fun describeForConfirmation(arguments: JsonObject): String {
+            descriptions++
+            return "ping"
+        }
+    }
+
+    @Test
+    fun invalidArgumentsReturnCorrelatedErrorWithoutCallingTool() = runTest {
+        for (arguments in listOf("{", "[]", "null", "42", "true", "\"text\"", "")) {
+            val tool = PingTool()
+            val client = ScriptedClient(ArrayDeque(listOf(
+                listOf(ChatChunk.ToolCall("c1", "ping", arguments), ChatChunk.Finish("tool_calls")),
+                listOf(ChatChunk.Content("исправлю"), ChatChunk.Finish("stop")),
+            )))
+            var stored = emptyList<ChatMessage>()
+            val chunks = AgentLoop(client, ToolRegistry(listOf(tool)))
+                .stream("m", null, emptyList(), "пинг", onTurnMessages = { stored = it }).toList()
+
+            assertEquals(arguments, client.seenMessages[1].last { it.role == ChatRole.ASSISTANT }.toolCalls?.single()?.argumentsJson)
+            val response = client.seenMessages[1].single { it.role == ChatRole.TOOL }
+            val result = chunks.filterIsInstance<ChatChunk.ToolResult>().single()
+            assertEquals("c1", result.id)
+            assertTrue(result.isError)
+            assertEquals("c1", response.toolCallId)
+            val envelope = Json.parseToJsonElement(response.content).jsonObject
+            assertEquals("error", envelope.getValue("status").jsonPrimitive.content)
+            assertEquals(result.output, envelope.getValue("data").jsonPrimitive.content)
+            val storedResponse = stored.single { it.role == ChatRole.TOOL }
+            assertEquals("c1", storedResponse.toolCallId)
+            assertEquals(result.output, storedResponse.content)
+            assertEquals(0, tool.executions)
+            assertEquals(0, tool.descriptions)
+        }
+    }
+
+    @Test
+    fun validObjectStillChecksMemoryTextType() = runTest {
+        for (value in listOf("null", "42", "true", "{}", "[]")) {
+            var memoryText = "original"
+            val memory = object : MemoryStore {
+                override suspend fun read() = memoryText
+                override suspend fun write(text: String) { memoryText = text }
+                override suspend fun append(line: String) { memoryText += line }
+                override suspend fun clear() { memoryText = "" }
+            }
+            val tool = MemoryPutTool(memory)
+            val policy = InMemoryApprovalPolicy().apply { setRemembered(tool.groupKey, ApprovalState.ALLOW) }
+            val client = ScriptedClient(ArrayDeque(listOf(
+                listOf(ChatChunk.ToolCall("memory-1", "memory_put", "{\"text\":$value}"), ChatChunk.Finish("tool_calls")),
+                listOf(ChatChunk.Content("исправлю"), ChatChunk.Finish("stop")),
+            )))
+            val chunks = AgentLoop(client, ToolRegistry(listOf(tool)), approvalPolicy = policy)
+                .stream("m", null, emptyList(), "запомни").toList()
+            val result = chunks.filterIsInstance<ChatChunk.ToolResult>().single()
+            assertTrue(result.isError)
+            assertTrue(result.output.contains("text"))
+            assertEquals("original", memoryText)
+            val response = client.seenMessages[1].single { it.role == ChatRole.TOOL }
+            assertEquals("memory-1", response.toolCallId)
+            val envelope = Json.parseToJsonElement(response.content).jsonObject
+            assertEquals("error", envelope.getValue("status").jsonPrimitive.content)
+            assertEquals(result.output, envelope.getValue("data").jsonPrimitive.content)
         }
     }
 
