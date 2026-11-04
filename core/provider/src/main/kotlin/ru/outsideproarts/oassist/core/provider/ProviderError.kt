@@ -106,6 +106,9 @@ sealed class ProviderError(message: String, cause: Throwable? = null) : RuntimeE
 
     class Protocol(reason: String) : ProviderError("Protocol error: $reason")
 
+    /** The provider rejected the prompt before generating a candidate. */
+    class PromptBlocked(val reason: String) : ProviderError("Prompt blocked by provider")
+
     /** Тип провайдера ещё не реализован (GEMINI до M3.2). */
     class NotSupported(val kind: String) : ProviderError("Провайдер $kind ещё не реализован")
 
@@ -125,6 +128,7 @@ sealed class ProviderError(message: String, cause: Throwable? = null) : RuntimeE
         is Http -> classifyProviderError(status, raw)
         is Network -> ProviderErrorKind.NETWORK
         is Protocol -> classifyErrorText(message) ?: ProviderErrorKind.PROTOCOL
+        is PromptBlocked -> ProviderErrorKind.PROTOCOL
         is NotSupported -> ProviderErrorKind.NOT_SUPPORTED
         is NotConfigured -> ProviderErrorKind.NOT_CONFIGURED
         is InvalidInput -> ProviderErrorKind.INVALID_INPUT
@@ -149,7 +153,12 @@ sealed class ProviderError(message: String, cause: Throwable? = null) : RuntimeE
         ProviderErrorKind.NOT_FOUND -> context.getString(R.string.provider_error_not_found)
         ProviderErrorKind.HTTP -> context.getString(R.string.provider_error_http, status)
         ProviderErrorKind.NETWORK -> context.getString(R.string.provider_error_network)
-        ProviderErrorKind.PROTOCOL -> context.getString(R.string.provider_error_protocol)
+        ProviderErrorKind.PROTOCOL -> if (this is PromptBlocked) context.getString(when (reason) {
+            "SAFETY", "IMAGE_SAFETY" -> R.string.provider_error_prompt_blocked_safety
+            "BLOCKLIST" -> R.string.provider_error_prompt_blocked_blocklist
+            "PROHIBITED_CONTENT" -> R.string.provider_error_prompt_blocked_prohibited
+            else -> R.string.provider_error_prompt_blocked
+        }) else context.getString(R.string.provider_error_protocol)
         ProviderErrorKind.NOT_SUPPORTED -> context.getString(R.string.provider_error_not_supported)
         ProviderErrorKind.NOT_CONFIGURED -> when ((this as NotConfigured).reason) {
             NotConfigured.Reason.PROVIDER_MISSING -> context.getString(R.string.provider_error_no_provider)

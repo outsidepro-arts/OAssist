@@ -81,9 +81,13 @@ data class GeminiFunctionDeclarationDto(
 @Serializable
 data class GeminiStreamChunkDto(
     val candidates: List<GeminiCandidateDto> = emptyList(),
+    val promptFeedback: GeminiPromptFeedbackDto? = null,
     /** Приходит на чанках, включая финальный с пустыми candidates. */
     @SerialName("usageMetadata") val usageMetadata: GeminiUsageMetadataDto? = null,
 )
+
+@Serializable
+data class GeminiPromptFeedbackDto(val blockReason: String? = null)
 
 @Serializable
 data class GeminiCandidateDto(

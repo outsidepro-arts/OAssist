@@ -12,6 +12,10 @@
     <string name="provider_error_http">HTTP error %1$d</string>
     <string name="provider_error_network">Network unavailable or server not responding</string>
     <string name="provider_error_protocol">Unsupported response format</string>
+    <string name="provider_error_prompt_blocked">The provider blocked the prompt. No reason was specified.</string>
+    <string name="provider_error_prompt_blocked_safety">The provider blocked the prompt for safety reasons.</string>
+    <string name="provider_error_prompt_blocked_blocklist">The provider blocked the prompt because it contains blocked terms.</string>
+    <string name="provider_error_prompt_blocked_prohibited">The provider blocked the prompt because it contains prohibited content.</string>
     <string name="provider_error_not_supported">Provider type is not supported yet</string>
     <string name="provider_error_no_provider">Provider is not configured — open Settings</string>
     <string name="provider_error_no_model">Model is not selected — refresh the model list</string>

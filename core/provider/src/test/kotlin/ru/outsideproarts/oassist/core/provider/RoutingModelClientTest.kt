@@ -136,6 +136,48 @@ class RoutingModelClientTest {
         }
 
     @Test
+    fun geminiPromptBlock_stopsRoutingAndRetry() = runTest {
+        for (reason in listOf("SAFETY", "BLOCKLIST", "ModelProtocolUnsupported")) {
+            var requests = 0
+            val engine = http {
+                requests++
+                respond("""data: {"promptFeedback":{"blockReason":"$reason","blockReasonMessage":"ModelProtocolUnsupported 503"},"usageMetadata":{"promptTokenCount":3}}
+
+""", HttpStatusCode.OK, headersOf("Content-Type", "text/event-stream"))
+            }
+            try {
+                val client = ModelClient.create(ru.outsideproarts.oassist.core.model.diagnostics.Diagnostics,
+                    profile(null), emptySecrets, engine)
+                val chunks = mutableListOf<ChatChunk>()
+                val source = { client.chatCompletionStream("gemini-test", emptyList()) }
+                val error = runCatching { source().retryEarlyFailure(delayMs = 0, resubscribe = source).collect { chunks += it } }.exceptionOrNull()
+                assertEquals(reason, (ProviderError.from(error!!) as ProviderError.PromptBlocked).reason)
+                assertEquals(1, requests)
+                assertTrue(chunks.isEmpty())
+            } finally { engine.close() }
+        }
+    }
+
+    @Test
+    fun geminiFeedbackWithoutBlock_preservesContentAndEof() = runTest {
+        for ((feedback, finish) in listOf("{}" to "STOP", "{\"blockReason\":\"BLOCK_REASON_UNSPECIFIED\"}" to null)) {
+            val engine = http {
+                val finishField = finish?.let { ",\"finishReason\":\"$it\"" }.orEmpty()
+                respond("""data: {"promptFeedback":$feedback,"candidates":[{"content":{"parts":[{"text":"hello"}]}$finishField}]}
+
+""", HttpStatusCode.OK, headersOf("Content-Type", "text/event-stream"))
+            }
+            try {
+                val client = ModelClient.create(ru.outsideproarts.oassist.core.model.diagnostics.Diagnostics,
+                    profile(null), emptySecrets, engine)
+                val chunks = client.chatCompletionStream("gemini-test", emptyList()).toList()
+                assertEquals("hello", chunks.filterIsInstance<ChatChunk.Content>().single().delta)
+                assertEquals(finish == null, chunks.filterIsInstance<ChatChunk.Finish>().single().abrupt)
+            } finally { engine.close() }
+        }
+    }
+
+    @Test
     fun fixedProtocol_failsWithoutPermutation_on404() = runTest {
         var requests = 0
         val engine = http {

@@ -12,6 +12,10 @@
     <string name="provider_error_http">Ошибка HTTP %1$d</string>
     <string name="provider_error_network">Сеть недоступна или сервер не отвечает</string>
     <string name="provider_error_protocol">Неподдерживаемый формат ответа</string>
+    <string name="provider_error_prompt_blocked">Провайдер заблокировал запрос. Причина не указана.</string>
+    <string name="provider_error_prompt_blocked_safety">Провайдер заблокировал запрос по причинам безопасности.</string>
+    <string name="provider_error_prompt_blocked_blocklist">Провайдер заблокировал запрос из-за запрещённых терминов.</string>
+    <string name="provider_error_prompt_blocked_prohibited">Провайдер заблокировал запрос из-за запрещённого содержимого.</string>
     <string name="provider_error_not_supported">Тип провайдера пока не поддерживается</string>
     <string name="provider_error_no_provider">Провайдер не настроен — откройте Настройки</string>
     <string name="provider_error_no_model">Модель не выбрана — обновите список моделей</string>

@@ -133,6 +133,9 @@ class GeminiClient internal constructor(
                 // usageMetadata кумулятивен и приходит на каждом чанке — берём
                 // последний снимок целиком: суммирование задвоило бы счётчики.
                 dto.usageMetadata?.toProviderUsage()?.let { usage = it }
+                dto.promptFeedback?.blockReason?.takeIf {
+                    it.isNotBlank() && it != "BLOCK_REASON_UNSPECIFIED"
+                }?.let { throw ProviderError.PromptBlocked(it) }
                 val chunk = dto.takeIf { it.candidates.isNotEmpty() }
                 if (chunk == null) {
                     // `{"error":...}` тоже декодируется как GeminiStreamChunkDto —
