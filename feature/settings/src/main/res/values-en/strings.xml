@@ -410,6 +410,9 @@
     <string name="data_wipe_body">Providers, modes, skills, memory, history and secrets will be deleted. Cannot be undone.</string>
     <string name="data_export_done">Export saved</string>
     <string name="data_import_done">Import done, re-enter secrets</string>
+    <string name="data_import_unfinished">Import may be incomplete. Select the same file again. Re-enter secrets after a successful import.</string>
+    <string name="mcp_editor_invalidated">MCP settings changed. Open the editor again.</string>
+    <string name="mcp_save_failed">MCP settings could not be fully saved. Check the settings and try saving again.</string>
     <string name="data_import_error">Could not read backup: %1$s</string>
     <string name="data_wipe_done">All data erased</string>
     <string name="data_wipe_error">Could not erase all data. Some data may have been erased. Try again.</string>

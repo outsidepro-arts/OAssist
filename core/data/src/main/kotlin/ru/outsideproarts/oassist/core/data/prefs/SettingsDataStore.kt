@@ -5,9 +5,11 @@ import androidx.datastore.core.DataStore
 import androidx.datastore.preferences.core.Preferences
 import androidx.datastore.preferences.core.edit
 import androidx.datastore.preferences.core.stringPreferencesKey
+import androidx.datastore.preferences.core.booleanPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.sync.Mutex
 import ru.outsideproarts.oassist.core.model.AppLanguage
 import ru.outsideproarts.oassist.core.model.ChatSortOrder
 
@@ -17,26 +19,36 @@ private val Context.settingsDataStore: DataStore<Preferences> by preferencesData
  * Глобальные настройки приложения. Настройки режимов (CHAT/ASSISTANT/SHARE)
  * живут отдельно и добавляются в M1.
  */
-class SettingsDataStore(private val context: Context) {
+class SettingsDataStore(private val store: DataStore<Preferences>) {
 
-    val language: Flow<AppLanguage> = context.settingsDataStore.data.map { prefs ->
+    constructor(context: Context) : this(context.settingsDataStore)
+
+    internal val importMutex = Mutex()
+
+    val importUnfinished: Flow<Boolean> = store.data.map { it[KEY_IMPORT_UNFINISHED] ?: false }
+
+    suspend fun setImportUnfinished(value: Boolean) {
+        store.edit { it[KEY_IMPORT_UNFINISHED] = value }
+    }
+
+    val language: Flow<AppLanguage> = store.data.map { prefs ->
         prefs[KEY_LANGUAGE]?.let { raw -> runCatching { AppLanguage.valueOf(raw) }.getOrNull() }
             ?: AppLanguage.DEFAULT
     }
 
     suspend fun setLanguage(language: AppLanguage) {
-        context.settingsDataStore.edit { prefs ->
+        store.edit { prefs ->
             prefs[KEY_LANGUAGE] = language.name
         }
     }
 
     /** Порядок сортировки списка чатов (шторка/шаринг). */
-    val chatSort: Flow<ChatSortOrder> = context.settingsDataStore.data.map { prefs ->
+    val chatSort: Flow<ChatSortOrder> = store.data.map { prefs ->
         ChatSortOrder.fromName(prefs[KEY_CHAT_SORT])
     }
 
     suspend fun setChatSort(order: ChatSortOrder) {
-        context.settingsDataStore.edit { prefs ->
+        store.edit { prefs ->
             prefs[KEY_CHAT_SORT] = order.name
         }
     }
@@ -44,5 +56,6 @@ class SettingsDataStore(private val context: Context) {
     companion object {
         private val KEY_LANGUAGE = stringPreferencesKey("app.language")
         private val KEY_CHAT_SORT = stringPreferencesKey("chats.sort")
+        private val KEY_IMPORT_UNFINISHED = booleanPreferencesKey("backup.import_unfinished")
     }
 }

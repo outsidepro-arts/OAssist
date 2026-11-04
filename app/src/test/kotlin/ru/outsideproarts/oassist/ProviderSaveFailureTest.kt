@@ -9,6 +9,7 @@ import io.ktor.client.engine.mock.respond
 import io.ktor.http.headersOf
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.async
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.first
@@ -30,6 +31,76 @@ import ru.outsideproarts.oassist.core.provider.ProviderValidator
 import ru.outsideproarts.oassist.feature.settings.ProviderSecretsInput
 
 class ProviderSaveFailureTest {
+    @Test fun deletedLegacyDraftIsNotTreatedAsNewProvider() = runTest {
+        val fixture = Fixture()
+        try {
+            fixture.seed()
+            val draft = fixture.repository.getProvider("p")!!
+            assertNull(draft.credentialRevision)
+            fixture.repository.deleteProvider("p")
+            val result = saveProvider(fixture.repository, fixture.validator, fixture.secrets, draft,
+                ProviderSecretsInput(apiKey = "entered-before-import"), originalProviderId = "p")
+            assertTrue(result.exceptionOrNull() is ru.outsideproarts.oassist.core.data.provider.CredentialRevisionMismatchException)
+            assertTrue(fixture.requests.isEmpty())
+            assertNull(fixture.repository.getProvider("p"))
+        } finally { fixture.http.close() }
+    }
+
+    @Test fun explicitlyNewProviderCanValidateAndSave() = runTest {
+        val fixture = Fixture()
+        try {
+            val draft = fixture.oldProfile.copy(extraHeaders = emptyMap())
+            val result = saveProvider(fixture.repository, fixture.validator, fixture.secrets, draft,
+                ProviderSecretsInput(apiKey = "new-key"), originalProviderId = null)
+            assertTrue(result.toString(), result.isSuccess)
+            assertNotNull(fixture.repository.getProvider("p"))
+        } finally { fixture.http.close() }
+    }
+
+    @Test fun oldDraftAfterSameIdReplacementIsRejectedBeforeSecretReadOrHttp() = runTest {
+        val fixture = Fixture()
+        try {
+            fixture.seed()
+            val draft = fixture.repository.getProvider("p")!!
+            fixture.repository.clearSecrets("p")
+            fixture.repository.upsertProvider(draft.copy(baseUrl = "https://imported.example", extraHeaders = emptyMap()))
+            fixture.repository.setExtraHeader("p", "X-Private", "fresh-secret".toCharArray())
+            val reopened = ProviderRepository(ProviderConfigStore(fixture.preferences), fixture.secrets)
+            var reads = 0
+            fixture.secrets.beforeGet = { reads++ }
+            val result = saveProvider(reopened, fixture.validator, fixture.secrets, draft, ProviderSecretsInput())
+            assertTrue(result.exceptionOrNull() is ru.outsideproarts.oassist.core.data.provider.CredentialRevisionMismatchException)
+            assertEquals(0, reads)
+            assertTrue(fixture.requests.isEmpty())
+            assertEquals("https://imported.example", reopened.getProvider("p")!!.baseUrl)
+        } finally { fixture.http.close() }
+    }
+
+    @Test fun validationSnapshotCannotReadReenteredCredentialAfterImportWhileNetworkIsPending() = runTest {
+        val fixture = Fixture()
+        try {
+            fixture.seed()
+            val draft = fixture.repository.getProvider("p")!!
+            val copied = CompletableDeferred<Unit>()
+            val proceed = CompletableDeferred<Unit>()
+            val request = async {
+                fixture.repository.withCredentialSnapshot("p", draft.credentialRevision) { snapshot ->
+                    copied.complete(Unit)
+                    proceed.await()
+                    fixture.validator.validate(draft, credentials = snapshot)
+                }
+            }
+            copied.await()
+            fixture.repository.clearSecrets("p")
+            fixture.repository.upsertProvider(draft.copy(baseUrl = "https://imported.example", extraHeaders = emptyMap()))
+            // Reuse the original alias deliberately, as stable aliases may be reused after import.
+            fixture.secrets.put("alias.one", "fresh-secret".toCharArray())
+            proceed.complete(Unit)
+            assertTrue(request.await() is ru.outsideproarts.oassist.core.provider.ProviderValidationResult.Success)
+            assertEquals(listOf("old.example" to "first"), fixture.requests)
+        } finally { fixture.http.close() }
+    }
+
     @Test fun clearingApiKeyValidatesAndCachesAnonymousCatalog() = runTest {
         assertClearedCredentialsValidateAnonymousCatalog(basic = false)
     }
@@ -221,7 +292,7 @@ class ProviderSaveFailureTest {
         })
         try {
             val result = saveProvider(repository, ProviderValidator(Diagnostics, secrets, http, null), secrets,
-                profile, ProviderSecretsInput(apiKey = "key"))
+                profile, ProviderSecretsInput(apiKey = "key"), originalProviderId = null)
             assertTrue(result.toString(), result.isSuccess)
             val saved = repository.getProvider("p")!!
             val mode = ru.outsideproarts.oassist.core.model.AssistMode.CHAT
@@ -476,6 +547,7 @@ class ProviderSaveFailureTest {
         })
         val validator = ProviderValidator(Diagnostics, secrets, http, probeTimeoutMs = null)
         var pending = emptySet<String>()
+        var draftRevision: String? = null
 
         suspend fun seed() {
             secrets.put("alias.one", "first".toCharArray())
@@ -485,7 +557,8 @@ class ProviderSaveFailureTest {
         suspend fun save(
             updated: ProviderProfile = oldProfile.copy(preset = ProviderPreset.OPENAI, baseUrl = "https://new.example/v1", extraHeaders = emptyMap()),
             input: ProviderSecretsInput = ProviderSecretsInput(clearedExtraHeaders = listOf("X-Private", "X-Other")),
-        ) = saveProvider(repository, validator, secrets, updated, input, pending) { pending = it }
+        ) = saveProvider(repository, validator, secrets, updated.copy(credentialRevision = draftRevision), input, pending,
+            onCredentialRevisionChanged = { revision, _ -> draftRevision = revision }) { pending = it }
         suspend fun fetch(profile: ProviderProfile) = ModelClient.create(Diagnostics, profile, secrets, http).fetchModels()
     }
 
@@ -505,6 +578,7 @@ class ProviderSaveFailureTest {
         var deletionFailure: Exception = IllegalStateException("delete failed")
         var putFailure: Exception? = null
         var beforeDelete: suspend () -> Unit = {}
+        var beforeGet: suspend () -> Unit = {}
         override suspend fun putPair(firstAlias: String, first: CharArray?, secondAlias: String, second: CharArray?) {
             putFailure?.let { throw it }
             if (first == null) values.remove(firstAlias) else values[firstAlias] = first.copyOf()
@@ -518,7 +592,7 @@ class ProviderSaveFailureTest {
             putFailure?.let { throw it }
             values[alias] = plaintext.copyOf()
         }
-        override suspend fun get(alias: String) = values[alias]?.copyOf()
+        override suspend fun get(alias: String): CharArray? { beforeGet(); return values[alias]?.copyOf() }
         override suspend fun contains(alias: String) = alias in values
         override suspend fun delete(alias: String) {
             beforeDelete()

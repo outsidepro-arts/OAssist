@@ -84,6 +84,15 @@ class BackupCodecTest {
     }
 
     @Test
+    fun `empty and whitespace skill bodies are rejected before import`() {
+        for (body in listOf("", " \n\t")) {
+            val backup = sample().copy(skills = listOf(SkillBackup("tea", "Tea", body)))
+            assertTrue(decodeBackup(encodeBackup(backup)).isFailure)
+        }
+        assertTrue(decodeBackup(encodeBackup(sample())).isSuccess)
+    }
+
+    @Test
     fun `scrubbed режет секретные ссылки`() {
         val profile = ProviderProfile(
             id = "p", name = "P", preset = ProviderPreset.CUSTOM, baseUrl = "https://x",

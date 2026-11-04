@@ -17,7 +17,7 @@ import ru.outsideproarts.oassist.core.model.*
 
 class BackupCredentialsTest {
     @Test
-    fun providerReplacementClearsLocalCredentialsWithoutDeletingImportedAliasesOrCatalog() = runTest {
+    fun providerReplacementClearsLocalCredentialsAndAbsentCatalogWithoutDeletingImportedAliases() = runTest {
         val secrets = MemorySecrets()
         val repository = ProviderRepository(ProviderConfigStore(MemoryPreferences()), secrets)
         val local = ProviderProfile(
@@ -38,7 +38,7 @@ class BackupCredentialsTest {
         // Exercise the same replacement routine as BackupManager, also with an unsanitized DTO.
         repository.importProfiles(listOf(malicious, malicious.copy(id = "new")))
         assertEquals(retainedAliases, secrets.aliases())
-        assertEquals(listOf("model"), repository.observeModelCatalog("p").first()!!.models.map { it.id })
+        assertNull(repository.observeModelCatalog("p").first())
         for (id in listOf("p", "new")) {
             val saved = repository.getProvider(id)!!
             assertEquals("https://imported.invalid", saved.baseUrl)

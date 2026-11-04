@@ -5,6 +5,8 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.ui.test.junit4.createComposeRule
+import androidx.compose.ui.test.junit4.StateRestorationTester
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performScrollTo
@@ -47,6 +49,96 @@ import ru.outsideproarts.oassist.feature.settings.R as SettingsR
 @RunWith(AndroidJUnit4::class)
 class ProviderHeaderEditTest {
     @get:Rule val compose = createComposeRule()
+
+    @Test fun restoredDeletedLegacyDraftKeepsOriginalIdentityAndCannotCreateProvider() {
+        val secrets = MemorySecrets()
+        val repository = ProviderRepository(ProviderConfigStore(MemoryPreferences()), secrets)
+        val original = ProviderProfile("legacy", "Legacy", ProviderPreset.CUSTOM, "https://old.example/v1")
+        runBlocking { repository.upsertProvider(original) }
+        val current = mutableStateOf<ProviderProfile?>(original)
+        var draft: ProviderProfile? = null
+        var origin: String? = null
+        val restoration = StateRestorationTester(compose)
+        restoration.setContent {
+            MaterialTheme {
+                ProviderEditScreen(current.value, false, null,
+                    { p, _, id, _ -> draft = p; origin = id }, {}, onBack = {}, sourceProviderId = "legacy")
+            }
+        }
+        compose.waitForIdle()
+        runBlocking { repository.deleteProvider("legacy") }
+        compose.runOnIdle { current.value = null }
+        restoration.emulateSavedInstanceStateRestore()
+        val context = InstrumentationRegistry.getInstrumentation().targetContext
+        compose.onNodeWithText(context.getString(SettingsR.string.action_save)).performScrollTo().performClick()
+        compose.runOnIdle {
+            assertEquals("legacy", draft!!.id)
+            assertEquals("legacy", origin)
+            assertNull(draft!!.credentialRevision)
+        }
+        var requests = 0
+        val http = HttpClient(MockEngine {
+            requests++
+            respond("""{"data":[]}""", headers = headersOf("Content-Type", "application/json"))
+        })
+        try {
+            val result = runBlocking {
+                saveProvider(repository, ProviderValidator(Diagnostics, secrets, http, null), secrets, draft!!,
+                    ProviderSecretsInput(apiKey = "entered-before-import"), originalProviderId = origin)
+            }
+            assertTrue(result.exceptionOrNull() is ru.outsideproarts.oassist.core.data.provider.CredentialRevisionMismatchException)
+            assertEquals(0, requests)
+            assertNull(runBlocking { repository.getProvider("legacy") })
+        } finally { http.close() }
+    }
+
+    @Test fun restoredOldDraftAfterSameIdImportCannotValidateWithFreshCredentials() {
+        val secrets = MemorySecrets()
+        val repository = ProviderRepository(ProviderConfigStore(MemoryPreferences()), secrets)
+        val original = ProviderProfile("p", "Provider", ProviderPreset.CUSTOM, "https://old.example/v1")
+        val initial = runBlocking {
+            repository.upsertProvider(original)
+            repository.setApiKey("p", "old-key".toCharArray())
+            repository.getProvider("p")!!
+        }
+        val current = mutableStateOf(initial)
+        var draft: ProviderProfile? = null
+        var input: ProviderSecretsInput? = null
+        val restoration = StateRestorationTester(compose)
+        restoration.setContent {
+            MaterialTheme {
+                ProviderEditScreen(current.value, false, null,
+                    { p, s, _, _ -> draft = p; input = s }, {}, onBack = {})
+            }
+        }
+        compose.waitForIdle()
+        val replaced = runBlocking {
+            repository.clearSecrets("p")
+            repository.upsertProvider(original.copy(baseUrl = "https://imported.example/v1"))
+            repository.setApiKey("p", "fresh-key".toCharArray())
+            repository.getProvider("p")!!
+        }
+        compose.runOnIdle { current.value = replaced }
+        restoration.emulateSavedInstanceStateRestore()
+        val context = InstrumentationRegistry.getInstrumentation().targetContext
+        compose.onNodeWithText(context.getString(SettingsR.string.action_save)).performScrollTo().performClick()
+        compose.runOnIdle {
+            assertEquals(initial.credentialRevision, draft!!.credentialRevision)
+            assertEquals(initial.baseUrl, draft!!.baseUrl)
+        }
+        var requests = 0
+        val http = HttpClient(MockEngine {
+            requests++
+            respond("""{"data":[]}""", headers = headersOf("Content-Type", "application/json"))
+        })
+        try {
+            val result = runBlocking {
+                saveProvider(repository, ProviderValidator(Diagnostics, secrets, http, null), secrets, draft!!, input!!)
+            }
+            assertTrue(result.exceptionOrNull() is ru.outsideproarts.oassist.core.data.provider.CredentialRevisionMismatchException)
+            assertEquals(0, requests)
+        } finally { http.close() }
+    }
 
     @Test fun changingPresetDoesNotSendOrRetainHiddenHeader() = checkEdit(changePreset = true)
     @Test fun editingWithoutChangingPresetKeepsVisibleHeader() = checkEdit(changePreset = false)
@@ -120,7 +212,7 @@ class ProviderHeaderEditTest {
             var input: ProviderSecretsInput? = null
             compose.setContent {
                 MaterialTheme {
-                    ProviderEditScreen(profile, false, null, { p, s -> edited = p; input = s }, {}, onBack = {})
+                    ProviderEditScreen(profile, false, null, { p, s, _, _ -> edited = p; input = s }, {}, onBack = {})
                 }
             }
             val context = InstrumentationRegistry.getInstrumentation().targetContext

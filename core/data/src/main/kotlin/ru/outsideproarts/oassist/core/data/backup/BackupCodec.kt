@@ -84,6 +84,7 @@ fun decodeBackup(raw: String): Result<BackupV1> = runCatching {
     require(parsed.skills.size <= MAX_SKILLS) { "Слишком много навыков" }
     parsed.skills.forEach {
         require(SkillInfo.NAME_PATTERN.matches(it.name)) { "Плохое имя навыка: ${it.name}" }
+        require(it.body.trim().isNotEmpty()) { "Пустое содержимое навыка: ${it.name}" }
         require(it.title.length <= MAX_TEXT && it.body.length <= MAX_BODY) { "Навык ${it.name} слишком большой" }
     }
     require(parsed.memory.length <= MAX_MEMORY) { "Память слишком большая" }

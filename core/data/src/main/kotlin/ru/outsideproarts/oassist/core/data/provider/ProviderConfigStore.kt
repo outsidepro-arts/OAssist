@@ -7,6 +7,7 @@ import androidx.datastore.preferences.core.edit
 import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.withContext
@@ -74,12 +75,62 @@ class ProviderConfigStore(private val dataStore: DataStore<Preferences>) {
         catalog?.takeIf { it.sourceFingerprint == profile.catalogFingerprint() }?.models?.firstOrNull { it.id == modelId }
     }
 
+    internal suspend fun upsertChecked(profile: ProviderProfile, token: CredentialUpdateToken?) = credentialWrites.withLock {
+        val current = providerProfiles.first().firstOrNull { it.id == profile.id }
+        if (token != null && (token.providerId != profile.id || token.revision != current?.credentialRevision ||
+                (token.expectedExists != null && token.expectedExists != (current != null)))) {
+            throw CredentialRevisionMismatchException()
+        }
+        upsertProviderProfile(profile)
+        token?.expectedExists = true
+    }
+
+    internal suspend fun <T> readCredentials(
+        id: String, revision: String?, expectedExists: Boolean, read: suspend (ProviderProfile?) -> T,
+    ): T = credentialWrites.withLock {
+        val current = providerProfiles.first().firstOrNull { it.id == id }
+        if (current?.credentialRevision != revision || expectedExists != (current != null)) throw CredentialRevisionMismatchException()
+        read(current)
+    }
+
     suspend fun upsertProviderProfile(profile: ProviderProfile) {
         dataStore.edit { prefs ->
             val current = prefs[KEY_PROVIDERS]?.let { decodeList<ProviderProfile>(it) }.orEmpty()
             val previous = current.firstOrNull { it.id == profile.id }
             val stored = if (previous == null) profile else profile.copy(credentialRevision = previous.credentialRevision)
             prefs[KEY_PROVIDERS] = json.encodeToString(current.filterNot { it.id == profile.id } + stored)
+        }
+    }
+
+    /** Secret cleanup and snapshot publication share the credential writer lock. */
+    internal suspend fun replaceFromBackup(
+        profiles: List<ProviderProfile>,
+        modes: List<ModeConfig>,
+        catalogs: List<ModelCatalog>,
+        clearSecrets: suspend (ProviderProfile) -> Unit,
+    ) = credentialWrites.withLock {
+        val previous = dataStore.data.first()
+            .get(KEY_PROVIDERS)?.let { decodeList<ProviderProfile>(it) }.orEmpty()
+        // Persist invalidation before deleting any secrets, including on a failed import.
+        dataStore.edit { prefs ->
+            prefs[KEY_PROVIDERS] = json.encodeToString(previous.map {
+                it.copy(credentialRevision = UUID.randomUUID().toString())
+            })
+        }
+        previous.forEach { clearSecrets(it) }
+        val ids = profiles.map { it.id }.toSet()
+        dataStore.edit { prefs ->
+            prefs[KEY_PROVIDERS] = json.encodeToString(profiles.map {
+                it.copy(credentialRevision = UUID.randomUUID().toString())
+            })
+            prefs[KEY_MODES] = json.encodeToString(AssistMode.entries.map { mode ->
+                val config = modes.lastOrNull { it.mode == mode } ?: ModeConfig.default(mode)
+                if (config.providerId in ids) config else config.copy(providerId = null, modelId = null)
+            })
+            prefs.asMap().keys.filter { it.name.startsWith("models.") }.forEach { prefs.remove(it) }
+            catalogs.filter { it.providerId in ids }.forEach {
+                prefs[modelCatalogKey(it.providerId)] = json.encodeToString(it.copy(sourceFingerprint = null))
+            }
         }
     }
 
@@ -104,6 +155,9 @@ class ProviderConfigStore(private val dataStore: DataStore<Preferences>) {
                     setCredentialRevision(providerId, terminal)
                     intermediateRevisions.remove(providerId, intermediate)
                     if (failure == null) token?.revision = terminal
+                    // Retry must validate anew; a failed write never authenticates
+                    // the previous validation result or its catalog.
+                    token?.retryRevision = terminal
                 }
             } catch (error: Throwable) {
                 if (failure != null) failure.addSuppressed(error) else throw error
@@ -115,7 +169,8 @@ class ProviderConfigStore(private val dataStore: DataStore<Preferences>) {
         dataStore.edit { prefs ->
             val current = prefs[KEY_PROVIDERS]?.let { decodeList<ProviderProfile>(it) }.orEmpty()
             if (token != null && (token.providerId != providerId ||
-                current.firstOrNull { it.id == providerId }?.credentialRevision != token.revision)) {
+                current.firstOrNull { it.id == providerId }?.credentialRevision != token.revision ||
+                (token.expectedExists != null && token.expectedExists != current.any { it.id == providerId }))) {
                 throw CredentialRevisionMismatchException()
             }
             prefs[KEY_PROVIDERS] = json.encodeToString(current.map {

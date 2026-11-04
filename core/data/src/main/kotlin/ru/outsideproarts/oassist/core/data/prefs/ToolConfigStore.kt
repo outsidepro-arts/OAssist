@@ -19,9 +19,11 @@ private val Context.toolConfigDataStore: DataStore<Preferences> by preferencesDa
  * Не секреты — обычное device-protected хранилище, как остальные настройки.
  * Подтверждениями заправляет `ApprovalStore` (группы разрешений).
  */
-class ToolConfigStore(private val context: Context) {
+class ToolConfigStore(private val store: DataStore<Preferences>) {
 
-    val preferences: Flow<ToolPreferences> = context.toolConfigDataStore.data.map { prefs ->
+    constructor(context: Context) : this(context.toolConfigDataStore)
+
+    val preferences: Flow<ToolPreferences> = store.data.map { prefs ->
         val disabled = mutableSetOf<String>()
         prefs.asMap().forEach { (key, value) ->
             val name = key.name
@@ -38,13 +40,13 @@ class ToolConfigStore(private val context: Context) {
     suspend fun snapshot(): ToolPreferences = preferences.first()
 
     suspend fun setToolEnabled(name: String, enabled: Boolean) {
-        context.toolConfigDataStore.edit { prefs ->
+        store.edit { prefs ->
             prefs[booleanPreferencesKey(PREFIX_ENABLED + name)] = enabled
         }
     }
 
     suspend fun setMaxToolRounds(rounds: Int) {
-        context.toolConfigDataStore.edit { prefs ->
+        store.edit { prefs ->
             prefs[KEY_MAX_TOOL_ROUNDS] = normalizeMaxToolRounds(rounds)
         }
     }
@@ -59,7 +61,7 @@ class ToolConfigStore(private val context: Context) {
 
     /** Сбросить всё к дефолтам (включая легаси-ключи «спрашивать»). */
     suspend fun resetAll() {
-        context.toolConfigDataStore.edit { prefs ->
+        store.edit { prefs ->
             prefs.asMap().keys
                 .filter {
                     it.name.startsWith(PREFIX_ENABLED) ||
@@ -73,7 +75,7 @@ class ToolConfigStore(private val context: Context) {
     /** Replace для импорта: стереть всё и применить снапшот целиком. */
     suspend fun replace(prefs: ToolPreferences) {
         resetAll()
-        context.toolConfigDataStore.edit { store ->
+        store.edit { store ->
             prefs.disabled.forEach { store[booleanPreferencesKey(PREFIX_ENABLED + it)] = false }
             store[KEY_MAX_TOOL_ROUNDS] = normalizeMaxToolRounds(prefs.maxToolRounds)
         }

@@ -38,20 +38,48 @@ class ProviderRepository(
 
     suspend fun modelInfo(profile: ProviderProfile, modelId: String): ModelInfo? = store.modelInfo(profile, modelId).first()
 
-    suspend fun upsertProvider(profile: ProviderProfile) = store.upsertProviderProfile(profile)
+    suspend fun upsertProvider(profile: ProviderProfile, token: CredentialUpdateToken? = null) = store.upsertChecked(profile, token)
 
     suspend fun getProvider(id: String): ProviderProfile? =
         store.providerProfiles.first().firstOrNull { it.id == id }
 
+    /** Copy only this revision's local aliases; network work runs after releasing the lock. */
+    suspend fun <T> withCredentialSnapshot(id: String, revision: String?, expectedExists: Boolean = true, action: suspend (SecretStore) -> T): T {
+        val snapshot = CredentialSnapshot()
+        try {
+            store.readCredentials(id, revision, expectedExists) { profile ->
+                val aliases = profile?.let {
+                    listOfNotNull(it.apiKeyRef, it.basicUserRef, it.basicPasswordRef) + it.extraHeaders.values
+                }.orEmpty()
+                aliases.distinct().forEach { alias -> secrets.get(alias)?.let { snapshot.values[alias] = it } }
+            }
+            return action(snapshot)
+        } finally {
+            snapshot.values.values.forEach { it.fill('\u0000') }
+            snapshot.values.clear()
+        }
+    }
+
     /** Удаляет профиль вместе со всеми его секретами. */
-    suspend fun deleteProvider(id: String) {
-        clearSecrets(id)
+    suspend fun deleteProvider(id: String) = store.withCredentialMutation(id) {
+        deleteSecrets(id, getProvider(id))
         store.deleteProviderProfile(id)
     }
 
     /** Clears credentials using only the current local profile, before backup replacement. */
     suspend fun clearSecrets(id: String) = store.withCredentialMutation(id) {
         val profile = getProvider(id)
+        deleteSecrets(id, profile)
+        updateProvider(id) {
+            it.copy(apiKeyRef = null, basicUserRef = null, basicPasswordRef = null, extraHeaders = emptyMap())
+        }
+    }
+
+    internal suspend fun replaceFromBackup(
+        profiles: List<ProviderProfile>, modes: List<ModeConfig>, catalogs: List<ModelCatalog>,
+    ) = store.replaceFromBackup(profiles, modes, catalogs) { deleteSecrets(it.id, it) }
+
+    private suspend fun deleteSecrets(id: String, profile: ProviderProfile?) {
         profile?.let { p ->
             p.apiKeyRef?.let { secrets.delete(it) }
             p.basicUserRef?.let { secrets.delete(it) }
@@ -63,9 +91,6 @@ class ProviderRepository(
         // и легаси-конфигов без текущих ссылок в профиле.
         secrets.delete(aliasForBasicUser(id))
         secrets.delete(aliasForBasicPassword(id))
-        updateProvider(id) {
-            it.copy(apiKeyRef = null, basicUserRef = null, basicPasswordRef = null, extraHeaders = emptyMap())
-        }
     }
 
     suspend fun hasApiKey(providerId: String): Boolean =
@@ -265,6 +290,20 @@ class ProviderRepository(
             return "provider.$providerId.header.$encodedName"
         }
     }
+}
+
+/** Short-lived read-only credential source for a single validation request. */
+private class CredentialSnapshot : SecretStore {
+    val values = mutableMapOf<String, CharArray>()
+    override suspend fun get(alias: String): CharArray? = values[alias]?.copyOf()
+    override suspend fun getPair(firstAlias: String?, secondAlias: String?) =
+        firstAlias?.let { get(it) } to secondAlias?.let { get(it) }
+    override suspend fun contains(alias: String) = alias in values
+    override suspend fun aliases() = values.keys.toList()
+    override suspend fun put(alias: String, plaintext: CharArray): Unit = error("Read-only credential snapshot")
+    override suspend fun putPair(firstAlias: String, first: CharArray?, secondAlias: String, second: CharArray?): Unit = error("Read-only credential snapshot")
+    override suspend fun delete(alias: String): Unit = error("Read-only credential snapshot")
+    override suspend fun clearAll(): Unit = error("Read-only credential snapshot")
 }
 
 /**

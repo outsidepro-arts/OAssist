@@ -60,6 +60,7 @@ fun SettingsScreen(
     onNavigateToUpdates: () -> Unit = {},
     onExport: () -> Unit = {},
     onImport: () -> Unit = {},
+    importUnfinished: Boolean = false,
     onWipe: () -> Unit = {},
     modifier: Modifier = Modifier,
 ) {
@@ -209,6 +210,7 @@ fun SettingsScreen(
             )
             OAssistSettingRow(
                 title = stringResource(R.string.data_import),
+                subtitle = if (importUnfinished) stringResource(R.string.data_import_unfinished) else null,
                 icon = Icons.Default.ChevronRight,
                 onClick = onImport,
 

@@ -345,6 +345,7 @@ private fun OAssistApp(
                 val context = LocalContext.current
                 var showWipeDialog by remember { mutableStateOf(false) }
                 val backup = remember { ru.outsideproarts.oassist.core.data.backup.BackupManager(graph.data) }
+                val importUnfinished by graph.data.settings.importUnfinished.collectAsStateWithLifecycle(initialValue = false)
                 val exportLauncher = rememberLauncherForActivityResult(
                     ActivityResultContracts.CreateDocument("application/json"),
                 ) { uri ->
@@ -383,13 +384,18 @@ private fun OAssistApp(
                                 showToast(context, SettingsR.string.data_import_done)
                             },
                             onFailure = {
-                                val reason = it.message?.take(200) ?: "?"
-                                showToast(context, SettingsR.string.data_import_error, reason)
+                                if (it is ru.outsideproarts.oassist.core.data.backup.PartialBackupImportException) {
+                                    showToast(context, SettingsR.string.data_import_unfinished)
+                                } else {
+                                    val reason = it.message?.take(200) ?: "?"
+                                    showToast(context, SettingsR.string.data_import_error, reason)
+                                }
                             },
                         )
                     }
                 }
                 SettingsScreen(
+                    importUnfinished = importUnfinished,
                     language = language,
                     onLanguageChange = onLanguageChange,
                     onNavigateToProviders = { navController.navigate("provider_list") },
@@ -587,13 +593,17 @@ private fun OAssistApp(
                 ru.outsideproarts.oassist.feature.settings.McpServersScreen(
                     servers = servers,
                     testingId = testingId,
-                    onSave = { updated, secrets ->
+                    editorEpoch = graph.data.mcpServers::editorEpoch,
+                    onSave = { updated, secrets, epoch, original ->
                         scope.launch {
-                            graph.data.mcpServers.upsert(updated)
-                            val bearer = secrets.bearer
-                            when {
-                                secrets.clearBearer -> graph.data.mcpServers.clearBearer(updated.id)
-                                bearer != null -> graph.data.mcpServers.setBearer(updated.id, bearer.toCharArray())
+                            try {
+                                graph.data.mcpServers.saveEditor(updated, secrets.bearer?.toCharArray(), secrets.clearBearer, epoch, original)
+                            } catch (error: kotlinx.coroutines.CancellationException) {
+                                throw error
+                            } catch (error: ru.outsideproarts.oassist.core.data.mcp.McpEditorInvalidatedException) {
+                                showToast(context, SettingsR.string.mcp_editor_invalidated)
+                            } catch (error: Exception) {
+                                showToast(context, SettingsR.string.mcp_save_failed)
                             }
                         }
                     },
@@ -667,10 +677,11 @@ private fun OAssistApp(
                 val isCurrentEditor = { navController.currentBackStackEntry == backStackEntry }
                 ProviderEditScreen(
                     profile = profile,
+                    sourceProviderId = id?.takeUnless { it == "new" },
                     isSaving = isSaving,
                     saveError = saveError,
                     onDismissSaveError = { saveError = null },
-                    onSave = { updated, secrets ->
+                    onSave = { updated, secrets, originalId, updateDraftRevision ->
                         editorOwner.launch {
                             isSaving = true
                             saveError = null
@@ -681,6 +692,8 @@ private fun OAssistApp(
                                     ProviderValidator(ru.outsideproarts.oassist.core.model.diagnostics.Diagnostics, graph.data.secretStore, graph.httpClient),
                                     graph.data.secretStore, updated, secrets,
                                     pendingCleanup = pendingHeaderCleanup,
+                                    originalProviderId = originalId,
+                                    onCredentialRevisionChanged = { revision, exists -> if (isCurrentEditor()) updateDraftRevision(revision, exists) },
                                     onCleanupPending = { if (isCurrentEditor()) pendingHeaderCleanup = it },
                                 )
                                     .onSuccess { result ->
@@ -875,10 +888,14 @@ internal suspend fun saveProvider(
     updated: ru.outsideproarts.oassist.core.model.ProviderProfile,
     secrets: ProviderSecretsInput,
     pendingCleanup: Set<String> = emptySet(),
+    originalProviderId: String? = updated.id,
+    onCredentialRevisionChanged: (String?, Boolean) -> Unit = { _, _ -> },
     onCleanupPending: (Set<String>) -> Unit = {},
-): Result<ProviderValidationResult> = try {
-    val validatedCredentialRevision = providers.getProvider(updated.id)?.credentialRevision
-    val credentialToken = ru.outsideproarts.oassist.core.data.provider.CredentialUpdateToken(updated.id, validatedCredentialRevision)
+): Result<ProviderValidationResult> {
+    val validatedCredentialRevision = updated.credentialRevision
+    val credentialToken = ru.outsideproarts.oassist.core.data.provider.CredentialUpdateToken(updated.id, validatedCredentialRevision, originalProviderId != null)
+    return try {
+    if (originalProviderId != null && originalProviderId != updated.id) throw ru.outsideproarts.oassist.core.data.provider.CredentialRevisionMismatchException()
     // Validation sees the desired credentials; persistence retains the original
     // references until clear* has removed their secrets successfully.
     val validationProfile = updated.copy(
@@ -892,7 +909,14 @@ internal suspend fun saveProvider(
         basicPassword = secrets.basicPassword?.takeUnless { secrets.clearBasic }?.toCharArray(),
         extraHeaders = secrets.extraHeaders,
     )
-    when (val result = validator.validate(validationProfile, overrides)) {
+    val validation = try {
+        providers.withCredentialSnapshot(updated.id, validatedCredentialRevision, originalProviderId != null) { snapshot ->
+            validator.validate(validationProfile, overrides, snapshot)
+        }
+    } finally {
+        overrides.zeroOut()
+    }
+    when (val result = validation) {
         is ProviderValidationResult.Failure -> Result.failure(result.error)
         else -> {
             val catalogCredentialsUnchanged = providers.getProvider(updated.id)?.credentialRevision == validatedCredentialRevision
@@ -901,7 +925,7 @@ internal suspend fun saveProvider(
             var removedAliases = pendingCleanup + secrets.clearedExtraHeaders.mapNotNull(oldHeaders::get)
             kotlinx.coroutines.currentCoroutineContext().ensureActive()
             kotlinx.coroutines.withContext(kotlinx.coroutines.NonCancellable) {
-                providers.upsertProvider(updated)
+                providers.upsertProvider(updated, credentialToken)
                 onCleanupPending(removedAliases)
             }
             val apiKey = secrets.apiKey
@@ -959,6 +983,9 @@ internal suspend fun saveProvider(
     throw e
 } catch (e: Throwable) {
     Result.failure(e)
+} finally {
+    onCredentialRevisionChanged(credentialToken.retryRevision, credentialToken.expectedExists == true)
+}
 }
 
 internal suspend fun retryProviderHeaderCleanup(

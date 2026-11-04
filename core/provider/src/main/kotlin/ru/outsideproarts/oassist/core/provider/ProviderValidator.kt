@@ -36,8 +36,9 @@ class ProviderValidator(
     suspend fun validate(
         profile: ProviderProfile,
         overrides: ProviderAuth? = null,
+        credentials: SecretStore = secretStore,
     ): ProviderValidationResult = try {
-        validateInner(profile, overrides)
+        validateInner(profile, overrides, credentials)
     } finally {
         overrides?.zeroOut()
     }
@@ -45,6 +46,7 @@ class ProviderValidator(
     private suspend fun validateInner(
         profile: ProviderProfile,
         overrides: ProviderAuth?,
+        credentials: SecretStore,
     ): ProviderValidationResult {
         if (profile.name.isBlank()) {
             return ProviderValidationResult.Failure(
@@ -62,7 +64,7 @@ class ProviderValidator(
             )
         }
         return try {
-            val client = ModelClient.create(diagnostics, profile, secretStore, httpClient, overrides)
+            val client = ModelClient.create(diagnostics, profile, credentials, httpClient, overrides)
             val models = if (probeTimeoutMs != null) {
                 withTimeoutOrNull(probeTimeoutMs) { client.fetchModels() }
                     ?: return ProviderValidationResult.Failure(ProviderError.Network("timeout"))

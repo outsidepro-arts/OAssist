@@ -64,7 +64,8 @@ data class McpSecretsInput(
 fun McpServersScreen(
     servers: List<McpServerConfig>,
     testingId: String?,
-    onSave: (McpServerConfig, McpSecretsInput) -> Unit,
+    onSave: (McpServerConfig, McpSecretsInput, String, McpServerConfig?) -> Unit,
+    editorEpoch: () -> String,
     onDelete: (String) -> Unit,
     onSetEnabled: (String, Boolean) -> Unit,
     onTest: (String) -> Unit,
@@ -77,13 +78,14 @@ fun McpServersScreen(
         mutableStateOf<McpServerConfig?>(null)
     }
     var editorIsNew by rememberSaveable { mutableStateOf(false) }
+    var openedEpoch by rememberSaveable { mutableStateOf("") }
 
     if (editorFor != null || editorIsNew) {
         McpServerEditor(
             config = editorFor,
             testing = testingId == editorFor?.id,
             onSave = { updated, secrets ->
-                onSave(updated, secrets)
+                onSave(updated, secrets, openedEpoch, editorFor)
                 editorFor = null
                 editorIsNew = false
             },
@@ -102,10 +104,11 @@ fun McpServersScreen(
         McpServersList(
             servers = servers,
             onAdd = {
+                openedEpoch = editorEpoch()
                 editorFor = null
                 editorIsNew = true
             },
-            onEdit = { editorFor = it },
+            onEdit = { openedEpoch = editorEpoch(); editorFor = it },
             onSetEnabled = onSetEnabled,
             onBack = onBack,
             modifier = modifier,

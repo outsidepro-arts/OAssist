@@ -22,6 +22,15 @@ private val Context.mcpConfigDataStore: DataStore<Preferences> by preferencesDat
  */
 class McpConfigStore(private val dataStore: DataStore<Preferences>) {
 
+    internal val writes = kotlinx.coroutines.sync.Mutex()
+    @Volatile internal var editorEpoch: String = java.util.UUID.randomUUID().toString()
+
+    internal fun invalidateEditors() { editorEpoch = java.util.UUID.randomUUID().toString() }
+
+    internal suspend fun replace(configs: List<McpServerConfig>) {
+        dataStore.edit { it[KEY_SERVERS] = json.encodeToString(configs) }
+    }
+
     constructor(context: Context) : this(context.mcpConfigDataStore)
 
     private val json = Json {

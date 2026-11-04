@@ -1,6 +1,8 @@
 package ru.outsideproarts.oassist.core.data.backup
 
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.sync.withLock
 import ru.outsideproarts.oassist.core.data.DataContainer
 import ru.outsideproarts.oassist.core.data.provider.ProviderRepository
 import ru.outsideproarts.oassist.core.data.mcp.McpServerRepository
@@ -41,69 +43,89 @@ class BackupManager(private val data: DataContainer) {
         ),
     )
 
-    suspend fun import(raw: String): Result<Unit> {
-        val backup = decodeBackup(raw).getOrElse { return Result.failure(it) }
-        return runCatching {
-            // Провайдеры: replace (лишние удалить вместе с секретами).
-            data.providers.importProfiles(backup.providers)
-            backup.modes.forEach { data.providers.setModeConfig(it) }
-            backup.catalogs.forEach { data.providers.saveModelCatalog(it.providerId, it.models) }
-            data.toolConfigs.replace(backup.toolPrefs.toDomain())
-            // MCP: replace; секреты не импортируются — сбросить ссылки на них.
-            data.mcpServers.importServers(backup.mcpServers)
-            // Навыки: replace по имени.
-            val currentSkills = data.skills.list().map { it.name }.toSet()
-            backup.skills.forEach {
-                data.skills.upsert(it.name, it.title, it.body)
-                data.skills.setEnabled(it.name, it.enabled)
-            }
-            (currentSkills - backup.skills.map { it.name }.toSet())
-                .forEach { data.skills.delete(it) }
-            data.memory.write(backup.memory)
-            runCatching { data.settings.setLanguage(AppLanguage.valueOf(backup.language)) }
-            data.approvals.replaceAll(backup.toApprovalStates())
-        }
-    }
+    suspend fun import(raw: String): Result<Unit> = BackupImport(
+        data.settings, data.providers, data.toolConfigs, data.mcpServers,
+        data.skills, data.memory, data.approvals,
+    ).apply(raw)
 
     /** Полный wipe: конфиги, навыки, память, история, секреты, always-разрешения. */
-    suspend fun wipe(): Result<Unit> = try {
-        data.providers.observeProviders().first().forEach { data.providers.deleteProvider(it.id) }
-        AssistMode.entries.forEach { data.providers.setModeConfig(ModeConfig.default(it)) }
-        data.toolConfigs.resetAll()
-        data.mcpServers.snapshot().forEach { data.mcpServers.delete(it.id) }
-        data.skills.deleteAll()
-        data.memory.clear()
-        data.approvals.clear()
-        data.chats.clearAll()
-        data.diagnostics.clear()
-        data.secretStore.clearAll()
-        data.settings.setLanguage(AppLanguage.DEFAULT)
-        Result.success(Unit)
-    } catch (e: kotlinx.coroutines.CancellationException) {
-        throw e
-    } catch (e: Exception) {
-        Result.failure(e)
+    suspend fun wipe(): Result<Unit> = data.settings.importMutex.withLock {
+        try {
+            data.providers.observeProviders().first().forEach { data.providers.deleteProvider(it.id) }
+            AssistMode.entries.forEach { data.providers.setModeConfig(ModeConfig.default(it)) }
+            data.toolConfigs.resetAll()
+            data.mcpServers.snapshot().forEach { data.mcpServers.delete(it.id) }
+            data.skills.deleteAll()
+            data.memory.clear()
+            data.approvals.clear()
+            data.chats.clearAll()
+            data.diagnostics.clear()
+            data.secretStore.clearAll()
+            data.settings.setLanguage(AppLanguage.DEFAULT)
+            data.settings.setImportUnfinished(false)
+            Result.success(Unit)
+        } catch (e: kotlinx.coroutines.CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            Result.failure(e)
+        }
     }
 }
 
-internal suspend fun ProviderRepository.importProfiles(profiles: List<ProviderProfile>) {
-    val current = observeProviders().first().map { it.id }.toSet()
-    profiles.forEach {
-        // A new imported id is not authority to delete orphaned local aliases.
-        if (it.id in current) clearSecrets(it.id)
-        upsertProvider(it.scrubbed())
+/** Replace spans independent stores; the durable marker survives partial failure. */
+internal class BackupImport(
+    private val settings: ru.outsideproarts.oassist.core.data.prefs.SettingsDataStore,
+    private val providers: ProviderRepository,
+    private val toolConfigs: ru.outsideproarts.oassist.core.data.prefs.ToolConfigStore,
+    private val mcpServers: McpServerRepository,
+    private val skills: ru.outsideproarts.oassist.core.data.skill.SkillStore,
+    private val memory: ru.outsideproarts.oassist.core.data.memory.MemoryStore,
+    private val approvals: ru.outsideproarts.oassist.core.data.prefs.ApprovalStore,
+) {
+    suspend fun apply(raw: String): Result<Unit> {
+        val backup = decodeBackup(raw).getOrElse { return Result.failure(it) }
+        return settings.importMutex.withLock {
+            var mutationsStarted = false
+            try {
+                settings.setImportUnfinished(true)
+                mutationsStarted = true
+                // Провайдеры: replace (лишние удалить вместе с секретами).
+                providers.importProfiles(backup.providers, backup.modes, backup.catalogs)
+                toolConfigs.replace(backup.toolPrefs.toDomain())
+                // MCP: replace; секреты не импортируются — сбросить ссылки на них.
+                mcpServers.importServers(backup.mcpServers)
+                // Навыки: replace по имени.
+                val currentSkills = skills.list().map { it.name }.toSet()
+                backup.skills.forEach {
+                    skills.upsert(it.name, it.title, it.body)
+                    skills.setEnabled(it.name, it.enabled)
+                }
+                (currentSkills - backup.skills.map { it.name }.toSet())
+                    .forEach { skills.delete(it) }
+                memory.write(backup.memory)
+                AppLanguage.entries.firstOrNull { it.name == backup.language }?.let { settings.setLanguage(it) }
+                approvals.replaceAll(backup.toApprovalStates())
+                settings.setImportUnfinished(false)
+                Result.success(Unit)
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                Result.failure(if (mutationsStarted) PartialBackupImportException(e) else e)
+            }
+        }
     }
-    (current - profiles.map { it.id }.toSet()).forEach { deleteProvider(it) }
 }
 
-internal suspend fun McpServerRepository.importServers(servers: List<McpServerConfig>) {
-    val current = snapshot().map { it.id }.toSet()
-    servers.forEach {
-        if (it.id in current) clearSecrets(it.id)
-        upsert(it.scrubbed())
-    }
-    (current - servers.map { it.id }.toSet()).forEach { delete(it) }
-}
+class PartialBackupImportException(cause: Exception) : Exception("Import may be incomplete", cause)
+
+internal suspend fun ProviderRepository.importProfiles(
+    profiles: List<ProviderProfile>,
+    modes: List<ModeConfig> = emptyList(),
+    catalogs: List<ru.outsideproarts.oassist.core.model.ModelCatalog> = emptyList(),
+) = replaceFromBackup(profiles.associateBy { it.id }.values.map { it.scrubbed() }, modes, catalogs)
+
+internal suspend fun McpServerRepository.importServers(servers: List<McpServerConfig>) =
+    replaceFromBackup(servers.associateBy { it.id }.values.map { it.scrubbed() })
 
 private fun ToolPreferences.toBackup(): ToolPrefsBackup =
     ToolPrefsBackup(disabled.sorted())

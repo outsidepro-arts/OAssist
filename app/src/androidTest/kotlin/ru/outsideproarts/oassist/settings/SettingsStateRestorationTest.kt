@@ -115,7 +115,7 @@ class SettingsStateRestorationTest {
                         profile = profile,
                         isSaving = false,
                         saveError = null,
-                        onSave = { _, _ -> },
+                        onSave = { _, _, _, _ -> },
                         onDismissSaveError = {},
                         onBack = {},
                     )

@@ -84,17 +84,20 @@ fun ProviderEditScreen(
     profile: ProviderProfile?,
     isSaving: Boolean,
     saveError: String?,
-    onSave: (ProviderProfile, ProviderSecretsInput) -> Unit,
+    onSave: (ProviderProfile, ProviderSecretsInput, String?, (String?, Boolean) -> Unit) -> Unit,
     onDismissSaveError: () -> Unit,
     onDelete: ((String) -> Unit)? = null,
     onBack: () -> Unit,
     modifier: Modifier = Modifier,
+    sourceProviderId: String? = profile?.id,
 ) {
-    val isNew = profile == null
+    var draftProviderId by rememberSaveable { mutableStateOf(sourceProviderId) }
+    val isNew = draftProviderId == null
     // Пользовательский ввод переживает пересоздание Activity (поворот, смерть
     // процесса): rememberSaveable. Секреты ввода намеренно остаются в remember —
     // открытые значения не пишутся в savedInstanceState.
     var name by rememberSaveable { mutableStateOf(profile?.name ?: "") }
+    var draftRevision by rememberSaveable { mutableStateOf(profile?.credentialRevision) }
     var preset by rememberSaveable { mutableStateOf(profile?.preset ?: ProviderPreset.OPENAI) }
     var baseUrl by rememberSaveable { mutableStateOf(profile?.baseUrl ?: "") }
     var protocol by rememberSaveable(stateSaver = modelProtocolSaver) { mutableStateOf(profile?.protocol) }
@@ -150,6 +153,8 @@ fun ProviderEditScreen(
         val current = profile ?: return@LaunchedEffect
         if (current.id == syncedProfileId) return@LaunchedEffect
         syncedProfileId = current.id
+        draftProviderId = current.id
+        draftRevision = current.credentialRevision
         name = current.name
         preset = current.preset
         baseUrl = current.baseUrl
@@ -196,8 +201,9 @@ fun ProviderEditScreen(
     }
 
     fun buildProfile(): ProviderProfile =
-        (profile ?: ProviderProfile(id = generateId(), name = "", preset = preset, baseUrl = "")).copy(
+        (profile ?: ProviderProfile(id = draftProviderId ?: generateId(), name = "", preset = preset, baseUrl = "")).copy(
             name = name,
+            credentialRevision = draftRevision,
             preset = preset,
             baseUrl = baseUrl,
             protocol = protocol,
@@ -847,7 +853,11 @@ fun ProviderEditScreen(
                     if (!isValidExtraBody(extraBody)) {
                         extraBodyInvalid = true
                     } else {
-                        onSave(buildProfile(), buildSecrets())
+                        val updated = buildProfile()
+                        onSave(updated, buildSecrets(), draftProviderId) { revision, exists ->
+                            draftRevision = revision
+                            if (exists) draftProviderId = updated.id
+                        }
                     }
                 },
                 enabled = !isSaving,
