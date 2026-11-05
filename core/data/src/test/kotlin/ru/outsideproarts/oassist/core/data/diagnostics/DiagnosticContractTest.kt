@@ -20,6 +20,312 @@ class DiagnosticContractTest {
         override fun decrypt(data: ByteArray) = encrypt(data)
     }
 
+    @Test fun `record returns while writer is blocked and queued events survive reopen`() {
+        val writing = CountDownLatch(1)
+        val release = CountDownLatch(1)
+        val returned = CountDownLatch(1)
+        val callerFailure = java.util.concurrent.atomic.AtomicReference<Throwable?>()
+        val pausedCipher = object : DiagnosticCipher {
+            override fun encrypt(data: ByteArray): ByteArray {
+                writing.countDown()
+                check(release.await(10, TimeUnit.SECONDS))
+                return cipher.encrypt(data)
+            }
+            override fun decrypt(data: ByteArray) = cipher.decrypt(data)
+        }
+        val dir = Files.createTempDirectory("oassist-nonblocking-record").toFile()
+        val store = DiagnosticStore(dir, pausedCipher)
+        store.record(DiagnosticEvent(DiagnosticKind.TOOL_RESULT, "first", content = "first-content"))
+        var caller: Thread? = null
+        try {
+            assertTrue(writing.await(10, TimeUnit.SECONDS))
+            caller = thread {
+                try {
+                    store.record(DiagnosticEvent(DiagnosticKind.TOOL_RESULT, "second", content = "second-content secret"), listOf("secret"))
+                } catch (error: Throwable) {
+                    callerFailure.set(error)
+                } finally {
+                    returned.countDown()
+                }
+            }
+            assertTrue("record waited for archive writer", returned.await(2, TimeUnit.SECONDS))
+            assertNull(callerFailure.get())
+        } finally {
+            release.countDown()
+            caller?.join(10000)
+            store.close()
+        }
+        val reopened = DiagnosticStore(dir, cipher)
+        try {
+            val output = ByteArrayOutputStream()
+            reopened.export(output, 0)
+            val events = unzip(output.toByteArray()).getValue("events.jsonl").decodeToString()
+            assertTrue(events.contains("first-content"))
+            assertTrue(events.contains("second-content [REDACTED]"))
+            assertFalse(events.contains("secret"))
+            reopened.record(DiagnosticEvent(DiagnosticKind.TOOL_RESULT, "third", content = "third-content"))
+            val next = ByteArrayOutputStream()
+            reopened.export(next, 0)
+            val sequences = unzip(next.toByteArray()).getValue("events.jsonl").decodeToString()
+                .lineSequence().filter { it.isNotBlank() }.map {
+                    kotlinx.serialization.json.Json.decodeFromString<DiagnosticEvent>(it).sequence
+                }.toList()
+            assertEquals(listOf(1L, 2L, 3L), sequences)
+        } finally {
+            reopened.close()
+        }
+    }
+
+    @Test fun `full queue rejects events without waiting for blocked writer`() {
+        val writing = CountDownLatch(1)
+        val release = CountDownLatch(1)
+        val returned = CountDownLatch(1)
+        val callerFailure = java.util.concurrent.atomic.AtomicReference<Throwable?>()
+        val pausedCipher = object : DiagnosticCipher {
+            override fun encrypt(data: ByteArray): ByteArray {
+                writing.countDown()
+                check(release.await(10, TimeUnit.SECONDS))
+                return cipher.encrypt(data)
+            }
+            override fun decrypt(data: ByteArray) = cipher.decrypt(data)
+        }
+        val store = DiagnosticStore(Files.createTempDirectory("oassist-full-queue").toFile(), pausedCipher)
+        store.record(DiagnosticEvent(DiagnosticKind.OPERATION_START, "root"))
+        var caller: Thread? = null
+        try {
+            assertTrue(writing.await(10, TimeUnit.SECONDS))
+            caller = thread {
+                try {
+                    repeat(300) {
+                        store.record(DiagnosticEvent(DiagnosticKind.TOOL_RESULT, "root", content = "queued-$it"))
+                    }
+                } catch (error: Throwable) {
+                    callerFailure.set(error)
+                } finally {
+                    returned.countDown()
+                }
+            }
+            assertTrue("full queue waited for archive writer", returned.await(2, TimeUnit.SECONDS))
+            assertNull(callerFailure.get())
+            release.countDown()
+            val output = ByteArrayOutputStream()
+            store.export(output, 0)
+            val events = unzip(output.toByteArray()).getValue("events.jsonl").decodeToString()
+                .lineSequence().count { it.isNotBlank() }
+            assertEquals(257, events)
+            assertEquals(44L, store.health().droppedEvents)
+            assertEquals("queue_full", store.health().lastError)
+        } finally {
+            release.countDown()
+            caller?.join(10000)
+            store.close()
+        }
+    }
+
+    @Test fun `nested discard rejects descendants during marker publication`() {
+        val publishing = CountDownLatch(1)
+        val release = CountDownLatch(1)
+        val childReady = CountDownLatch(1)
+        val releaseSanitizing = CountDownLatch(1)
+        val recorded = CountDownLatch(1)
+        val deleteFailure = java.util.concurrent.atomic.AtomicReference<Throwable?>()
+        val recordFailure = java.util.concurrent.atomic.AtomicReference<Throwable?>()
+        val pausedCipher = object : DiagnosticCipher {
+            override fun encrypt(data: ByteArray): ByteArray {
+                if (data.decodeToString().contains("\"operationIds\"")) {
+                    publishing.countDown()
+                    check(release.await(10, TimeUnit.SECONDS))
+                }
+                return cipher.encrypt(data)
+            }
+            override fun decrypt(data: ByteArray) = cipher.decrypt(data)
+        }
+        val store = DiagnosticStore(Files.createTempDirectory("oassist-nested-discard-admission").toFile(), pausedCipher)
+        val blockedSecrets = object : AbstractCollection<String>() {
+            override val size: Int get() = 1
+            override fun iterator(): Iterator<String> {
+                childReady.countDown()
+                check(releaseSanitizing.await(10, TimeUnit.SECONDS))
+                return listOf("secret").iterator()
+            }
+        }
+        store.record(DiagnosticEvent(DiagnosticKind.OPERATION_START, "root"))
+        store.record(DiagnosticEvent(DiagnosticKind.OPERATION_START, "discarded", "root"))
+        store.export(ByteArrayOutputStream(), 0)
+        val deleting = thread {
+            deleteFailure.set(runCatching { store.discardOperation("discarded") }.exceptionOrNull())
+        }
+        var caller: Thread? = null
+        var grandchild: Thread? = null
+        try {
+            assertTrue(publishing.await(10, TimeUnit.SECONDS))
+            caller = thread {
+                try {
+                    store.record(DiagnosticEvent(DiagnosticKind.TOOL_RESULT, "child", "discarded", content = "child-private"), blockedSecrets)
+                } catch (error: Throwable) {
+                    recordFailure.set(error)
+                } finally {
+                    childReady.countDown()
+                }
+            }
+            assertTrue(childReady.await(2, TimeUnit.SECONDS))
+            grandchild = thread {
+                try {
+                    store.record(DiagnosticEvent(DiagnosticKind.TOOL_RESULT, "grandchild", "child", content = "grandchild-private"))
+                } catch (error: Throwable) {
+                    recordFailure.set(error)
+                } finally {
+                    recorded.countDown()
+                }
+            }
+            assertTrue("record waited for deletion marker I/O", recorded.await(2, TimeUnit.SECONDS))
+            release.countDown()
+            deleting.join(10000)
+            assertFalse(deleting.isAlive)
+            assertNull(deleteFailure.get())
+            assertNull(recordFailure.get())
+            store.record(DiagnosticEvent(DiagnosticKind.TOOL_RESULT, "sibling", "root", content = "sibling-kept"))
+            val output = ByteArrayOutputStream()
+            store.export(output, 0)
+            val events = unzip(output.toByteArray()).getValue("events.jsonl").decodeToString()
+            assertFalse(events.contains("private"))
+            assertTrue(events.contains("sibling-kept"))
+        } finally {
+            release.countDown()
+            releaseSanitizing.countDown()
+            deleting.join(10000)
+            caller?.join(10000)
+            grandchild?.join(10000)
+            store.close()
+        }
+    }
+
+    @Test fun `reopen rejects descendants registered before deletion markers load`() {
+        val dir = Files.createTempDirectory("oassist-reopen-admission-ancestry").toFile()
+        val first = DiagnosticStore(dir, cipher)
+        try {
+            first.record(DiagnosticEvent(DiagnosticKind.OPERATION_START, "root"))
+            first.record(DiagnosticEvent(DiagnosticKind.OPERATION_START, "discarded", "root"))
+            first.discardOperation("discarded")
+        } finally {
+            first.close()
+        }
+        val reopened = DiagnosticStore(dir, cipher)
+        val release = CountDownLatch(1)
+        val callerFailure = java.util.concurrent.atomic.AtomicReference<Throwable?>()
+        val callers = mutableListOf<Thread>()
+        try {
+            for ((id, parent) in listOf("discarded" to "root", "child" to "discarded")) {
+                val sanitizing = CountDownLatch(1)
+                val blockedSecrets = object : AbstractCollection<String>() {
+                    override val size: Int get() = 1
+                    override fun iterator(): Iterator<String> {
+                        sanitizing.countDown()
+                        check(release.await(10, TimeUnit.SECONDS))
+                        return listOf("secret").iterator()
+                    }
+                }
+                callers += thread {
+                    try {
+                        reopened.record(DiagnosticEvent(DiagnosticKind.TOOL_RESULT, id, parent, content = "$id-private"), blockedSecrets)
+                    } catch (error: Throwable) {
+                        callerFailure.set(error)
+                    }
+                }
+                assertTrue(sanitizing.await(10, TimeUnit.SECONDS))
+            }
+            reopened.record(DiagnosticEvent(DiagnosticKind.TOOL_RESULT, "grandchild", "child", content = "grandchild-private"))
+            val output = ByteArrayOutputStream()
+            reopened.export(output, 0)
+            val events = unzip(output.toByteArray()).getValue("events.jsonl").decodeToString()
+            assertFalse(events.contains("private"))
+            assertTrue(events.contains("\"operationId\":\"root\""))
+            release.countDown()
+            callers.forEach { it.join(10000); assertFalse(it.isAlive) }
+            assertNull(callerFailure.get())
+            val after = ByteArrayOutputStream()
+            reopened.export(after, 0)
+            assertFalse(unzip(after.toByteArray()).getValue("events.jsonl").decodeToString().contains("private"))
+        } finally {
+            release.countDown()
+            callers.forEach { it.join(10000) }
+            reopened.close()
+        }
+    }
+
+    @Test fun `clear and content disable reject events still being sanitized`() {
+        for (disableContent in listOf(false, true)) {
+            val store = DiagnosticStore(Files.createTempDirectory("oassist-admission-invalidation").toFile(), cipher)
+            val sanitizing = CountDownLatch(1)
+            val release = CountDownLatch(1)
+            val callerFailure = java.util.concurrent.atomic.AtomicReference<Throwable?>()
+            val blockedSecrets = object : AbstractCollection<String>() {
+                override val size: Int get() = 1
+                override fun iterator(): Iterator<String> {
+                    sanitizing.countDown()
+                    check(release.await(10, TimeUnit.SECONDS))
+                    return listOf("secret").iterator()
+                }
+            }
+            val caller = thread {
+                try {
+                    store.record(DiagnosticEvent(DiagnosticKind.TOOL_RESULT, "old", content = "old-private"), blockedSecrets)
+                } catch (error: Throwable) {
+                    callerFailure.set(error)
+                }
+            }
+            try {
+                assertTrue(sanitizing.await(10, TimeUnit.SECONDS))
+                if (disableContent) {
+                    store.setContentEnabled(false)
+                    store.setContentEnabled(true)
+                } else {
+                    store.clear()
+                }
+                store.record(DiagnosticEvent(DiagnosticKind.TOOL_RESULT, "fresh", content = "fresh-content"))
+                release.countDown()
+                caller.join(10000)
+                assertFalse(caller.isAlive)
+                assertNull(callerFailure.get())
+                val output = ByteArrayOutputStream()
+                store.export(output, 0)
+                val events = unzip(output.toByteArray()).getValue("events.jsonl").decodeToString()
+                assertFalse(events.contains("old-private"))
+                assertTrue(events.contains("fresh-content"))
+                assertEquals(1L, store.health().droppedEvents)
+            } finally {
+                release.countDown()
+                caller.join(10000)
+                store.close()
+            }
+        }
+    }
+
+    @Test fun `media below quota does not decode the archive for eviction`() {
+        val decryptions = java.util.concurrent.atomic.AtomicInteger()
+        val countingCipher = object : DiagnosticCipher {
+            override fun encrypt(data: ByteArray) = cipher.encrypt(data)
+            override fun decrypt(data: ByteArray): ByteArray {
+                decryptions.incrementAndGet()
+                return cipher.decrypt(data)
+            }
+        }
+        val dir = Files.createTempDirectory("oassist-media-no-eviction").toFile()
+        val store = DiagnosticStore(dir, countingCipher)
+        try {
+            store.record(DiagnosticEvent(DiagnosticKind.TOOL_RESULT, "old", content = "retained-content"))
+            store.export(ByteArrayOutputStream(), 0)
+            decryptions.set(0)
+            val encoded = Base64.getEncoder().encodeToString(byteArrayOf(1, 2, 3))
+            store.record(DiagnosticEvent(DiagnosticKind.PROVIDER_REQUEST, "new", content = """{"image_url":"data:image/png;base64,$encoded"}"""))
+        } finally {
+            store.close()
+        }
+        assertEquals(0, decryptions.get())
+        assertEquals(2, dir.listFiles()!!.count { it.extension == "event" })
+        assertEquals(1, dir.listFiles()!!.count { it.extension == "media" })
+    }
+
     private fun unzip(data: ByteArray): Map<String, ByteArray> {
         val entries = mutableMapOf<String, ByteArray>()
         ZipInputStream(ByteArrayInputStream(data)).use { zip ->
@@ -221,9 +527,11 @@ class DiagnosticContractTest {
         val before = dir.listFiles()!!.map { it.name }.toSet()
         assertTrue(runCatching { store.removeConversation("chat") }.isFailure)
         assertEquals(before, dir.listFiles()!!.map { it.name }.toSet())
+        store.record(DiagnosticEvent(DiagnosticKind.TOOL_RESULT, "root", content = "after-failed-deletion"))
         val output = ByteArrayOutputStream()
         store.export(output, 0)
         assertTrue(unzip(output.toByteArray()).getValue("events.jsonl").decodeToString().contains("retained-private"))
+        assertTrue(unzip(output.toByteArray()).getValue("events.jsonl").decodeToString().contains("after-failed-deletion"))
         store.close()
     }
 
