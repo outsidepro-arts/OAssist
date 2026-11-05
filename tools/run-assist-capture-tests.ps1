@@ -114,12 +114,22 @@ function Get-FixtureState {
 
 function Invoke-Tests([string[]]$Classes, [int]$Count, [string]$LogName) {
   Invoke-Adb @('shell', 'input', 'keyevent', 'KEYCODE_HOME') | Out-Null
-  $output = Invoke-Adb @('shell', 'am', 'instrument', '--user', $user, '-w', '-e', 'assistCaptureFixture', 'true',
-    '-e', 'class', ($Classes -join ','), "$package.test/androidx.test.runner.AndroidJUnitRunner")
-  $output | Set-Content -LiteralPath (Join-Path $OutputDirectory $LogName) -Encoding utf8
-  Write-Output $output
-  if ($output -notmatch "(?m)^OK \($Count tests?\)\s*$" -or $output -match '(?i)FAILURES!!!|INSTRUMENTATION_FAILED|ignored|skipped') {
-    throw "Instrumentation did not report exactly $Count passing tests: $LogName"
+  try {
+    $output = Invoke-Adb @('shell', 'am', 'instrument', '--user', $user, '-w', '-e', 'assistCaptureFixture', 'true',
+      '-e', 'class', ($Classes -join ','), "$package.test/androidx.test.runner.AndroidJUnitRunner")
+    $output | Set-Content -LiteralPath (Join-Path $OutputDirectory $LogName) -Encoding utf8
+    Write-Output $output
+    if ($output -notmatch "(?m)^OK \($Count tests?\)\s*$" -or $output -match '(?i)FAILURES!!!|INSTRUMENTATION_FAILED|ignored|skipped') {
+      throw "Instrumentation did not report exactly $Count passing tests: $LogName"
+    }
+  } catch {
+    $invokeFailure = $_
+    try {
+      Invoke-Adb @('shell', 'logcat', '-d', '-t', '4000', '-v', 'threadtime', '-s',
+        'ActivityTaskManager:I', 'ActivityManager:I', 'WindowManager:I', 'TestRunner:V') |
+        Set-Content -LiteralPath (Join-Path $OutputDirectory "$LogName.logcat") -Encoding utf8
+    } catch { Write-Warning "Could not capture failure logcat: $_" }
+    throw $invokeFailure
   }
 }
 

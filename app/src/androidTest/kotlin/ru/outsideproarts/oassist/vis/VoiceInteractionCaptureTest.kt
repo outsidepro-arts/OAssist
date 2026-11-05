@@ -1,5 +1,6 @@
 package ru.outsideproarts.oassist.vis
 
+import android.Manifest
 import android.content.Intent
 import android.accessibilityservice.AccessibilityService
 import android.graphics.Color
@@ -13,6 +14,7 @@ import androidx.test.runner.lifecycle.ActivityLifecycleCallback
 import androidx.test.runner.lifecycle.ActivityLifecycleMonitorRegistry
 import androidx.test.runner.lifecycle.Stage
 import java.util.concurrent.CountDownLatch
+import java.util.concurrent.CopyOnWriteArrayList
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicReference
 import org.junit.Assert.*
@@ -37,7 +39,10 @@ class VoiceInteractionCaptureTest {
         assertEquals("Use tools/run-assist-capture-tests.ps1", "true",
             InstrumentationRegistry.getArguments().getString("assistCaptureFixture"))
         val context = instrumentation.targetContext
-        assertFalse("Fixture needs overlay access disabled to observe the permission handoff", Settings.canDrawOverlays(context))
+        val currentUser = ParcelFileDescriptor.AutoCloseInputStream(
+            instrumentation.uiAutomation.executeShellCommand("am get-current-user"),
+        ).bufferedReader().use { it.readText().trim() }
+        check(currentUser.matches(Regex("\\d+"))) { "Cannot identify fixture user: $currentUser" }
         assertEquals(
             "Fixture needs OAssist selected as the system assistant",
             "${context.packageName}/.vis.OAssistVoiceInteractionService",
@@ -48,9 +53,39 @@ class VoiceInteractionCaptureTest {
         val captureToken = AtomicReference<String>()
         val result = AtomicReference<AssistSession>()
         val failure = AtomicReference<Throwable>()
+        val scenarioName = AtomicReference("setup")
+        val lifecycle = CopyOnWriteArrayList<String>()
+        fun failureDetails(): String = buildString {
+            appendLine("scenario=${scenarioName.get()} user=$currentUser uptime=${SystemClock.uptimeMillis()}")
+            appendLine(runCatching {
+                val root = instrumentation.uiAutomation.rootInActiveWindow
+                "root=${root?.packageName} window=${root?.windowId} overlayAllowed=${Settings.canDrawOverlays(context)} " +
+                    "mic=${context.checkSelfPermission(Manifest.permission.RECORD_AUDIO)} activeOverlay=${AssistSessionStore.activeShowOverlay()} " +
+                    "pending=${captureToken.get()?.let(AssistSessionStore::isScreenCapturePending)} " +
+                    "finishing=${activity.get()?.isFinishing} destroyed=${activity.get()?.isDestroyed}"
+            }.getOrElse { "State inspection failed: $it" })
+            appendLine(lifecycle.takeLast(32).joinToString("\n"))
+            for ((command, pattern, limit) in listOf(
+                Triple("appops get --user $currentUser ${context.packageName} SYSTEM_ALERT_WINDOW", Regex(".+"), 8),
+                Triple("dumpsys activity activities", Regex("ResumedActivity|topResumedActivity|AssistActivity|DrawOverlay|com.android.settings"), 40),
+                Triple("dumpsys window windows", Regex("mCurrentFocus|mFocusedApp|mTopFocusedDisplayId"), 8),
+                Triple("dumpsys voiceinteraction", Regex("mActiveSession|mShown|mSession=|mShowFlags"), 20),
+            )) {
+                appendLine(command)
+                appendLine(runCatching {
+                    ParcelFileDescriptor.AutoCloseInputStream(instrumentation.uiAutomation.executeShellCommand(command))
+                        .bufferedReader().use { it.readText() }
+                        .lineSequence().filter(pattern::containsMatchIn).take(limit).joinToString("\n")
+                }.getOrElse { "Inspection failed: $it" })
+            }
+        }
         var delivered = CountDownLatch(1)
         var dismissed = CountDownLatch(1)
         val callback = ActivityLifecycleCallback { instance, stage ->
+            if (instance is AssistActivity) {
+                lifecycle += "${scenarioName.get()}@${SystemClock.uptimeMillis()} id=${System.identityHashCode(instance)} " +
+                    "task=${instance.taskId} stage=$stage finishing=${instance.isFinishing} changing=${instance.isChangingConfigurations}"
+            }
             if (instance is AssistActivity && stage == Stage.DESTROYED && instance.isFinishing) {
                 dismissed.countDown()
             }
@@ -58,7 +93,10 @@ class VoiceInteractionCaptureTest {
                 activity.set(instance)
                 try {
                     assertTrue("System did not enter through VIS", instance.intent.hasExtra(AssistScreenHandoff.EXTRA_TOKEN))
-                    val token = requireNotNull(ViewModelProvider(instance)[AssistContextViewModel::class.java].captureToken)
+                    val retained = ViewModelProvider(instance)[AssistContextViewModel::class.java]
+                    val token = requireNotNull(retained.captureToken)
+                    lifecycle += "created initialized=${retained.initialized} overlayNeeded=${retained.overlayNeeded} handedOff=${retained.handedOff} " +
+                        "overlayAllowed=${Settings.canDrawOverlays(context)} pending=${AssistSessionStore.isScreenCapturePending(token)}"
                     assertTrue("Capture token was not pending at Activity creation", AssistSessionStore.isScreenCapturePending(token))
                     captureToken.set(token)
                 } catch (error: Throwable) {
@@ -74,6 +112,9 @@ class VoiceInteractionCaptureTest {
         try {
             // Repeated normal at the end proves finish releases the old framework session.
             for (scenario in listOf("normal", "disabled", "secure", "settingsFailure", "normalAgain")) {
+                scenarioName.set(scenario)
+                lifecycle += "before $scenario overlayAllowed=${Settings.canDrawOverlays(context)} " +
+                    "mic=${context.checkSelfPermission(Manifest.permission.RECORD_AUDIO)} activeOverlay=${AssistSessionStore.activeShowOverlay()}"
                 delivered = CountDownLatch(1)
                 dismissed = CountDownLatch(1)
                 result.set(null)
@@ -111,16 +152,23 @@ class VoiceInteractionCaptureTest {
                     check(SystemClock.uptimeMillis() < readyBy) { "Fixture screen not visible: $scenario" }
                     SystemClock.sleep(50)
                 }
+                // The assistant role can restore overlay access between independent captures.
+                // Keep each scenario on the denied-permission Activity handoff path.
+                val overlayOutput = ParcelFileDescriptor.AutoCloseInputStream(
+                    instrumentation.uiAutomation.executeShellCommand("appops set --user $currentUser ${context.packageName} SYSTEM_ALERT_WINDOW deny"),
+                ).bufferedReader().use { it.readText() }
+                assertTrue("Could not disable fixture overlay access: $overlayOutput", overlayOutput.isBlank())
+                assertFalse("Overlay access must be denied for $scenario", Settings.canDrawOverlays(context))
                 val output = ParcelFileDescriptor.AutoCloseInputStream(
                     instrumentation.uiAutomation.executeShellCommand("input keyevent KEYCODE_ASSIST"),
                 ).bufferedReader().use { it.readText() }
                 assertFalse(output, output.contains("Error", ignoreCase = true))
-                assertTrue("No VIS handoff for $scenario", delivered.await(10, TimeUnit.SECONDS))
-                failure.get()?.let { throw AssertionError("Handoff failed for $scenario", it) }
+                if (!delivered.await(10, TimeUnit.SECONDS)) throw AssertionError("No VIS handoff for $scenario\n${failureDetails()}")
+                failure.get()?.let { throw AssertionError("Handoff failed for $scenario\n${failureDetails()}", it) }
                 // Keep the permission Activity's token valid until its Settings launch completes.
                 val settingsBy = SystemClock.uptimeMillis() + 10_000
                 while (instrumentation.uiAutomation.rootInActiveWindow?.packageName?.toString() != "com.android.settings") {
-                    check(SystemClock.uptimeMillis() < settingsBy) { "Permission screen not shown for $scenario" }
+                    check(SystemClock.uptimeMillis() < settingsBy) { "Permission screen not shown for $scenario\n${failureDetails()}" }
                     SystemClock.sleep(50)
                 }
                 instrumentation.uiAutomation.waitForIdle(500, 5_000)
@@ -145,7 +193,7 @@ class VoiceInteractionCaptureTest {
                 // Complete the real permission Activity lifecycle before launching the next fixture.
                 // Settings may redirect to a second Activity after its original launch returned.
                 assertTrue(instrumentation.uiAutomation.performGlobalAction(AccessibilityService.GLOBAL_ACTION_BACK))
-                assertTrue("Permission Activity not dismissed for $scenario", dismissed.await(10, TimeUnit.SECONDS))
+                if (!dismissed.await(10, TimeUnit.SECONDS)) throw AssertionError("Permission Activity not dismissed for $scenario\n${failureDetails()}")
             }
         } finally {
             instrumentation.runOnMainSync {

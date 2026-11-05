@@ -44,6 +44,7 @@ Runner предназначен только для эмулятора API 31+: 
 Неизвестное исходное состояние отклоняется до изменений. Runner не устанавливает APK,
 не создаёт AVD и не очищает данные. Для отдельных логов задайте `-OutputDirectory <каталог>`;
 по умолчанию результаты находятся в `app/build/outputs/androidTest-results/assist-capture`.
+При ошибке подпрогона рядом с его логом сохраняется ограниченный `*.logcat` с системными переходами и сообщениями test runner.
 
 Эта отдельная обязательная фаза выполняет `VoiceInteractionCaptureTest`,
 `AssistHandoffLifecycleTest`, `AssistServiceHandoffTest` и `AssistTurnSnapshotTest`
