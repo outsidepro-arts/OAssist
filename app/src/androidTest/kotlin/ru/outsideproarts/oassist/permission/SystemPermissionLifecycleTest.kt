@@ -7,6 +7,7 @@ import android.content.Intent
 import android.content.pm.PackageManager
 import android.os.Bundle
 import android.os.Parcel
+import android.os.SystemClock
 import android.provider.Settings
 import android.view.accessibility.AccessibilityNodeInfo
 import androidx.lifecycle.ViewModelProvider
@@ -62,7 +63,20 @@ class SystemPermissionLifecycleTest {
                 activity.get().recreate()
             }
             assertTrue("AssistActivity did not fail closed", finished.await(10, TimeUnit.SECONDS))
+            waitForPackage(instrumentation, "com.android.settings")
             assertTrue(instrumentation.uiAutomation.performGlobalAction(AccessibilityService.GLOBAL_ACTION_BACK))
+            // Global actions enqueue input asynchronously; finish the Settings exit
+            // before another test launches an Activity that could receive this Back.
+            val exitedBy = SystemClock.uptimeMillis() + 10_000
+            while (true) {
+                val owner = instrumentation.uiAutomation.rootInActiveWindow?.packageName?.toString()
+                if (!owner.isNullOrEmpty() && owner != "com.android.settings") break
+                check(SystemClock.uptimeMillis() < exitedBy) { "Settings did not exit after Back" }
+                SystemClock.sleep(50)
+            }
+            instrumentation.uiAutomation.waitForIdle(500, 5_000)
+            val owner = instrumentation.uiAutomation.rootInActiveWindow?.packageName?.toString()
+            assertTrue("Settings exit did not settle: $owner", !owner.isNullOrEmpty() && owner != "com.android.settings")
         } finally {
             instrumentation.runOnMainSync {
                 ActivityLifecycleMonitorRegistry.getInstance().removeLifecycleCallback(callback)
