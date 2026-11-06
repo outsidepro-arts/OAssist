@@ -76,9 +76,45 @@ class AssistSessionTest {
     }
 
     @Test
-    fun trim_dropsOldestTurnsKeepingPairs() {
+    fun appendTurn_bigTurnDoesNotWipeHistory() {
+        // Регрессия: ход крупнее прежнего лимита MAX_CHARS=16_000 стирал всю историю,
+        // включая сам ход (web_fetch/ui_get_screen возвращают десятки КБ).
         AssistSessionStore.clear()
         val session = AssistSessionStore.getOrCreate()
+        session.appendTurn(
+            user = ChatMessage(ChatRole.USER, "первый вопрос"),
+            turn = listOf(ChatMessage(ChatRole.ASSISTANT, "первый ответ")),
+        )
+        val big = "x".repeat(30_000)
+        session.appendTurn(
+            user = ChatMessage(ChatRole.USER, "второй вопрос"),
+            turn = listOf(
+                ChatMessage(
+                    role = ChatRole.ASSISTANT,
+                    content = "",
+                    toolCalls = listOf(ToolCallRef(id = "call_1", name = "web_fetch", argumentsJson = "{}")),
+                ),
+                ChatMessage(ChatRole.TOOL, content = big, toolCallId = "call_1"),
+                ChatMessage(ChatRole.ASSISTANT, "готово"),
+            ),
+        )
+
+        val history = session.history
+        assertEquals(6, history.size)
+        assertEquals("первый вопрос", history[0].content)
+        assertTrue("вывод инструмента должен сохраниться целиком", history[4].content == big)
+        assertEquals("готово", history.last().content)
+        assertToolPairsIntact(history)
+    }
+
+    @Test
+    fun appendTurn_keepsWholeHistoryWithoutTrims() {
+        // Новое требование: история хранится как есть — без лимитов сообщений/символов
+        // и без бюджета образов; усечением владеет будущий механизм компактизации.
+        AssistSessionStore.clear()
+        val session = AssistSessionStore.getOrCreate()
+        val img = ImagePart(imageBase64 = "QUJD")
+        val big = "x".repeat(2_000)
         repeat(30) { i ->
             session.appendTurn(
                 user = ChatMessage(ChatRole.USER, "вопрос $i"),
@@ -88,57 +124,16 @@ class AssistSessionTest {
                         content = "",
                         toolCalls = listOf(ToolCallRef(id = "call_$i", name = "tool", argumentsJson = "{}")),
                     ),
-                    ChatMessage(role = ChatRole.TOOL, content = "результат $i", toolCallId = "call_$i"),
+                    ChatMessage(ChatRole.TOOL, content = big, toolCallId = "call_$i", images = listOf(img)),
                     ChatMessage(ChatRole.ASSISTANT, "ответ $i"),
                 ),
             )
         }
 
         val history = session.history
-        assertTrue(history.size <= AssistSession.MAX_MESSAGES)
+        // 30 ходов по 4 сообщения; раньше вырезались и сообщения, и образы.
+        assertEquals(30 * 4, history.size)
+        assertEquals(30, history.count { it.images.isNotEmpty() })
         assertToolPairsIntact(history)
-    }
-
-    @Test
-    fun trim_byChars_keepsPairs() {
-        AssistSessionStore.clear()
-        val session = AssistSessionStore.getOrCreate()
-        val big = "x".repeat(2_000)
-        repeat(12) { i ->
-            session.appendTurn(
-                user = ChatMessage(ChatRole.USER, "вопрос $i"),
-                turn = listOf(
-                    ChatMessage(
-                        role = ChatRole.ASSISTANT,
-                        content = "",
-                        toolCalls = listOf(ToolCallRef(id = "call_$i", name = "tool", argumentsJson = "{}")),
-                    ),
-                    ChatMessage(role = ChatRole.TOOL, content = big, toolCallId = "call_$i"),
-                    ChatMessage(ChatRole.ASSISTANT, "ответ $i"),
-                ),
-            )
-        }
-
-        val history = session.history
-        assertTrue(history.sumOf { it.content.length } <= AssistSession.MAX_CHARS + 4_000)
-        assertToolPairsIntact(history)
-    }
-
-    @Test
-    fun trim_stripsOldImagesKeepingRecent() {
-        AssistSessionStore.clear()
-        val session = AssistSessionStore.getOrCreate()
-        val img = ImagePart(imageBase64 = "QUJD")
-        repeat(6) { i ->
-            session.appendTurn(
-                user = ChatMessage(ChatRole.USER, "question $i"),
-                turn = listOf(ChatMessage(ChatRole.ASSISTANT, "answer $i", images = listOf(img))),
-            )
-        }
-
-        val history = session.history
-        val withImages = history.filter { it.images.isNotEmpty() }
-        assertEquals(MAX_IMAGE_MESSAGES, withImages.size)
-        assertEquals(listOf("answer 2", "answer 3", "answer 4", "answer 5"), withImages.map { it.content })
     }
 }

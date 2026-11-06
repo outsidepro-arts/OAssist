@@ -1,13 +1,17 @@
 package ru.outsideproarts.oassist.core.agent
 
 import ru.outsideproarts.oassist.core.model.ChatMessage
-import ru.outsideproarts.oassist.core.model.ChatRole
 import ru.outsideproarts.oassist.core.model.ImagePart
 
 /**
  * Сессия оверлея ассистента: контекст живёт, пока окно открыто, и уничтожается при закрытии.
  * История — полные пары tool_calls/tool_result (экспортируются [AgentLoop.stream] через
  * `onTurnMessages`), чтобы следующий ход видел вызовы инструментов.
+ *
+ * История хранится целиком, без обрезки: усечение контекста — владение механизма
+ * компактизации, а не сессии. Не добавляйте сюда лимиты — раньше trim() с лимитом
+ * символов стирал всю историю включая текущий ход, когда вывод инструмента
+ * (web_fetch, ui_get_screen) превышал бюджет.
  */
 class AssistSession internal constructor() {
 
@@ -35,29 +39,7 @@ class AssistSession internal constructor() {
         synchronized(lock) {
             messages.add(user)
             messages.addAll(turn)
-            trim()
         }
-    }
-
-    private fun trim() {
-        while (messages.size > MAX_MESSAGES || totalChars() > MAX_CHARS) {
-            if (messages.isEmpty()) return
-            var cut = 1
-            while (cut < messages.size && messages[cut].role != ChatRole.USER) cut++
-            messages.subList(0, cut).clear()
-        }
-        // Бюджет образов: снимки в памяти сессии тоже не должны копиться без меры.
-        val budgeted = enforceImageBudget(messages.toList(), MAX_IMAGE_MESSAGES)
-        if (budgeted.size == messages.size) {
-            for (i in messages.indices) messages[i] = budgeted[i]
-        }
-    }
-
-    private fun totalChars(): Int = messages.sumOf { it.content.length }
-
-    companion object {
-        const val MAX_MESSAGES = 40
-        const val MAX_CHARS = 16_000
     }
 }
 
