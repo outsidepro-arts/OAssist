@@ -188,6 +188,16 @@ class DiagnosticStore private constructor(
     private val lock = Any()
     // Never hold this lock during archive I/O or while acquiring lock.
     private val admissionLock = Any()
+    // Кэш метаданных архива. Расшифровка каждого файла — binder-вызов в Android
+    // Keystore; полный проход по архиву на каждом обращении надолго блокировал
+    // вызывающего (старт хода ассистента). Кэш строится фоновым сканом при
+    // создании и дополняется по мере записи событий; чтения фильтруются по
+    // существованию файла, поэтому удаления не требуют правки кэша.
+    private var eventsIndexed = false
+    private val eventIndexCache = LinkedHashMap<String, EventIndex>()
+    private val bindingCache = LinkedHashMap<String, Pair<File, DiagnosticEvent>>()
+    private val unreadableFiles = mutableMapOf<String, Int>()
+    private val loadedMarkers = mutableSetOf<String>()
     private val dropped = AtomicLong()
     private val pendingBytes = AtomicLong()
     private val generation = AtomicLong()
@@ -197,7 +207,17 @@ class DiagnosticStore private constructor(
     private val writer = ThreadPoolExecutor(1, 1, 0, TimeUnit.MILLISECONDS, ArrayBlockingQueue(256)) { task ->
         Thread(task, "oassist-diagnostic-writer").apply { isDaemon = true }
     }
-    init { writer.prestartCoreThread() }
+    init {
+        writer.prestartCoreThread()
+        // Прогрев кэша метаданных в фоне: пока скан не завершён, bindConversation
+        // пропускает обслуживание архива и не ждёт расшифровку сотен файлов.
+        // Маркеры удаления здесь не трогаем: их загрузка — точка синхронизации
+        // для записей, допущенных до применения tombstone (см. record/isRemoved).
+        try {
+            writer.execute { runCatching { buildIndex() } }
+        } catch (_: RejectedExecutionException) {
+        }
+    }
     @Volatile private var enabled = if (isAvailable()) loadEnabled() else false
     @Volatile private var settingsLoaded = isAvailable()
     @Volatile private var failure: String? = null
@@ -372,7 +392,18 @@ class DiagnosticStore private constructor(
                             pending.writeBytes(encrypted)
                             if (!pending.renameTo(mediaFile)) error("media_publish_failed")
                         }
-                        if (!partial.renameTo(File(root, "$name.event"))) error("publish_failed")
+                        val eventFile = File(root, "$name.event")
+                        if (!partial.renameTo(eventFile)) error("publish_failed")
+                        eventIndexCache[eventFile.name] = EventIndex(
+                            eventFile,
+                            storedEvent.operationId,
+                            storedEvent.parentOperationId,
+                            storedEvent.rootOperationId,
+                            storedEvent.kind,
+                            storedEvent.attributes["chatId"],
+                            storedEvent.content != null,
+                            if (storedEvent.content != null) textBytes else 0L,
+                        )
                         published = true
                     } catch (e: Exception) {
                         dropped.incrementAndGet()
@@ -440,10 +471,24 @@ class DiagnosticStore private constructor(
         runBytes.clear()
         runIndexLoaded = true
         files().filter { it.name != "sequence" && it.extension != "deleted" }.forEach { if (!it.delete()) failure = "delete_failed" }
+        eventIndexCache.clear()
+        bindingCache.clear()
+        unreadableFiles.clear()
+        // Кэш считается непостроенным: после сброса индекс восстановится с диска,
+        // и файлы, которые не удалось удалить, останутся видимы.
+        eventsIndexed = false
         invalidateExports()
     }
 
-    /** Persist ownership outside the lossy event queue before recording request content. */
+    /**
+     * Persist ownership outside the lossy event queue before recording request content.
+     *
+     * Путь вызывающего не сканирует архив: расшифровка каждого файла — отдельный
+     * binder-вызов в Android Keystore, а полный проход по архиву на каждый ход
+     * блокировал старт стрима ассистента на десятки секунд. Обслуживание архива
+     * (ротация, чистка биндов) выполняется синхронно только когда кэш метаданных
+     * уже построен, иначе откладывается в writer.
+     */
     fun bindConversation(chatId: String, operationId: String) = synchronized(lock) {
         try {
             loadDeletionMarkers()
@@ -456,25 +501,29 @@ class DiagnosticStore private constructor(
         var pending: File? = null
         try {
             check(isAvailable()) { "storage_unavailable" }
-            ensureStartupMaintenance()
             if (!root.exists() && !root.mkdirs()) error("storage_unavailable")
-            rotate(0, false, operationId)
-            pruneExpiredBindings()
-            if (files().filter { it.extension == "binding" }.any {
-                    runCatching { decode(it) }.getOrNull()?.let { event ->
-                        event.operationId == operationId && event.attributes["chatId"] == chatId
-                    } == true
-                }) return@synchronized
+            if (eventsIndexed) {
+                ensureStartupMaintenance()
+                rotate(0, false, operationId)
+                pruneExpiredBindings()
+            } else {
+                deferMaintenance(operationId)
+            }
+            if (isBound(chatId, operationId)) return@synchronized
+            // Имя детерминировано парой (chatId, operationId): повторный bind
+            // идемпотентен и не требует расшифровки существующих биндов.
+            val target = File(root, "bind-${bindingDigest(chatId, operationId)}.binding")
+            if (target.exists()) return@synchronized
             val event = DiagnosticEvent(DiagnosticKind.STORAGE, operationId, attributes = mapOf("chatId" to chatId), timestampMillis = clock())
             val bytes = cipher.encrypt(json.encodeToString(event).toByteArray(StandardCharsets.UTF_8))
             val allFiles = files()
             if (allFiles.filter { it.extension == "binding" }.sumOf { it.length() } + bytes.size > reserveBytes ||
                 allFiles.sumOf { it.length() } + pendingBytes.get() + bytes.size > maxBytes
             ) error("binding_quota_exceeded")
-            val partial = File(root, "${UUID.randomUUID()}.binding.partial")
-            pending = partial
-            partial.writeBytes(bytes)
-            if (!partial.renameTo(File(root, partial.name.removeSuffix(".partial")))) error("publish_failed")
+            pending = File(root, "${target.name}.partial")
+            pending.writeBytes(bytes)
+            if (!pending.renameTo(target)) error("publish_failed")
+            bindingCache[target.name] = target to event
         } catch (e: Exception) {
             removedOperations.add(operationId)
             val events = eventIndex()
@@ -499,6 +548,35 @@ class DiagnosticStore private constructor(
         }
     }
 
+    /** Обслуживание архива вне пути вызывающего: холодный bind не ждёт скан метаданных. */
+    private fun deferMaintenance(operationId: String) {
+        try {
+            writer.execute {
+                // Скан — вне lock (как прогрев): обслуживание не должно
+                // блокировать bind'ы на всё время расшифровки архива.
+                runCatching { buildIndex() }
+                runCatching {
+                    synchronized(lock) {
+                        ensureStartupMaintenance()
+                        rotate(0, false, operationId)
+                        pruneExpiredBindings()
+                    }
+                }
+            }
+        } catch (_: RejectedExecutionException) {
+        }
+    }
+
+    private fun isBound(chatId: String, operationId: String): Boolean =
+        bindingEntries().any { (_, binding) ->
+            binding.operationId == operationId && binding.attributes["chatId"] == chatId
+        }
+
+    private fun bindingDigest(chatId: String, operationId: String): String =
+        MessageDigest.getInstance("SHA-256")
+            .digest((chatId + 0.toChar() + operationId).toByteArray(StandardCharsets.UTF_8))
+            .joinToString("") { "%02x".format(it.toInt() and 0xff) }
+
     fun removeConversation(chatId: String, operationIds: Set<String> = emptySet()) =
         removeOwnedOperations(chatId, operationIds)
 
@@ -511,8 +589,10 @@ class DiagnosticStore private constructor(
         check(root.isDirectory || (!root.exists() && root.mkdirs())) { "storage_unavailable" }
         loadDeletionMarkers()
         val events = eventIndex()
+        // Файлы, которых нет в кэше, читаются с диска: нечитаемый бинд должен
+        // ронять удаление, как и раньше (fail-closed), а не пропускаться молча.
         val bindings = files().filter { it.extension == "binding" }.map { file ->
-            file to decode(file)
+            bindingCache[file.name] ?: (file to decode(file)).also { bindingCache[file.name] = it }
         }
         val matchingBindings = bindings.filter {
             (chatId != null && it.second.attributes["chatId"] == chatId) || it.second.operationId in operationIds
@@ -657,12 +737,109 @@ class DiagnosticStore private constructor(
     private fun decode(file: File): DiagnosticEvent =
         json.decodeFromString<DiagnosticEvent>(cipher.decrypt(file.readBytes()).toString(StandardCharsets.UTF_8))
 
-    private fun eventIndex(): List<EventIndex> = files().filter { it.extension == "event" }.mapNotNull { file ->
-        runCatching { decode(file) }.getOrNull()?.let { EventIndex(file, it.operationId, it.parentOperationId, it.rootOperationId, it.kind, it.attributes["chatId"], it.content != null, it.content?.toByteArray(StandardCharsets.UTF_8)?.size?.toLong() ?: 0) }
+    /**
+     * Вызывается с удержанием [lock]. Пока кэш не построен (фоновый скан ещё
+     * идёт), строит его явно — этим пользуются только операции вне горячего
+     * пути (экспорт, удаление, обслуживание).
+     */
+    private fun eventIndex(): List<EventIndex> {
+        if (!eventsIndexed) buildIndex()
+        retryUnreadable()
+        return eventIndexCache.values.filter { it.file.exists() }.also { alive ->
+            if (alive.size != eventIndexCache.size) {
+                eventIndexCache.keys.retainAll(alive.mapTo(mutableSetOf()) { it.file.name })
+            }
+        }
     }
+
+    /** Живые бинды из кэша; записи пропавших файлов забываются. */
+    private fun bindingEntries(): List<Pair<File, DiagnosticEvent>> =
+        bindingCache.values.filter { (file, _) -> file.exists() }.also { alive ->
+            if (alive.size != bindingCache.size) {
+                bindingCache.keys.retainAll(alive.mapTo(mutableSetOf()) { it.first.name })
+            }
+        }
+
+    /**
+     * Полный скан метаданных без удержания [lock]: расшифровка сотен файлов не
+     * должна блокировать вызывающих. Публикация — короткая, под [lock]; записи,
+     * добавленные writer'ом параллельно, не перезаписываются.
+     *
+     * Индекс помечается полным только после реального прохода: если архив
+     * недоступен (direct boot до разблокировки, сбой каталога), следующее
+     * обращение повторит скан. Нерасшифрованные файлы запоминаются и
+     * повторяются при чтении — транзиентный сбой Keystore не должен делать
+     * индекс неполным навсегда.
+     */
+    private fun buildIndex() {
+        synchronized(lock) { if (eventsIndexed) return }
+        if (!isAvailable()) return
+        val listing = root.listFiles() ?: return
+        val scannedEvents = mutableListOf<Pair<File, EventIndex>>()
+        val unreadable = mutableSetOf<String>()
+        listing.filter { it.isFile && it.extension == "event" }.forEach { file ->
+            val decoded = runCatching { decode(file) }.getOrNull()
+            if (decoded != null) scannedEvents += file to decoded.toIndex(file) else unreadable.add(file.name)
+        }
+        val scannedBindings = listing.filter { it.isFile && it.extension == "binding" }.mapNotNull { file ->
+            runCatching { decode(file) }.getOrNull()?.let { file to it }
+        }
+        synchronized(lock) {
+            if (!eventsIndexed) {
+                scannedEvents.forEach { (file, entry) -> if (file.exists()) eventIndexCache[file.name] = entry }
+                scannedBindings.forEach { (file, event) -> if (file.exists()) bindingCache[file.name] = file to event }
+                unreadable.forEach { unreadableFiles.putIfAbsent(it, 0) }
+                eventsIndexed = true
+            }
+        }
+    }
+
+    /**
+     * Повтор только тех файлов, что не расшифровались при скане: транзиентный
+     * сбой Keystore не должен делать индекс неполным навсегда. Пропавшие файлы
+     * забываются, стабильно нечитаемые — прекращают попытки и остаются в счётчике
+     * повреждённых событий экспорта.
+     */
+    private fun retryUnreadable() {
+        if (unreadableFiles.isEmpty()) return
+        unreadableFiles.keys.toList().forEach { name ->
+            val attempts = unreadableFiles[name] ?: return@forEach
+            val file = File(root, name)
+            if (attempts >= MAX_DECODE_ATTEMPTS || !file.exists()) {
+                unreadableFiles.remove(name)
+                return@forEach
+            }
+            val decoded = runCatching { decode(file) }.getOrNull()
+            if (decoded == null) {
+                unreadableFiles[name] = attempts + 1
+                return@forEach
+            }
+            val entry = decoded.toIndex(file)
+            eventIndexCache[name] = entry
+            unreadableFiles.remove(name)
+            if (runIndexLoaded) {
+                val rootId = decoded.rootOperationId ?: decoded.operationId
+                operationRoots[decoded.operationId] = rootId
+                runBytes[rootId] = (runBytes[rootId] ?: 0) + entry.contentBytes
+            }
+        }
+    }
+
+    private fun DiagnosticEvent.toIndex(file: File) = EventIndex(
+        file,
+        operationId,
+        parentOperationId,
+        rootOperationId,
+        kind,
+        attributes["chatId"],
+        content != null,
+        content?.toByteArray(StandardCharsets.UTF_8)?.size?.toLong() ?: 0,
+    )
 
     private fun loadDeletionMarkers() {
         files().filter { it.extension == "deleted" }.forEach { file ->
+            // Маркеры неизменяемы и не удаляются: повторный проход читает только новое.
+            if (file.name in loadedMarkers) return@forEach
             val marker = try {
                 json.decodeFromString<DeletionMarker>(cipher.decrypt(file.readBytes()).toString(StandardCharsets.UTF_8))
             } catch (error: Exception) {
@@ -671,6 +848,7 @@ class DiagnosticStore private constructor(
             }
             removedOperations.addAll(marker.operationIds)
             durablyRemovedOperations.addAll(marker.operationIds)
+            loadedMarkers.add(file.name)
         }
     }
 
@@ -679,6 +857,7 @@ class DiagnosticStore private constructor(
         val bytes = cipher.encrypt(json.encodeToString(DeletionMarker(operationIds)).toByteArray(StandardCharsets.UTF_8))
         atomicWrite(marker) { it.write(bytes) }
         durablyRemovedOperations.addAll(operationIds)
+        loadedMarkers.add(marker.name)
     }
 
     private fun cleanupDeletedEvents(): Boolean {
@@ -759,7 +938,7 @@ class DiagnosticStore private constructor(
         val entries = eventIndex()
         if (entries.size != eventFiles.size) return
         val bindingFiles = files().filter { it.extension == "binding" }
-        val bindings = bindingFiles.mapNotNull { file -> runCatching { file to decode(file) }.getOrNull() }
+        val bindings = bindingEntries()
         if (bindings.size != bindingFiles.size) return
         val (roots, liveRetained) = synchronized(admissionLock) {
             liveRoots.toMap() to (activeOperations.map { liveRoots[it] ?: it }.toSet() + pendingRoots.keys)
@@ -783,8 +962,15 @@ class DiagnosticStore private constructor(
 
     private fun loadRunIndex() {
         if (runIndexLoaded) return
+        // Пока индекс не построен (архив недоступен), счётчики прогонов не
+        // фиксируем: иначе неполный проход исказит лимит контента на прогон.
+        if (!eventsIndexed) return
         val entries = eventIndex()
         val parents = entries.groupBy { it.operationId }.mapValues { (_, events) -> events.firstNotNullOfOrNull { it.parent } }
+        // Пересборка с нуля, а не аддитивное слияние: счётчик мог пополняться
+        // построчной записью writer'а до построения индекса.
+        operationRoots.clear()
+        runBytes.clear()
         entries.forEach { entry ->
             var rootId = entry.root ?: entry.operationId
             val seen = mutableSetOf<String>()
@@ -864,5 +1050,6 @@ class DiagnosticStore private constructor(
         const val MAX_PAYLOAD_CHARS = 4 * 1024 * 1024
         const val MAX_BYTES = 256L * 1024 * 1024
         const val RETENTION_MILLIS = 7L * 24 * 60 * 60 * 1000
+        const val MAX_DECODE_ATTEMPTS = 3
     }
 }

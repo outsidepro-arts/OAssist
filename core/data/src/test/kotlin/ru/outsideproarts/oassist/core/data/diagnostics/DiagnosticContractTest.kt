@@ -951,4 +951,102 @@ class DiagnosticContractTest {
         } finally { release.countDown(); exporting.join(10000) }
         assertTrue(unzip(bytes.toByteArray()).getValue("events.jsonl").decodeToString().contains("A".repeat(100)))
     }
+
+    @Test fun `warm bind conversation performs no archive decrypts`() {
+        val dir = Files.createTempDirectory("oassist-bind-warm").toFile()
+        val decrypts = java.util.concurrent.atomic.AtomicInteger()
+        val counting = object : DiagnosticCipher {
+            override fun encrypt(data: ByteArray) = cipher.encrypt(data)
+            override fun decrypt(data: ByteArray): ByteArray {
+                decrypts.incrementAndGet()
+                return cipher.decrypt(data)
+            }
+        }
+        val store = DiagnosticStore(dir, counting)
+        repeat(20) { index -> store.record(DiagnosticEvent(DiagnosticKind.TOOL_RESULT, "run-$index", content = "payload-$index")) }
+        store.export(ByteArrayOutputStream(), 0)
+        decrypts.set(0)
+        store.bindConversation("chat", "bound")
+        assertEquals("bind must not rescan the archive", 0, decrypts.get())
+        assertTrue(dir.listFiles()!!.any { it.name.endsWith(".binding") })
+        store.close()
+    }
+
+    @Test fun `bind conversation does not wait for an in-flight archive scan`() {
+        val dir = Files.createTempDirectory("oassist-bind-cold").toFile()
+        val seed = DiagnosticStore(dir, cipher)
+        repeat(20) { index -> seed.record(DiagnosticEvent(DiagnosticKind.TOOL_RESULT, "seed-$index", content = "seed-$index")) }
+        seed.export(ByteArrayOutputStream(), 0)
+        seed.close()
+
+        val scanStarted = CountDownLatch(1)
+        val releaseScan = CountDownLatch(1)
+        val blocking = object : DiagnosticCipher {
+            override fun encrypt(data: ByteArray) = cipher.encrypt(data)
+            override fun decrypt(data: ByteArray): ByteArray {
+                scanStarted.countDown()
+                check(releaseScan.await(10, TimeUnit.SECONDS))
+                return cipher.decrypt(data)
+            }
+        }
+        val store = DiagnosticStore(dir, blocking)
+        try {
+            assertTrue(scanStarted.await(10, TimeUnit.SECONDS))
+            val binder = thread { store.bindConversation("chat", "fresh") }
+            binder.join(5000)
+            assertFalse("bindConversation must not wait for the archive scan", binder.isAlive)
+            assertTrue(dir.listFiles()!!.any { it.name.endsWith(".binding") })
+        } finally {
+            releaseScan.countDown()
+        }
+        store.close()
+    }
+
+    @Test fun `deferred maintenance still prunes expired bindings`() {
+        var now = System.currentTimeMillis()
+        val dir = Files.createTempDirectory("oassist-bind-deferred").toFile()
+        val seed = DiagnosticStore(dir, cipher, clock = { now })
+        seed.bindConversation("chat", "expired")
+        seed.record(DiagnosticEvent(DiagnosticKind.OPERATION_START, "expired"))
+        seed.record(DiagnosticEvent(DiagnosticKind.OPERATION_END, "expired"))
+        seed.export(ByteArrayOutputStream(), 0)
+        seed.close()
+
+        now += 8L * 24 * 60 * 60 * 1000
+        val scanStarted = CountDownLatch(1)
+        val releaseScan = CountDownLatch(1)
+        val blocking = object : DiagnosticCipher {
+            override fun encrypt(data: ByteArray) = cipher.encrypt(data)
+            override fun decrypt(data: ByteArray): ByteArray {
+                scanStarted.countDown()
+                check(releaseScan.await(10, TimeUnit.SECONDS))
+                return cipher.decrypt(data)
+            }
+        }
+        val store = DiagnosticStore(dir, blocking, clock = { now })
+        try {
+            assertTrue(scanStarted.await(10, TimeUnit.SECONDS))
+            store.bindConversation("chat", "fresh")
+            // Холодный bind не чистит архив синхронно: оба бинда ещё на диске.
+            assertEquals(2, dir.listFiles()!!.count { it.extension == "binding" })
+            releaseScan.countDown()
+            // Экспорт ждёт writer: отложенное обслуживание выполнено к этому моменту.
+            store.export(ByteArrayOutputStream(), 0)
+            assertEquals(1, dir.listFiles()!!.count { it.extension == "binding" })
+        } finally {
+            releaseScan.countDown()
+        }
+        store.close()
+    }
+
+    @Test fun `rebinding the same operation writes a single binding`() {
+        val dir = Files.createTempDirectory("oassist-bind-dup").toFile()
+        val store = DiagnosticStore(dir, cipher)
+        store.export(ByteArrayOutputStream(), 0)
+        store.bindConversation("chat", "run")
+        store.bindConversation("chat", "run")
+        store.bindConversation("chat", "run")
+        assertEquals(1, dir.listFiles()!!.count { it.extension == "binding" })
+        store.close()
+    }
 }
