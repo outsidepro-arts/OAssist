@@ -13,12 +13,20 @@ import android.service.voice.VoiceInteractionSession
 import android.service.voice.VoiceInteractionSessionService
 import android.view.View
 import android.widget.FrameLayout
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
+import kotlinx.coroutines.launch
 import ru.outsideproarts.oassist.feature.assistant.AssistActivity
 import ru.outsideproarts.oassist.core.provider.ImageCodec
 import ru.outsideproarts.oassist.feature.assistant.AssistantOverlayService
 import ru.outsideproarts.oassist.feature.assistant.AssistScreenHandoff
 import ru.outsideproarts.oassist.core.agent.AssistSessionStore
+import ru.outsideproarts.oassist.core.agent.isMostlyBlack
 import ru.outsideproarts.oassist.core.model.ImagePart
+import ru.outsideproarts.oassist.di.AppGraph
 
 class OAssistVoiceInteractionSessionService : VoiceInteractionSessionService() {
     override fun onNewSession(args: Bundle?): VoiceInteractionSession {
@@ -35,12 +43,19 @@ class OAssistVoiceInteractionSession(
     service: VoiceInteractionSessionService,
 ) : VoiceInteractionSession(service) {
     private val handler = Handler(Looper.getMainLooper())
+    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
     private val capture = AssistCapture<ImagePart>(::deliver)
-    private val deadline = Runnable { capture.timeout() }
+    private val deadline = Runnable { onDeadline() }
     private var shown = false
     private var closed = false
     private var owner: AssistSessionStore.ScreenCaptureOwner? = null
     private var handoffToken: String? = null
+    private var fallbackJob: Job? = null
+    private val coordinator = AssistScreenshotCoordinator { image, note ->
+        screenshotNote = note
+        capture.screenshot(image)
+    }
+    private var screenshotNote: String? = null
 
     override fun onCreateContentView(): View = FrameLayout(context)
 
@@ -55,7 +70,7 @@ class OAssistVoiceInteractionSession(
         }
         shown = true
         owner = AssistSessionStore.beginScreenCapture()
-        handler.postDelayed(deadline, 1_500L)
+        handler.postDelayed(deadline, SHOW_DEADLINE_MS)
         capture.start(
             expectContext = showFlags and SHOW_WITH_ASSIST != 0,
             expectScreenshot = showFlags and SHOW_WITH_SCREENSHOT != 0,
@@ -78,9 +93,45 @@ class OAssistVoiceInteractionSession(
 
     override fun onHandleScreenshot(screenshot: Bitmap?) {
         super.onHandleScreenshot(screenshot)
-        if (capture.acceptsScreenshot) {
-            capture.screenshot(screenshot?.let { runCatching { ImageCodec.fromBitmap(it) }.getOrNull() })
+        // hasPendingFallback — второго колбэка снимка за показ не бывает: дедлайн продлевается один раз.
+        if (!capture.acceptsScreenshot || coordinator.hasPendingFallback) return
+        val image = screenshot?.let { runCatching { ImageCodec.fromBitmap(it) }.getOrNull() }
+        if (screenshot == null || image == null) {
+            capture.screenshot(null)
+            return
         }
+        if (!isMostlyBlack(screenshot)) {
+            capture.screenshot(image)
+            return
+        }
+        startFallbackCapture(image)
+    }
+
+    /**
+     * Системный кадр почти чёрный (шторка скринридера или тёмное содержимое) — пробуем
+     * переснять через наш сервис доступности: оконный захват (API 34+) шторку не содержит,
+     * скринридер не трогается. Дедлайн сессии продлевается один раз; запоздавший результат
+     * координатор отбросит сам.
+     */
+    private fun startFallbackCapture(blackImage: ImagePart) {
+        if (!coordinator.holdForFallback(blackImage)) return
+        handler.removeCallbacks(deadline)
+        handler.postDelayed(deadline, FALLBACK_EXTRA_MS)
+        fallbackJob = scope.launch {
+            val quick = try {
+                AppGraph.get().uiActions.quickShot()
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                null
+            }
+            coordinator.onFallbackResult(quick)
+        }
+    }
+
+    private fun onDeadline() {
+        coordinator.onDeadline()
+        capture.timeout()
     }
 
     override fun onHide() {
@@ -93,12 +144,15 @@ class OAssistVoiceInteractionSession(
 
     override fun onDestroy() {
         cancelCapture()
+        scope.cancel()
         super.onDestroy()
     }
 
     private fun cancelCapture() {
         closed = true
         handler.removeCallbacks(deadline)
+        fallbackJob?.cancel()
+        fallbackJob = null
         capture.cancel()
         owner?.let(AssistSessionStore::cancelScreenCapture)
     }
@@ -106,8 +160,11 @@ class OAssistVoiceInteractionSession(
     private fun deliver(screenContext: String?, image: ImagePart?) {
         closed = true
         handler.removeCallbacks(deadline)
+        val contextWithNote = screenshotNote
+            ?.let { note -> listOfNotNull(screenContext, note).joinToString("\n") }
+            ?: screenContext
         try {
-            val token = owner?.let { AssistScreenHandoff.publish(it, screenContext, image) } ?: return
+            val token = owner?.let { AssistScreenHandoff.publish(it, contextWithNote, image) } ?: return
             handoffToken = token
             if (!startOverlay(token)) {
                 val intent = Intent(context, AssistActivity::class.java).apply {
@@ -183,5 +240,13 @@ class OAssistVoiceInteractionSession(
         for (i in 0 until node.childCount) {
             dumpNode(node.getChildAt(i), sb, depth + 1)
         }
+    }
+
+    private companion object {
+        /** Дедлайн сбора assist-данных: системный снимок и контекст приходят быстро. */
+        const val SHOW_DEADLINE_MS = 1_500L
+
+        /** Однократное продление дедлайна под фолбэк-снимок (общий потолок ~3 с от показа). */
+        const val FALLBACK_EXTRA_MS = 1_500L
     }
 }

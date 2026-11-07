@@ -40,8 +40,9 @@ class UiActions(
     private val connectPollMs: Long = A11Y_CONNECT_POLL_MS,
 ) {
 
-    private val curtain = ScreenCurtain(privProvider)
     private val observationMutex = Mutex()
+    /** Захват кадра один за раз: параллельные потоки (тулы ассистента, фолбэк assist-сессии) сами себе не устраивают троттлинг. */
+    private val captureMutex = Mutex()
     private val observations = UiObservationRegistry<AccessibilityNodeInfo> { it.recycle() }
     internal var dispatchSwipe: suspend (Int, Int, Int, Int, Long, (Boolean) -> Unit) -> Result<Boolean> =
         ::dispatchAccessibilitySwipe
@@ -454,9 +455,9 @@ class UiActions(
 
 
 /**
-     * Скриншот текущего окна (панель ассистента скрыта). При чёрном кадре — best-effort
-     * снятие шторки TalkBack на момент снимка (нужны Shizuku/root) с восстановлением;
-     * не вышло — честное предупреждение, не тихий пустой кадр.
+     * Скриншот текущего окна (панель ассистента скрыта). Почти чёрный кадр не «лечится»:
+     * шторку скринридера извне отключить нельзя (скринридеры не трогаем), поэтому кадр
+     * отдаётся с честной пометкой ([blackFrameNote]).
      */
     suspend fun screenshot(): ToolResult = overlayHidden(settleMs = SNAPSHOT_SETTLE_MS) {
         val shot = captureShot(null).getOrElse { return@overlayHidden screenshotError(it) }
@@ -519,8 +520,7 @@ class UiActions(
         val title: String?,
         val width: Int,
         val height: Int,
-        val black: Boolean,
-        val liftedCurtain: Boolean = false,
+        val blackNote: String?,
         val clipped: Boolean = false,
     ) {
         fun toResult(subject: String): ToolResult {
@@ -528,40 +528,57 @@ class UiActions(
             if (clipped) {
                 sb.append("\nОбласть выходит за границы кадра — снимок обрезан по видимой части.")
             }
-            if (liftedCurtain) {
-                sb.append("\nШторка скринридера была временно снята для снимка и восстановлена.")
-            }
-            if (black) {
-                sb.append("\nКадр почти чёрный: возможно, шторка скринридера или защищённое окно — снимок может быть пустым.")
-            }
+            blackNote?.let { sb.append('\n').append(it) }
             return ToolResult(true, sb.toString(), images = listOf(part))
         }
     }
 
-    private class ScreenshotException(val code: Int) : Exception("screenshot error $code")
+    /** Результат быстрого снимка для assist-фолбэка (см. [quickShot]). */
+    data class QuickShot(val image: ImagePart, val black: Boolean, val windowCapture: Boolean)
 
     /**
      * Снимок окна, при [bounds] (экранные координаты) обрезанный по этой области.
-     * При чёрном кадре — одна попытка снять шторку скринридера (нужны Shizuku/root)
-     * с восстановлением в `finally`; не вышло — кадр отдаётся как есть с честной пометкой.
+     * Ретраи покрывают троттлинг платформы (слишком частые запросы); почти чёрный кадр
+     * отдаётся как есть с пометкой — шторка скринридера извне не отключается.
      */
-    private suspend fun captureShot(bounds: Rect?): Result<Shot> {
-        val frame = captureFrame().getOrElse { return Result.failure(it) }
-        if (!frame.black) return finishFrame(frame, bounds)
-        val restore = curtain.suspendTalkbackForShot() ?: return finishFrame(frame, bounds)
-        return try {
-            val second = captureFrame().getOrNull()
-            finishFrame(if (second != null && !second.black) second else frame, bounds, liftedCurtain = true)
-        } finally {
-            restore()
+    private suspend fun captureShot(bounds: Rect?): Result<Shot> = captureMutex.withLock {
+        val frame = withScreenshotRetry { captureFrame() }
+            .getOrElse { return@withLock Result.failure(it) }
+        finishFrame(frame, bounds)
+    }
+
+    /**
+     * Быстрый снимок для assist-фолбэка: без ожидания переподключения сервиса и settle —
+     * укладывается в дедлайн assist-сессии. Null — снимок недоступен (сервис не подключён,
+     * захват не удался).
+     */
+    suspend fun quickShot(): QuickShot? = captureMutex.withLock {
+        val service = serviceProvider() ?: return@withLock null
+        overlayHidden {
+            // Один повтор: сразу после тулового захвата (тот же captureMutex) первый запрос
+            // почти гарантированно упирается в троттлинг платформы.
+            val frame = withScreenshotRetry(maxRetries = 1) { captureFrame(service) }
+                .getOrNull() ?: return@overlayHidden null
+            val part = finishFrame(frame, null).getOrNull()?.part ?: return@overlayHidden null
+            QuickShot(part, frame.black, frame.source == ScreenshotSource.WINDOW)
         }
     }
 
     /** Кадр окна до сжатия: границы окна нужны, чтобы перевести экранные координаты в координаты кадра. */
-    private class Frame(val bitmap: Bitmap, val window: Rect?, val title: String?, val black: Boolean)
+    private class Frame(
+        val bitmap: Bitmap,
+        val window: Rect?,
+        val title: String?,
+        val black: Boolean,
+        val source: ScreenshotSource,
+    )
 
     private suspend fun captureFrame(): Result<Frame> {
         val service = serviceOrError().getOrElse { return Result.failure(it) }
+        return captureFrame(service)
+    }
+
+    private suspend fun captureFrame(service: AccessibilityService): Result<Frame> {
         val window = targetWindow(service)
         val bounds = Rect()
         window?.getBoundsInScreen(bounds)
@@ -574,19 +591,20 @@ class UiActions(
         }
         val bitmap = raw.getOrElse { return Result.failure(it) }
         val cropped = cropTo(bitmap, screenshotFrameCrop(source, winBounds?.toUiRect())?.toRect())
-        return Result.success(Frame(cropped, winBounds, window?.title?.toString(), probeBlack(cropped)))
+        return Result.success(Frame(cropped, winBounds, window?.title?.toString(), isMostlyBlack(cropped), source))
     }
 
     /** Сжатие кадра в JPEG; [bounds] (экранные координаты) переводится в координаты кадра и вырезается. */
-    private fun finishFrame(frame: Frame, bounds: Rect?, liftedCurtain: Boolean = false): Result<Shot> {
+    private fun finishFrame(frame: Frame, bounds: Rect?): Result<Shot> {
         val requested = screenshotRegionCrop(bounds?.toUiRect(), frame.window?.toUiRect())?.toRect()
         val cropped = cropTo(frame.bitmap, requested)
         val clipped = requested != null &&
             (cropped.width != requested.width() || cropped.height != requested.height())
         val part = runCatching { ImageCodec.fromBitmap(cropped) }
             .getOrElse { return Result.failure(IllegalStateException("не удалось сжать снимок")) }
+        val blackNote = if (frame.black) blackFrameNote(frame.source == ScreenshotSource.WINDOW) else null
         return Result.success(
-            Shot(part, frame.title, cropped.width, cropped.height, frame.black, liftedCurtain, clipped),
+            Shot(part, frame.title, cropped.width, cropped.height, blackNote, clipped),
         )
     }
 
@@ -662,24 +680,11 @@ class UiActions(
         return cropped
     }
 
-    private fun probeBlack(bitmap: Bitmap): Boolean {
-        val pixels = runCatching {
-            val probe = Bitmap.createScaledBitmap(bitmap, PROBE_SIZE, PROBE_SIZE, true)
-            val out = IntArray(PROBE_SIZE * PROBE_SIZE)
-            probe.getPixels(out, 0, PROBE_SIZE, 0, 0, PROBE_SIZE, PROBE_SIZE)
-            if (probe !== bitmap) probe.recycle()
-            out
-        }.getOrNull() ?: return false
-        return isMostlyBlack(pixels)
-    }
-
     private fun screenshotError(error: Throwable): ToolResult {
         if (error is ScreenshotException) {
-            return if (error.code == AccessibilityService.ERROR_TAKE_SCREENSHOT_SECURE_WINDOW) {
-                ToolResult(false, "Окно защищено от скриншотов (FLAG_SECURE) — снимок невозможен")
-            } else {
-                ToolResult(false, "Не удалось сделать снимок (код ошибки ${error.code})")
-            }
+            val message = screenshotErrorMessage(error.code)
+                ?: "Не удалось сделать снимок (код ошибки ${error.code})"
+            return ToolResult(false, message)
         }
         return ToolResult(false, error.message ?: "Не удалось сделать снимок")
     }
@@ -696,7 +701,6 @@ class UiActions(
         private const val MAX_DEPTH = 32
         private const val SNAPSHOT_SETTLE_MS = 150L
         private const val SCREENSHOT_TIMEOUT_MS = 5000L
-        private const val PROBE_SIZE = 64
         private const val GESTURE_TIMEOUT_MS = 5000L
         private const val MAX_WAIT_MS = 10000L
         private const val POLL_MS = 500L
