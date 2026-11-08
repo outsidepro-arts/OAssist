@@ -2,6 +2,7 @@ package ru.outsideproarts.oassist.vis
 
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import ru.outsideproarts.oassist.core.agent.UiActions
@@ -67,5 +68,85 @@ class AssistScreenshotPolicyTest {
         // Замена подтверждена контрастом «экран чёрный, окно не чёрное» — без утверждений о чёрном кадре.
         assertFalse(REPLACED_NOTE.contains("без обработки"))
         assertFalse(RESHOT_NOTE.contains("без обработки"))
+    }
+
+    @Test
+    fun `подтверждённый attach прикрепляет снимок и пометку о пересъёме`() {
+        val payload = assistHandoffPayload("screen", fresh, REPLACED_NOTE, attachScreenshot = true)
+        assertEquals(fresh, payload.image)
+        assertEquals("screen\n$REPLACED_NOTE", payload.context)
+    }
+
+    @Test
+    fun `отключённый attachScreenshot не прикрепляет снимок и не публикует пометку`() {
+        val payload = assistHandoffPayload("screen", fresh, REPLACED_NOTE, attachScreenshot = false)
+        assertNull(payload.image)
+        // Пометка описывает прикреплённый кадр — без кадра она ложь.
+        assertEquals("screen", payload.context)
+    }
+
+    @Test
+    fun `непрочитанное решение не прикрепляет снимок`() {
+        val payload = assistHandoffPayload("screen", fresh, REPLACED_NOTE, attachScreenshot = null)
+        assertNull(payload.image)
+        assertEquals("screen", payload.context)
+    }
+
+    @Test
+    fun `без пометки контекст публикуется как есть`() {
+        val payload = assistHandoffPayload("screen", fresh, null, attachScreenshot = true)
+        assertEquals(fresh, payload.image)
+        assertEquals("screen", payload.context)
+    }
+
+    @Test
+    fun `быстрый колбэк снимка ждёт асинхронное решение и отдаёт кадр при attach`() {
+        // Гонка, ловившаяся на устройстве: снимок приходил раньше чтения конфига и молча терялся.
+        val submitted = mutableListOf<ImagePart?>()
+        val submission = AssistScreenshotSubmission { submitted += it }
+        submission.onScreenshot(fresh)
+        assertEquals(emptyList<ImagePart?>(), submitted)
+        submission.onDecision(attach = true)
+        assertEquals(listOf<ImagePart?>(fresh), submitted)
+    }
+
+    @Test
+    fun `решение false после снимка не прикрепляет кадр и не повторяется`() {
+        val submitted = mutableListOf<ImagePart?>()
+        val submission = AssistScreenshotSubmission { submitted += it }
+        submission.onScreenshot(fresh)
+        submission.onDecision(attach = false)
+        submission.onScreenshot(ImagePart(imageBase64 = "late"))
+        submission.onDecision(attach = true)
+        assertEquals(listOf<ImagePart?>(null), submitted)
+    }
+
+    @Test
+    fun `решение false без снимка закрывает канал сразу`() {
+        // Скриншоты выключены — колбэк снимка не ждём (прежняя семантика screenshotEnabled).
+        val submitted = mutableListOf<ImagePart?>()
+        val submission = AssistScreenshotSubmission { submitted += it }
+        submission.onDecision(attach = false)
+        assertEquals(listOf<ImagePart?>(null), submitted)
+    }
+
+    @Test
+    fun `решение true без снимка продолжает ждать колбэк`() {
+        val submitted = mutableListOf<ImagePart?>()
+        val submission = AssistScreenshotSubmission { submitted += it }
+        submission.onDecision(attach = true)
+        assertEquals(emptyList<ImagePart?>(), submitted)
+        submission.onScreenshot(null)
+        assertEquals(listOf<ImagePart?>(null), submitted)
+    }
+
+    @Test
+    fun `решение true до снимка отдаёт первый же кадр`() {
+        val submitted = mutableListOf<ImagePart?>()
+        val submission = AssistScreenshotSubmission { submitted += it }
+        submission.onDecision(attach = true)
+        submission.onScreenshot(fresh)
+        submission.onScreenshot(ImagePart(imageBase64 = "second"))
+        assertEquals(listOf<ImagePart?>(fresh), submitted)
     }
 }

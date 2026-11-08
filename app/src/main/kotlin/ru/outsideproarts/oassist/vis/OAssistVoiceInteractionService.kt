@@ -35,6 +35,13 @@ class OAssistVoiceInteractionSessionService : VoiceInteractionSessionService() {
 }
 
 /**
+ * Завершение assist-handoff (старт оверлея/трамплина, откат токена) живёт вне сессии:
+ * сессия уничтожается сразу после deliver() → finish(), а публикация контекста уже
+ * состоялась — потерять старт нельзя.
+ */
+private val handoffScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+
+/**
  * Тонкий вход: assist-жест извлекает контекст экрана и передаёт управление оверлей-сервису
  * (через trampoline AssistActivity — там же запрос спецдоступов и микрофона).
  * Своего UI сессия не держит: окно ассистента живёт в [AssistantOverlayService].
@@ -45,6 +52,7 @@ class OAssistVoiceInteractionSession(
     private val handler = Handler(Looper.getMainLooper())
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
     private val capture = AssistCapture<ImagePart>(::deliver)
+    private val screenshotSubmission = AssistScreenshotSubmission { image -> capture.screenshot(image) }
     private val deadline = Runnable { onDeadline() }
     private var shown = false
     private var closed = false
@@ -53,9 +61,16 @@ class OAssistVoiceInteractionSession(
     private var fallbackJob: Job? = null
     private val coordinator = AssistScreenshotCoordinator { image, note ->
         screenshotNote = note
-        capture.screenshot(image)
+        screenshotSubmission.onScreenshot(image)
     }
     private var screenshotNote: String? = null
+
+    /**
+     * Решение attachScreenshot; null — ещё не прочитано или чтение не удалось.
+     * Непрочитанное решение не прикрепляет снимок (как и ошибка чтения конфига).
+     */
+    @Volatile
+    private var attachScreenshot: Boolean? = null
 
     override fun onCreateContentView(): View = FrameLayout(context)
 
@@ -74,14 +89,28 @@ class OAssistVoiceInteractionSession(
         capture.start(
             expectContext = showFlags and SHOW_WITH_ASSIST != 0,
             expectScreenshot = showFlags and SHOW_WITH_SCREENSHOT != 0,
-            screenshotEnabled = {
-                kotlinx.coroutines.runBlocking {
+        )
+        // Решение attachScreenshot читается асинхронно: runBlocking на главном потоке
+        // блокировал Looper до таймаута фокус-хендшейка (ANR «OAssist не отвечает»).
+        // CancellationException не глотается: после уничтожения сессии продолжение не выполняется.
+        scope.launch {
+            val attach = try {
+                kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
                     ru.outsideproarts.oassist.core.agent.AgentFactory.get()
                         .modeConfig(ru.outsideproarts.oassist.core.model.AssistMode.ASSISTANT)
                         .assistant?.attachScreenshot ?: true
                 }
-            },
-        )
+            } catch (cancelled: kotlinx.coroutines.CancellationException) {
+                throw cancelled
+            } catch (e: Exception) {
+                null
+            }
+            attachScreenshot = attach
+            // Канал снимка закрывается вместе с решением: при attach=false снимок не ждётся
+            // и не прикрепляется, при attach=true — дожидается колбэка. Запоздавшие значения
+            // каналом отбрасываются.
+            screenshotSubmission.onDecision(attach == true)
+        }
     }
 
     override fun onHandleAssist(state: AssistState) {
@@ -97,11 +126,11 @@ class OAssistVoiceInteractionSession(
         if (!capture.acceptsScreenshot || coordinator.hasPendingFallback) return
         val image = screenshot?.let { runCatching { ImageCodec.fromBitmap(it) }.getOrNull() }
         if (screenshot == null || image == null) {
-            capture.screenshot(null)
+            screenshotSubmission.onScreenshot(null)
             return
         }
         if (!isMostlyBlack(screenshot)) {
-            capture.screenshot(image)
+            screenshotSubmission.onScreenshot(image)
             return
         }
         startFallbackCapture(image)
@@ -118,6 +147,8 @@ class OAssistVoiceInteractionSession(
         handler.removeCallbacks(deadline)
         handler.postDelayed(deadline, FALLBACK_EXTRA_MS)
         fallbackJob = scope.launch {
+            // quickShot сам уводит блокирующие accessibility-вызовы с главного потока;
+            // колбэк координатора возвращается на main — scope с Dispatchers.Main.
             val quick = try {
                 AppGraph.get().uiActions.quickShot()
             } catch (e: kotlinx.coroutines.CancellationException) {
@@ -160,19 +191,19 @@ class OAssistVoiceInteractionSession(
     private fun deliver(screenContext: String?, image: ImagePart?) {
         closed = true
         handler.removeCallbacks(deadline)
-        val contextWithNote = screenshotNote
-            ?.let { note -> listOfNotNull(screenContext, note).joinToString("\n") }
-            ?: screenContext
+        val payload = assistHandoffPayload(screenContext, image, screenshotNote, attachScreenshot)
         try {
-            val token = owner?.let { AssistScreenHandoff.publish(it, contextWithNote, image) } ?: return
+            val token = owner?.let { AssistScreenHandoff.publish(it, payload.context, payload.image) } ?: return
             handoffToken = token
-            if (!startOverlay(token)) {
-                val intent = Intent(context, AssistActivity::class.java).apply {
-                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-                    putExtra(AssistScreenHandoff.EXTRA_TOKEN, token)
-                }
-                if (runCatching { context.startActivity(intent) }.isFailure) {
-                    AssistSessionStore.discardScreenCapture(token)
+            handoffScope.launch {
+                if (!startOverlay(token)) {
+                    val intent = Intent(context, AssistActivity::class.java).apply {
+                        addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                        putExtra(AssistScreenHandoff.EXTRA_TOKEN, token)
+                    }
+                    if (runCatching { context.startActivity(intent) }.isFailure) {
+                        AssistSessionStore.discardScreenCapture(token)
+                    }
                 }
             }
         } finally {
@@ -185,13 +216,21 @@ class OAssistVoiceInteractionSession(
      * изолированный таск). При выданных разрешениях стартуем сервис напрямую — так таск
      * приложения вообще не трогается; исключение FGS-старта откатывает на трамплин.
      */
-    private fun startOverlay(token: String): Boolean {
-        val showOverlay = AssistSessionStore.activeShowOverlay() ?: kotlinx.coroutines.runBlocking {
-            runCatching {
-                ru.outsideproarts.oassist.core.agent.AgentFactory.get()
-                    .modeConfig(ru.outsideproarts.oassist.core.model.AssistMode.ASSISTANT)
-                    .assistant?.showOverlay ?: true
-            }.getOrDefault(true)
+    private suspend fun startOverlay(token: String): Boolean {
+        // CancellationException не глотается: завершение handoff не продолжается после отмены.
+        val showOverlay = AssistSessionStore.activeShowOverlay() ?: run {
+            val configured = try {
+                kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+                    ru.outsideproarts.oassist.core.agent.AgentFactory.get()
+                        .modeConfig(ru.outsideproarts.oassist.core.model.AssistMode.ASSISTANT)
+                        .assistant?.showOverlay ?: true
+                }
+            } catch (cancelled: kotlinx.coroutines.CancellationException) {
+                throw cancelled
+            } catch (e: Exception) {
+                null
+            }
+            configured ?: true
         }
         if (showOverlay && !Settings.canDrawOverlays(context)) return false
         if (!showOverlay) {

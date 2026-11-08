@@ -45,6 +45,66 @@ internal const val BLACK_NOTE =
         "экранного чтеца."
 
 /**
+ * Публикуемый handoff assist-жеста. Снимок прикрепляется только при подтверждённом
+ * attachScreenshot; пометка о пересъёме описывает прикреплённый кадр и без него отбрасывается.
+ * Решение читается асинхронно: null (не прочитано или ошибка чтения) не прикрепляет снимок —
+ * как и прежняя ошибка чтения конфига.
+ */
+internal data class AssistHandoffPayload(val context: String?, val image: ImagePart?)
+
+internal fun assistHandoffPayload(
+    screenContext: String?,
+    image: ImagePart?,
+    screenshotNote: String?,
+    attachScreenshot: Boolean?,
+): AssistHandoffPayload {
+    val attached = image.takeIf { attachScreenshot == true }
+    val context = if (attached != null) {
+        screenshotNote
+            ?.let { note -> listOfNotNull(screenContext, note).joinToString("\n") }
+            ?: screenContext
+    } else {
+        screenContext
+    }
+    return AssistHandoffPayload(context, attached)
+}
+
+/**
+ * Передача снимка в канал сбора assist-сессии: ждёт и снимок, и асинхронное решение
+ * attachScreenshot. Без этого быстрый колбэк снимка обгонял чтение конфига, и кадр
+ * молча терялся. Решение false закрывает канал сразу, не дожидаясь снимока.
+ * Повторные вызовы игнорируются: канал отдаётся ровно один раз.
+ */
+internal class AssistScreenshotSubmission(
+    private val submit: (ImagePart?) -> Unit,
+) {
+    private var decision: Boolean? = null
+    private var arrived = false
+    private var held: ImagePart? = null
+    private var submitted = false
+
+    fun onScreenshot(image: ImagePart?) {
+        if (submitted) return
+        arrived = true
+        held = image
+        flush()
+    }
+
+    fun onDecision(attach: Boolean) {
+        if (submitted) return
+        decision = attach
+        flush()
+    }
+
+    private fun flush() {
+        val attach = decision ?: return
+        if (attach && !arrived) return
+        submitted = true
+        submit(held.takeIf { attach })
+    }
+}
+
+/**
  * Координатор скриншота assist-сессии при чёрном системном кадре: держит состояние
  * «фолбэк в полёте» и гарантирует, что будет отдано ровно одно изображение —
  * результат фолбэка либо отложенный системный кадр на дедлайне. Запоздавший результат

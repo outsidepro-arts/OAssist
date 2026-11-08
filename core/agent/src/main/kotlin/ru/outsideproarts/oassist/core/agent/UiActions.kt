@@ -12,6 +12,8 @@ import android.os.Looper
 import android.view.accessibility.AccessibilityNodeInfo
 import android.view.accessibility.AccessibilityWindowInfo
 import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
@@ -85,8 +87,15 @@ class UiActions(
      */
     private class RootPick(val root: AccessibilityNodeInfo?, val fromOwnWindow: Boolean)
 
+    /**
+     * Блокирующие вызовы accessibility-фреймворка (список окон, [AccessibilityWindowInfo.getRoot])
+     * никогда не выполняются на главном потоке: ответ на них обязана выдать наш сервис доступности
+     * на том же главном потоке — вызов с главного потока сам себя блокирует до таймаута (ANR).
+     */
+    private suspend fun <T> offMain(block: suspend () -> T): T = withContext(Dispatchers.IO) { block() }
+
     @Suppress("DEPRECATION")
-    private fun targetRoot(service: AccessibilityService): RootPick {
+    private suspend fun targetRoot(service: AccessibilityService): RootPick = offMain {
         val own = service.packageName
         val windows = service.windows
         val index = pickWindowIndex(
@@ -95,9 +104,9 @@ class UiActions(
             },
             own,
         )
-        if (index != null) return RootPick(windows[index].root, false)
+        if (index != null) return@offMain RootPick(windows[index].root, false)
         val fallback = service.rootInActiveWindow
-        return RootPick(fallback, fallback?.packageName?.toString() == own)
+        RootPick(fallback, fallback?.packageName?.toString() == own)
     }
 
     suspend fun snapshot(): Result<UiSnapshotResult> = observationMutex.withLock {
@@ -184,7 +193,7 @@ class UiActions(
                     try {
                         val target = walk.refs.firstOrNull { it.isScrollable }
                             ?: return@withLock ToolResult(false, "Прокручиваемых узлов нет")
-                        if (target.performAction(action)) ToolResult(true, "Удалось прокрутить")
+                        if (offMain { target.performAction(action) }) ToolResult(true, "Удалось прокрутить")
                         else ToolResult(false, "Не удалось прокрутить")
                     } finally { walk.refs.forEach { it.recycle() } }
                 } finally { root.recycle() }
@@ -217,7 +226,7 @@ class UiActions(
                 val action = observations.action(snapshotId, index, actionIndex, actions)
                     ?: return@withLock ToolResult(false, "Список действий изменился или не был запрошен — вызови ui_get_screen и ui_get_actions заново")
                 val name = actionName(action)
-                if (hit.info.performAction(action.id)) {
+                if (offMain { hit.info.performAction(action.id) }) {
                     ToolResult(true, "Выполнено действие $name (элемент №$index)")
                 } else {
                     ToolResult(false, "Не удалось выполнить действие $name (элемент №$index)")
@@ -235,7 +244,7 @@ class UiActions(
                 "recents", "недавние" -> AccessibilityService.GLOBAL_ACTION_RECENTS
                 else -> return@withLock ToolResult(false, "Действие: back/home/recents")
             }
-            if (service.performGlobalAction(global)) return@withLock ToolResult(true, "Выполнено: $action")
+            if (offMain { service.performGlobalAction(global) }) return@withLock ToolResult(true, "Выполнено: $action")
             val keyCode = when (action.lowercase()) {
                 "back", "назад" -> 4
                 "home", "домой" -> 3
@@ -270,8 +279,8 @@ class UiActions(
 
     private suspend fun dispatchAccessibilitySwipe(
         fromX: Int, fromY: Int, toX: Int, toY: Int, durationMs: Long, callback: (Boolean) -> Unit,
-    ): Result<Boolean> {
-        val service = serviceOrError().getOrElse { return Result.failure(it) }
+    ): Result<Boolean> = offMain {
+        val service = serviceOrError().getOrElse { return@offMain Result.failure(it) }
         val path = Path().apply {
             moveTo(fromX.toFloat(), fromY.toFloat())
             lineTo(toX.toFloat(), toY.toFloat())
@@ -279,7 +288,7 @@ class UiActions(
         val gesture = GestureDescription.Builder()
             .addStroke(GestureDescription.StrokeDescription(path, 0, durationMs))
             .build()
-        return Result.success(service.dispatchGesture(
+        Result.success(service.dispatchGesture(
             gesture,
             object : AccessibilityService.GestureResultCallback() {
                 override fun onCompleted(gestureDescription: GestureDescription?) {
@@ -363,7 +372,8 @@ class UiActions(
             return ToolResult(false, it.message ?: STALE_SNAPSHOT_MESSAGE)
         }
         return try {
-            if (action(hit.info)) ToolResult(true, "Удалось $verb (узел №$index)")
+            // action-лямбда выполняет performAction — блокирующий IPC с accessibility-сервисом.
+            if (offMain { action(hit.info) }) ToolResult(true, "Удалось $verb (узел №$index)")
             else ToolResult(false, "Не удалось $verb (узел №$index)")
         } finally { hit.info.recycle() }
     }
@@ -376,7 +386,7 @@ class UiActions(
             .mapIndexed { i, action -> UiNodeAction(i, action.id, action.label?.toString()) }
 
     @Suppress("DEPRECATION")
-    private fun collectCandidates(root: AccessibilityNodeInfo): Walk {
+    private suspend fun collectCandidates(root: AccessibilityNodeInfo): Walk = offMain {
         val refs = mutableListOf<AccessibilityNodeInfo>()
         val out = mutableListOf<UiNode>()
         val queue = ArrayDeque<Pair<AccessibilityNodeInfo, Int>>()
@@ -416,7 +426,7 @@ class UiActions(
             }
             if (node !== root) node.recycle()
         }
-        return Walk(refs, out, total)
+        Walk(refs, out, total)
     }
 
     /** Узел снимка вместе с живой ссылкой — нужен и для действия, и для снимка элемента. */
@@ -541,10 +551,12 @@ class UiActions(
      * Ретраи покрывают троттлинг платформы (слишком частые запросы); почти чёрный кадр
      * отдаётся как есть с пометкой — шторка скринридера извне не отключается.
      */
-    private suspend fun captureShot(bounds: Rect?): Result<Shot> = captureMutex.withLock {
-        val frame = withScreenshotRetry { captureFrame() }
-            .getOrElse { return@withLock Result.failure(it) }
-        finishFrame(frame, bounds)
+    private suspend fun captureShot(bounds: Rect?): Result<Shot> = offMain {
+        captureMutex.withLock {
+            val frame = withScreenshotRetry { captureFrame() }
+                .getOrElse { return@withLock Result.failure(it) }
+            finishFrame(frame, bounds)
+        }
     }
 
     /**
@@ -552,15 +564,17 @@ class UiActions(
      * укладывается в дедлайн assist-сессии. Null — снимок недоступен (сервис не подключён,
      * захват не удался).
      */
-    suspend fun quickShot(): QuickShot? = captureMutex.withLock {
-        val service = serviceProvider() ?: return@withLock null
-        overlayHidden {
-            // Один повтор: сразу после тулового захвата (тот же captureMutex) первый запрос
-            // почти гарантированно упирается в троттлинг платформы.
-            val frame = withScreenshotRetry(maxRetries = 1) { captureFrame(service) }
-                .getOrNull() ?: return@overlayHidden null
-            val part = finishFrame(frame, null).getOrNull()?.part ?: return@overlayHidden null
-            QuickShot(part, frame.black, frame.source == ScreenshotSource.WINDOW)
+    suspend fun quickShot(): QuickShot? = offMain {
+        captureMutex.withLock {
+            val service = serviceProvider() ?: return@withLock null
+            overlayHidden {
+                // Один повтор: сразу после тулового захвата (тот же captureMutex) первый запрос
+                // почти гарантированно упирается в троттлинг платформы.
+                val frame = withScreenshotRetry(maxRetries = 1) { captureFrame(service) }
+                    .getOrNull() ?: return@overlayHidden null
+                val part = finishFrame(frame, null).getOrNull()?.part ?: return@overlayHidden null
+                QuickShot(part, frame.black, frame.source == ScreenshotSource.WINDOW)
+            }
         }
     }
 
@@ -609,17 +623,17 @@ class UiActions(
     }
 
     @Suppress("DEPRECATION")
-    private fun targetWindow(service: AccessibilityService): AccessibilityWindowInfo? {
+    private suspend fun targetWindow(service: AccessibilityService): AccessibilityWindowInfo? = offMain {
         val own = service.packageName
         val windows = service.windows
         val index = pickWindowIndex(
             windows.map { UiWindowState(it.root?.packageName?.toString(), it.type, it.isActive, it.isFocused) },
             own,
         )
-        return index?.let { windows[it] }
+        index?.let { windows[it] }
     }
 
-    private suspend fun takeDisplayShot(service: AccessibilityService): Result<Bitmap> {
+    private suspend fun takeDisplayShot(service: AccessibilityService): Result<Bitmap> = offMain {
         val deferred = CompletableDeferred<Result<Bitmap>>()
         service.takeScreenshot(
             android.view.Display.DEFAULT_DISPLAY,
@@ -634,12 +648,12 @@ class UiActions(
                 }
             },
         )
-        return withTimeoutOrNull(SCREENSHOT_TIMEOUT_MS) { deferred.await() }
+        withTimeoutOrNull(SCREENSHOT_TIMEOUT_MS) { deferred.await() }
             ?: Result.failure(IllegalStateException("снимок не сделан за ${SCREENSHOT_TIMEOUT_MS}мс"))
     }
 
     @android.annotation.TargetApi(34)
-    private suspend fun takeWindowShot(service: AccessibilityService, windowId: Int): Result<Bitmap> {
+    private suspend fun takeWindowShot(service: AccessibilityService, windowId: Int): Result<Bitmap> = offMain {
         val deferred = CompletableDeferred<Result<Bitmap>>()
         service.takeScreenshotOfWindow(
             windowId,
@@ -654,7 +668,7 @@ class UiActions(
                 }
             },
         )
-        return withTimeoutOrNull(SCREENSHOT_TIMEOUT_MS) { deferred.await() }
+        withTimeoutOrNull(SCREENSHOT_TIMEOUT_MS) { deferred.await() }
             ?: Result.failure(IllegalStateException("снимок не сделан за ${SCREENSHOT_TIMEOUT_MS}мс"))
     }
 

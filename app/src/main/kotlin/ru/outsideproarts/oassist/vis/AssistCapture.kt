@@ -15,7 +15,6 @@ internal class AssistCapture<T>(private val complete: (String?, T?) -> Unit) {
     fun start(
         expectContext: Boolean,
         expectScreenshot: Boolean,
-        screenshotEnabled: () -> Boolean = { true },
     ): Boolean {
         if (started || terminal) {
             cancel()
@@ -23,7 +22,7 @@ internal class AssistCapture<T>(private val complete: (String?, T?) -> Unit) {
         }
         started = true
         awaitingContext = expectContext
-        awaitingScreenshot = expectScreenshot && runCatching(screenshotEnabled).getOrDefault(false)
+        awaitingScreenshot = expectScreenshot
         finishIfReady()
         return true
     }

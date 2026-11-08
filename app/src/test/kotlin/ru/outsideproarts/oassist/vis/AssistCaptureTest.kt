@@ -96,16 +96,6 @@ class AssistCaptureTest {
     }
 
     @Test
-    fun settingsFailureDisablesScreenshotInsteadOfAttachingItOrWaiting() {
-        val results = mutableListOf<Pair<String?, String?>>()
-        val capture = AssistCapture<String> { context, image -> results += context to image }
-        capture.start(true, true, screenshotEnabled = { error("settings unavailable") })
-        capture.screenshot("must not attach")
-        capture.context("screen")
-        assertEquals(listOf("screen" to null), results)
-    }
-
-    @Test
     fun absentFlagsAndMissingCallbacksStillCompleteOnce() {
         val results = mutableListOf<Pair<String?, String?>>()
         val noFlags = AssistCapture<String> { context, image -> results += context to image }

@@ -14,6 +14,8 @@ import androidx.appcompat.app.AppCompatActivity
 import androidx.core.net.toUri
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
+import androidx.lifecycle.lifecycleScope
+import kotlinx.coroutines.launch
 import ru.outsideproarts.oassist.core.agent.AssistSessionStore
 import ru.outsideproarts.oassist.core.model.ImagePart
 
@@ -49,60 +51,76 @@ class AssistActivity : AppCompatActivity() {
             return
         }
         val owner = if (incomingToken == null) AssistSessionStore.beginScreenCapture() else null
-        overlayNeeded = AssistSessionStore.activeShowOverlay() ?: kotlinx.coroutines.runBlocking {
-            runCatching {
-                ru.outsideproarts.oassist.core.agent.AgentFactory.get()
-                    .modeConfig(ru.outsideproarts.oassist.core.model.AssistMode.ASSISTANT)
-                    .assistant?.showOverlay ?: true
-            }.getOrDefault(true)
-        }
-        val attachScreenshot = kotlinx.coroutines.runBlocking {
-            runCatching {
-                ru.outsideproarts.oassist.core.agent.AgentFactory.get()
-                    .modeConfig(ru.outsideproarts.oassist.core.model.AssistMode.ASSISTANT)
-                    .assistant?.attachScreenshot ?: true
-            }.getOrDefault(false)
-        }
-        retained.captureToken = incomingToken ?: owner?.let {
-            val screenContext = extractScreenContext(intent)
+        retained.captureToken = incomingToken
+        // Пиксели и структура извлекаются до очистки intent; далее остаётся только memory handle.
+        val extractedContext = if (incomingToken == null) {
+            extractScreenContext(intent)
                 ?: intent?.getStringExtra(AssistantOverlayService.EXTRA_SCREEN_CONTEXT)
-            val image = if (attachScreenshot) {
-                intent?.getStringExtra(AssistantOverlayService.EXTRA_SCREEN_IMAGE)
-                    ?.let { encoded -> ImagePart(imageBase64 = encoded) }
-                    ?: extractScreenImage(intent)
-            } else null
-            AssistScreenHandoff.publish(it, screenContext, image)
-        }
+        } else null
+        val extractedImage = if (incomingToken == null) {
+            intent?.getStringExtra(AssistantOverlayService.EXTRA_SCREEN_IMAGE)
+                ?.let { encoded -> ImagePart(imageBase64 = encoded) }
+                ?: extractScreenImage(intent)
+        } else null
         // Retain only the memory handle; neither recreation nor the next Binder hop carries pixels.
         intent?.removeExtra(AssistantOverlayService.EXTRA_SCREEN_CONTEXT)
         intent?.removeExtra(AssistantOverlayService.EXTRA_SCREEN_IMAGE)
         intent?.removeExtra("android.app.assist.AssistStructure")
         intent?.removeExtra("android.intent.extra.ASSIST_SCREENSHOT")
-        retained.overlayNeeded = overlayNeeded
-        retained.initialized = true
-        if (!contextAvailable) {
-            finish()
-            return
-        }
-
-        if (overlayNeeded && !Settings.canDrawOverlays(this)) {
-            val overlayIntent = Intent(
-                Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
-                "package:$packageName".toUri(),
-            )
-            overlayLauncher.launch(overlayIntent)
-            return
-        }
-        if (!overlayNeeded && !notificationsEnabled()) {
-            // Notification-режим без уведомлений = «призрачная сессия» без UI: не стартуем.
-            if (android.os.Build.VERSION.SDK_INT >= 33) {
-                notificationLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
-            } else {
-                openNotificationSettings()
+        // Конфиг читается асинхронно: runBlocking здесь блокировал главный поток трамплина.
+        // При ошибке чтения сохранены прежние умолчания: showOverlay -> true,
+        // attachScreenshot -> false (снимок не публикуется). CancellationException не глотается.
+        // Осознанно: уничтожение активити во время чтения прерывает трамплин (окно — одно
+        // чтение конфига); незавершённый владелец захвата закрывается при отмене ниже,
+        // опубликованный токен — в onCleared.
+        lifecycleScope.launch {
+            val config = try {
+                kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+                    ru.outsideproarts.oassist.core.agent.AgentFactory.get()
+                        .modeConfig(ru.outsideproarts.oassist.core.model.AssistMode.ASSISTANT)
+                }
+            } catch (cancelled: kotlinx.coroutines.CancellationException) {
+                owner?.let(AssistSessionStore::cancelScreenCapture)
+                throw cancelled
+            } catch (e: Exception) {
+                null
             }
-            return
+            if (isFinishing || isDestroyed) {
+                owner?.let(AssistSessionStore::cancelScreenCapture)
+                return@launch
+            }
+            overlayNeeded = AssistSessionStore.activeShowOverlay()
+                ?: (config?.assistant?.showOverlay ?: true)
+            val attachScreenshot = config != null && (config.assistant?.attachScreenshot ?: true)
+            retained.captureToken = incomingToken ?: owner?.let {
+                AssistScreenHandoff.publish(it, extractedContext, extractedImage.takeIf { attachScreenshot })
+            }
+            retained.overlayNeeded = overlayNeeded
+            retained.initialized = true
+            if (!contextAvailable) {
+                finish()
+                return@launch
+            }
+
+            if (overlayNeeded && !Settings.canDrawOverlays(this@AssistActivity)) {
+                val overlayIntent = Intent(
+                    Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
+                    "package:$packageName".toUri(),
+                )
+                overlayLauncher.launch(overlayIntent)
+                return@launch
+            }
+            if (!overlayNeeded && !notificationsEnabled()) {
+                // Notification-режим без уведомлений = «призрачная сессия» без UI: не стартуем.
+                if (android.os.Build.VERSION.SDK_INT >= 33) {
+                    notificationLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
+                } else {
+                    openNotificationSettings()
+                }
+                return@launch
+            }
+            ensureMicAndStart()
         }
-        ensureMicAndStart()
     }
 
     private val overlayLauncher = registerForActivityResult(

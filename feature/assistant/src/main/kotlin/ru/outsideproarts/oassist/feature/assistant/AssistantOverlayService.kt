@@ -35,6 +35,7 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import ru.outsideproarts.oassist.core.agent.AgentFactory
 import ru.outsideproarts.oassist.core.agent.AgentLoop
@@ -154,6 +155,9 @@ private val sessionTurns = mutableListOf<ru.outsideproarts.oassist.core.model.St
 
     private val overlayHideMutex = kotlinx.coroutines.sync.Mutex()
 
+    /** Сериализует обработку onStartCommand: порядок интентов сохраняется при асинхронном конфиге. */
+    private val startCommandMutex = kotlinx.coroutines.sync.Mutex()
+
     /** Скрытие панели на время координатных жестов агента: тапы должны доставаться приложению. */
     private val overlayControlImpl = object : ru.outsideproarts.oassist.core.agent.OverlayControl {
         override suspend fun <T> withOverlayHidden(block: suspend () -> T): T {
@@ -245,29 +249,54 @@ private val sessionTurns = mutableListOf<ru.outsideproarts.oassist.core.model.St
             if (!sessionActive) stopSelf(startId)
             return START_NOT_STICKY
         }
-        kotlinx.coroutines.runBlocking { loadModeConfig() }
+        // FGS-промоушен не ждёт чтение конфига: его таймаут короче медленного DataStore-чтения,
+        // а runBlocking здесь блокировал главный поток до ANR. Содержимое уведомления
+        // обновится после loadModeConfig().
+        startForegroundCompat()
+        val cmd = intent?.getStringExtra(EXTRA_CMD)
+        val replyText = if (cmd == CMD_REPLY) {
+            android.app.RemoteInput.getResultsFromIntent(intent)
+                ?.getCharSequence(EXTRA_REPLY)?.toString()
+        } else null
+        // Обработка команд сериализована: при асинхронном чтении конфига порядок интентов
+        // сохраняется (порядок постановки в очередь = порядок onStartCommand).
+        serviceScope.launch {
+            startCommandMutex.withLock {
+                processStartCommand(hasCapture, captureToken, cmd, replyText, startId)
+            }
+        }
+        return START_NOT_STICKY
+    }
+
+    private suspend fun processStartCommand(
+        hasCapture: Boolean,
+        captureToken: String?,
+        cmd: String?,
+        replyText: String?,
+        startId: Int,
+    ) {
+        loadModeConfig()
         val capturedSession = if (hasCapture) {
             AssistSessionStore.consumeScreenCapture(requireNotNull(captureToken), attachScreenshot)
                 ?: run {
                     if (!sessionActive) stopSelf(startId)
-                    return START_NOT_STICKY
+                    return
                 }
         } else null
-        startForegroundCompat()
-        when (intent?.getStringExtra(EXTRA_CMD)) {
+        // Ранний startForegroundCompat мог опубликовать уведомление до чтения конфига.
+        refreshSessionNotification()
+        when (cmd) {
             CMD_MIC -> {
                 execute(voiceFlow.onPlayPause())
-                return START_NOT_STICKY
+                return
             }
             CMD_CLOSE -> {
                 stopSelf()
-                return START_NOT_STICKY
+                return
             }
             CMD_REPLY -> {
-                val text = android.app.RemoteInput.getResultsFromIntent(intent)
-                    ?.getCharSequence(EXTRA_REPLY)?.toString()
-                if (!text.isNullOrBlank()) execute(voiceFlow.onUserSubmit(text))
-                return START_NOT_STICKY
+                if (!replyText.isNullOrBlank()) execute(voiceFlow.onUserSubmit(replyText))
+                return
             }
         }
         val session = capturedSession ?: AssistSessionStore.getOrCreate()
@@ -276,7 +305,7 @@ private val sessionTurns = mutableListOf<ru.outsideproarts.oassist.core.model.St
             if (showOverlay && !Settings.canDrawOverlays(this)) {
                 hintText = getString(R.string.assistant_no_overlay)
                 refreshSessionNotification()
-                return START_NOT_STICKY
+                return
             }
             mediaRouter = MediaButtonRouter(this) { execute(voiceFlow.onPlayPause()) }.also { it.start() }
             if (showOverlay) addOverlay()
@@ -294,7 +323,6 @@ private val sessionTurns = mutableListOf<ru.outsideproarts.oassist.core.model.St
         } else {
             execute(voiceFlow.onReactivate())
         }
-        return START_NOT_STICKY
     }
 
     override fun onDestroy() {
@@ -319,9 +347,18 @@ private val sessionTurns = mutableListOf<ru.outsideproarts.oassist.core.model.St
 
     private suspend fun loadModeConfig() {
         attachScreenshot = false
-        val config = runCatching {
-            AgentFactory.get().modeConfig(AssistMode.ASSISTANT)
-        }.getOrNull() ?: return
+        // withContext(IO): чтение DataStore и десериализация не выполняются на главном потоке.
+        // CancellationException не глотается: после onDestroy (serviceScope.cancel) обработка
+        // команды не продолжается — иначе consumeScreenCapture создавал бы «зомби»-сессию.
+        val config = try {
+            kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+                AgentFactory.get().modeConfig(AssistMode.ASSISTANT)
+            }
+        } catch (cancelled: kotlinx.coroutines.CancellationException) {
+            throw cancelled
+        } catch (e: Exception) {
+            null
+        } ?: return
         sttLanguage = config.effectiveStt().language
         sttRecognizerComponent = config.effectiveStt().recognizerComponent
         sttBluetoothInput = config.effectiveStt().bluetoothInput
