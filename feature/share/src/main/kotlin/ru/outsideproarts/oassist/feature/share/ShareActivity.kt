@@ -7,6 +7,7 @@ import android.widget.Toast
 import androidx.activity.compose.setContent
 import androidx.appcompat.app.AppCompatActivity
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
@@ -15,6 +16,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.safeDrawingPadding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
@@ -67,10 +69,13 @@ import ru.outsideproarts.oassist.core.ui.OAssistDimens
 import ru.outsideproarts.oassist.core.ui.components.ChatDeleteDialog
 import ru.outsideproarts.oassist.core.ui.components.ChatMessageBubble
 import ru.outsideproarts.oassist.core.ui.components.ChatPickerList
+import ru.outsideproarts.oassist.core.ui.components.ChatScrollRequester
+import ru.outsideproarts.oassist.core.ui.components.ChatScrollToEndButton
 import ru.outsideproarts.oassist.core.ui.components.ChatUnsavedDialog
 import ru.outsideproarts.oassist.core.ui.components.OAssistImageThumbnail
 import ru.outsideproarts.oassist.core.ui.components.OAssistPanel
 import ru.outsideproarts.oassist.core.ui.components.OAssistLiveStatus
+import ru.outsideproarts.oassist.core.ui.components.rememberChatListScroll
 import ru.outsideproarts.oassist.core.ui.theme.OAssistTheme
 
 private const val SHARE_MAX_IMAGES = 4
@@ -307,6 +312,8 @@ private fun ShareFlow(payload: SharePayload) {
             canSend = vm.canSend && !payload.unsupported,
             saveFailed = vm.saveFailed,
             thinkingContextReduced = vm.providerNotice != null,
+            chatId = vm.chatId,
+            scrollRequester = vm.scrollRequester,
             question = vm.question,
             onQuestionChange = { vm.question = it },
             onSend = {
@@ -417,6 +424,9 @@ private fun ShareChatList(
     )
 }
 
+/** Ключ памяти позиций прокрутки для несохранённого черновика окна «Отправить». */
+private const val ShareDraftScrollKey = "draft:share"
+
 /** Экран диалога: история чата, прикреплённый файл и поле промпта. */
 @Composable
 private fun ShareConversation(
@@ -433,6 +443,8 @@ private fun ShareConversation(
     canSend: Boolean,
     saveFailed: Boolean,
     thinkingContextReduced: Boolean,
+    chatId: String?,
+    scrollRequester: ChatScrollRequester,
     question: TextFieldValue,
     onQuestionChange: (TextFieldValue) -> Unit,
     onSend: () -> Unit,
@@ -446,6 +458,15 @@ private fun ShareConversation(
     val speakLabel = stringResource(R.string.share_speak_answer)
     val saveLabel = stringResource(R.string.share_save_chat)
     val deleteLabel = stringResource(R.string.share_delete_chat)
+
+    val listState = rememberLazyListState()
+    val scrollState = rememberChatListScroll(
+        listState = listState,
+        requester = scrollRequester,
+        chatId = chatId,
+        draftKey = ShareDraftScrollKey,
+        contentKey = listOf(turns.size, activeUserMsg, response, workEvents, isStreaming),
+    )
 
     Column(
         modifier = Modifier
@@ -487,46 +508,27 @@ private fun ShareConversation(
             }
         }
 
-        LazyColumn(
+        Box(
             modifier = Modifier
                 .weight(1f)
                 .fillMaxWidth(),
-            verticalArrangement = Arrangement.spacedBy(OAssistDimens.ItemSpacing),
         ) {
-            items(turns) { turn ->
-                ChatMessageBubble(
-                    isUser = true,
-                    answer = turn.userText,
-                    audio = turn.userAudio,
-                    speakLabel = speakLabel,
-                )
-                val speakTurn: (() -> Unit)? = if (turn.answer.isNotBlank()) {
-                    {
-                        SpeechHandle.get()?.let { speech ->
-                            SentenceSplitter.splitSentences(turn.answer).forEach { speech.speak(it) }
-                        }
-                    }
-                } else {
-                    null
-                }
-                ChatMessageBubble(
-                    isUser = false,
-                    answer = turn.answer,
-                    work = turn.work,
-                    usage = turn.usage,
-                    onSpeak = speakTurn,
-                    speakLabel = speakLabel,
-                )
-            }
-            if (activeUserMsg != null) {
-                item {
-                    ChatMessageBubble(isUser = true, answer = activeUserMsg.orEmpty(), speakLabel = speakLabel)
-                }
-                item {
-                    val speakTurn: (() -> Unit)? = if (response.isNotBlank()) {
+            LazyColumn(
+                state = listState,
+                modifier = Modifier.fillMaxSize(),
+                verticalArrangement = Arrangement.spacedBy(OAssistDimens.ItemSpacing),
+            ) {
+                items(turns) { turn ->
+                    ChatMessageBubble(
+                        isUser = true,
+                        answer = turn.userText,
+                        audio = turn.userAudio,
+                        speakLabel = speakLabel,
+                    )
+                    val speakTurn: (() -> Unit)? = if (turn.answer.isNotBlank()) {
                         {
                             SpeechHandle.get()?.let { speech ->
-                                SentenceSplitter.splitSentences(response).forEach { speech.speak(it) }
+                                SentenceSplitter.splitSentences(turn.answer).forEach { speech.speak(it) }
                             }
                         }
                     } else {
@@ -534,18 +536,48 @@ private fun ShareConversation(
                     }
                     ChatMessageBubble(
                         isUser = false,
-                        answer = response,
-                        work = workEvents,
-                        usage = usage,
-                        isStreaming = isStreaming,
+                        answer = turn.answer,
+                        work = turn.work,
+                        usage = turn.usage,
                         onSpeak = speakTurn,
                         speakLabel = speakLabel,
                     )
                 }
+                if (activeUserMsg != null) {
+                    item {
+                        ChatMessageBubble(isUser = true, answer = activeUserMsg.orEmpty(), speakLabel = speakLabel)
+                    }
+                    item {
+                        val speakTurn: (() -> Unit)? = if (response.isNotBlank()) {
+                            {
+                                SpeechHandle.get()?.let { speech ->
+                                    SentenceSplitter.splitSentences(response).forEach { speech.speak(it) }
+                                }
+                            }
+                        } else {
+                            null
+                        }
+                        ChatMessageBubble(
+                            isUser = false,
+                            answer = response,
+                            work = workEvents,
+                            usage = usage,
+                            isStreaming = isStreaming,
+                            onSpeak = speakTurn,
+                            speakLabel = speakLabel,
+                        )
+                    }
+                }
+                item {
+                    ShareReceivedPanel(payload = payload, compact = true, payloadLoadFailed = payloadLoadFailed)
+                }
             }
-            item {
-                ShareReceivedPanel(payload = payload, compact = true, payloadLoadFailed = payloadLoadFailed)
-            }
+            ChatScrollToEndButton(
+                state = scrollState,
+                modifier = Modifier
+                    .align(Alignment.BottomEnd)
+                    .padding(OAssistDimens.ItemSpacing),
+            )
         }
 
         ru.outsideproarts.oassist.core.ui.components.ThinkingContextNotice(thinkingContextReduced)

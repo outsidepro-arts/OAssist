@@ -87,6 +87,7 @@
     <string name="chats_cancel">Cancel</string>
     <string name="chats_new">New chat</string>
     <string name="chats_assistant_title">Assistant</string>
+    <string name="chats_scroll_to_end">Scroll to end</string>
     <string name="chats_search_hint">Search chats</string>
     <string name="chats_sort_label">Sort chats</string>
     <string name="chats_sort_date_desc">Date: newest first</string>

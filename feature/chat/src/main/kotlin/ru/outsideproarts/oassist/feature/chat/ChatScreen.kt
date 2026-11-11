@@ -7,6 +7,7 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
@@ -97,8 +98,11 @@ import ru.outsideproarts.oassist.core.ui.components.ApprovalDialog
 import ru.outsideproarts.oassist.core.ui.components.ChatDeleteDialog
 import ru.outsideproarts.oassist.core.ui.components.ChatMessageBubble
 import ru.outsideproarts.oassist.core.ui.components.ChatPickerList
+import ru.outsideproarts.oassist.core.ui.components.ChatScrollMemory
+import ru.outsideproarts.oassist.core.ui.components.ChatScrollToEndButton
 import ru.outsideproarts.oassist.core.ui.components.ChatUnsavedDialog
 import ru.outsideproarts.oassist.core.ui.components.OAssistPanel
+import ru.outsideproarts.oassist.core.ui.components.rememberChatListScroll
 
 /**
  * Одна реплика ленты. У ассистента три раздельные проекции:
@@ -115,6 +119,9 @@ data class ChatItem(
     /** Статистика хода (токены/cost от провайдера); null — провайдер не прислал. */
     val usage: ru.outsideproarts.oassist.core.model.ProviderUsage? = null,
 )
+
+/** Ключ памяти позиций прокрутки для несохранённого черновика основного окна. */
+private const val ChatDraftScrollKey = "draft:chat"
 
 /** Проекция пузыря ленты в историю модели: только основной ответ ассистента —
  * мысль и тулы уже связаны tool-протоколом и не должны дублироваться текстом. */
@@ -198,6 +205,13 @@ fun ChatScreen(
     // У viewModel.scope нет MonotonicFrameClock, анимация из него падает.
     val uiScope = rememberCoroutineScope()
     val listState = rememberLazyListState()
+    val scrollState = rememberChatListScroll(
+        listState = listState,
+        requester = viewModel.scrollRequester,
+        chatId = chatId,
+        draftKey = ChatDraftScrollKey,
+        contentKey = listOf(messages.size, messages.lastOrNull(), isStreaming),
+    )
 
     val netHandle = remember { ru.outsideproarts.oassist.core.net.NetworkHandle.get() }
     val offlineRetryText = stringResource(ru.outsideproarts.oassist.core.ui.R.string.net_offline_retry)
@@ -522,6 +536,8 @@ fun ChatScreen(
         if ((userMsg.isEmpty() && audio == null) || isStreaming || viewModel.isLoadingHistory) return
         messages.add(ChatItem(ChatRole.USER, answer = userMsg, audio = audio))
         isStreaming = true
+        // Своё сообщение всегда показываем снизу: ленту ждём в конце.
+        viewModel.scrollRequester.scrollToEnd()
         // Barge-in: новый вопрос прерывает озвучку предыдущего ответа.
         stopSpeech?.invoke()
         sounds?.playIfEnabled(AgentSound.MSG_SEND, soundEnabled)
@@ -596,6 +612,8 @@ fun ChatScreen(
                 providerNotice = null
                 turnStore.addAll(turns)
                 loadTurnsIntoUi(turns)
+                // Позиция восстанавливается из памяти; для незнакомого диалога — в конец.
+                viewModel.scrollRequester.scrollTo(ChatScrollMemory.restore(summary.id))
             } catch (cancel: kotlinx.coroutines.CancellationException) {
                 throw cancel
             } catch (_: Exception) {
@@ -637,6 +655,7 @@ fun ChatScreen(
             messages.clear()
             providerNotice = null
             pendingApproval = null
+            viewModel.scrollRequester.scrollToEnd()
             viewModel.isLoadingHistory = false
         }
     }
@@ -699,6 +718,7 @@ fun ChatScreen(
     }
 
     fun deleteSavedChat(id: String) {
+        ChatScrollMemory.remove(id)
         ChatHandle.get()?.let { repo ->
             scope.launch {
                 try {
@@ -983,9 +1003,6 @@ fun ChatScreen(
         prevVoiceRoute = voiceRoute
     }
 
-    LaunchedEffect(messages.size) {
-        if (messages.isNotEmpty()) listState.animateScrollToItem(messages.size - 1)
-    }
     ModalNavigationDrawer(
         drawerState = drawerState,
         drawerContent = {
@@ -1080,43 +1097,53 @@ fun ChatScreen(
             }
 
             // Лента всегда с весом: поле ввода прибито к низу и не гуляет.
-            LazyColumn(
-                state = listState,
+            Box(
                 modifier = Modifier
                     .weight(1f)
                     .fillMaxWidth(),
-                verticalArrangement = Arrangement.spacedBy(OAssistDimens.ItemSpacing),
             ) {
-                if (messages.isEmpty()) {
-                    item {
-                        OAssistPanel(title = emptyTitle) {
-                            Text(
-                                text = emptyBody,
-                                style = MaterialTheme.typography.bodyMedium,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                LazyColumn(
+                    state = listState,
+                    modifier = Modifier.fillMaxSize(),
+                    verticalArrangement = Arrangement.spacedBy(OAssistDimens.ItemSpacing),
+                ) {
+                    if (messages.isEmpty()) {
+                        item {
+                            OAssistPanel(title = emptyTitle) {
+                                Text(
+                                    text = emptyBody,
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                )
+                            }
+                        }
+                    } else {
+                        items(messages) { item ->
+                            val canSpeak = speakSentence != null &&
+                                item.role == ChatRole.ASSISTANT &&
+                                item.answer.isNotBlank()
+                            MessageBubble(
+                                item = item,
+                                onSpeak = if (canSpeak) {
+                                    {
+                                        SentenceSplitter.splitSentences(item.answer).forEach {
+                                            speakSentence?.invoke(it)
+                                        }
+                                    }
+                                } else {
+                                    null
+                                },
+                                speakLabel = speakAnswerLabel,
                             )
                         }
                     }
-                } else {
-                    items(messages) { item ->
-                        val canSpeak = speakSentence != null &&
-                            item.role == ChatRole.ASSISTANT &&
-                            item.answer.isNotBlank()
-                        MessageBubble(
-                            item = item,
-                            onSpeak = if (canSpeak) {
-                                {
-                                    SentenceSplitter.splitSentences(item.answer).forEach {
-                                        speakSentence?.invoke(it)
-                                    }
-                                }
-                            } else {
-                                null
-                            },
-                            speakLabel = speakAnswerLabel,
-                        )
-                    }
                 }
+                ChatScrollToEndButton(
+                    state = scrollState,
+                    modifier = Modifier
+                        .align(Alignment.BottomEnd)
+                        .padding(OAssistDimens.ItemSpacing),
+                )
             }
 
             ru.outsideproarts.oassist.core.ui.components.ThinkingContextNotice(providerNotice != null)

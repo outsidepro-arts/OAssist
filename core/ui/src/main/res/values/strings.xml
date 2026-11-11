@@ -87,6 +87,7 @@
     <string name="chats_cancel">Отмена</string>
     <string name="chats_new">Новый чат</string>
     <string name="chats_assistant_title">Ассистент</string>
+    <string name="chats_scroll_to_end">Прокрутить в конец</string>
     <string name="chats_search_hint">Поиск по чатам</string>
     <string name="chats_sort_label">Сортировка чатов</string>
     <string name="chats_sort_date_desc">Дата: новые сверху</string>

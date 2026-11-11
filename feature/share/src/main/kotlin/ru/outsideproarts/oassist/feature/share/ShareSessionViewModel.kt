@@ -45,6 +45,8 @@ import ru.outsideproarts.oassist.core.speech.AgentSound
 import ru.outsideproarts.oassist.core.speech.SoundHandle
 import ru.outsideproarts.oassist.core.speech.SpeechHandle
 import ru.outsideproarts.oassist.core.speech.StreamSpeaker
+import ru.outsideproarts.oassist.core.ui.components.ChatScrollMemory
+import ru.outsideproarts.oassist.core.ui.components.ChatScrollRequester
 
 /** Одноразовый тост из VM: строка резолвится в UI в текущей локали Activity. */
 sealed interface ShareToast {
@@ -86,6 +88,12 @@ class ShareSessionViewModel internal constructor(private val chatStore: ShareCha
     /** Ходы накапливаются в памяти — источник истины для истории и записи в БД. */
     val turns = mutableStateListOf<StoredTurn>()
     var diagnosticOperations = mutableListOf<String>()
+
+    /**
+     * Задания прокрутки ленты: ставятся при открытии/сбросе разговора и отправке
+     * вопроса, исполняются UI (см. rememberChatListScroll в ShareConversation).
+     */
+    val scrollRequester = ChatScrollRequester()
     var autoSave by mutableStateOf(true)
     var images by mutableStateOf<List<ImagePart>>(emptyList())
         private set
@@ -170,6 +178,8 @@ class ShareSessionViewModel internal constructor(private val chatStore: ShareCha
         turnUsage = null
         isStreaming = false
         question = TextFieldValue("")
+        // Свежий разговор всегда открывается с конца ленты.
+        scrollRequester.scrollToEnd()
     }
 
     var question by mutableStateOf(TextFieldValue(""))
@@ -259,6 +269,8 @@ class ShareSessionViewModel internal constructor(private val chatStore: ShareCha
             inConversation = true
             turns.addAll(loaded)
             savedTurnCount = loaded.size
+            // Позиция восстанавливается из памяти; для незнакомого диалога — в конец.
+            scrollRequester.scrollTo(ChatScrollMemory.restore(summary.id))
         }
     }
 
@@ -280,6 +292,7 @@ class ShareSessionViewModel internal constructor(private val chatStore: ShareCha
 
     fun deleteChatFromList(summary: ChatSummary) {
         changeConversation(discard = summary.id == chatId) {
+            ChatScrollMemory.remove(summary.id)
             chatStore?.deleteChat(summary.id)
             if (summary.id == chatId) resetConversation()
         }
@@ -305,7 +318,10 @@ class ShareSessionViewModel internal constructor(private val chatStore: ShareCha
      */
     fun deleteCurrentChat() {
         changeConversation(discard = true) {
-            chatId?.let { chatStore?.deleteChat(it) }
+            chatId?.let {
+                ChatScrollMemory.remove(it)
+                chatStore?.deleteChat(it)
+            }
             resetConversation()
         }
     }
@@ -339,6 +355,8 @@ class ShareSessionViewModel internal constructor(private val chatStore: ShareCha
             inConversation = true
             turns.addAll(loaded)
             savedTurnCount = loaded.size
+            // Позиция восстанавливается из памяти; для незнакомого диалога — в конец.
+            scrollRequester.scrollTo(ChatScrollMemory.restore(id))
         }
     }
 
@@ -353,6 +371,8 @@ class ShareSessionViewModel internal constructor(private val chatStore: ShareCha
         val modelInput = request.modelInput
         val contentDesc = request.contentDesc
         activeUserMsg = userMsg
+        // Свой вопрос всегда показываем снизу: ленту ждём в конце.
+        scrollRequester.scrollToEnd()
         val history = turns.flatMap { it.modelMessages() }
         val timeline = WorkTimelineBuilder()
         workEvents = emptyList()

@@ -19,6 +19,7 @@ import ru.outsideproarts.oassist.core.model.AssistMode
 import ru.outsideproarts.oassist.core.model.AudioPart
 import ru.outsideproarts.oassist.core.model.ChatKind
 import ru.outsideproarts.oassist.core.model.StoredTurn
+import ru.outsideproarts.oassist.core.ui.components.ChatScrollRequester
 
 /** Отложенный ход: сеть пропала до/в начале стрима, повторим фронтом online. */
 internal data class PendingChatTurn(val text: String, val audio: AudioPart?)
@@ -37,6 +38,12 @@ class ChatSessionViewModel : ViewModel() {
     // Ходы накапливаются в памяти — источник истины для истории модели и записи в БД.
     val turnStore = mutableStateListOf<StoredTurn>()
     var diagnosticOperations = mutableListOf<String>()
+
+    /**
+     * Задания прокрутки ленты: ставятся при открытии/сбросе диалога и отправке
+     * сообщения, исполняются UI (см. rememberChatListScroll в ChatScreen).
+     */
+    val scrollRequester = ChatScrollRequester()
 
     var chatId by mutableStateOf<String?>(null)
     var chatKind by mutableStateOf(ChatKind.REGULAR)
