@@ -77,13 +77,13 @@ class ShareSessionViewModelTest {
         runCurrent()
         val saved = storage.rows.getValue(checkNotNull(vm.chatId)).single()
         assertEquals(listOf(ImagePart("aW1hZ2U=")), requests.single().last().images)
-        assertEquals(requests.single().last().images, saved.userImages)
+        assertEquals(requests.single().last().images, saved.turn.userImages)
         val reopened = vm()
         ready(reopened, checkNotNull(vm.chatId))
         assertEquals(saved, reopened.turns.single())
         reopened.ask(request("next"))
         runCurrent()
-        assertEquals(saved.userImages, requests.last().first { it.role == ChatRole.USER }.images)
+        assertEquals(saved.turn.userImages, requests.last().first { it.role == ChatRole.USER }.images)
     }
 
     @Test fun recreationKeepsOnePayloadLoadAndOneActiveStream() = runTest(dispatcher) {
@@ -129,8 +129,8 @@ class ShareSessionViewModelTest {
         assertEquals("B", vm.chatId)
         assertTrue(vm.turns.isEmpty())
         val partial = storage.rows.getValue("A").single()
-        assertEquals("", partial.answer)
-        assertEquals("partial A", (partial.work.single() as WorkEvent.Thought).text)
+        assertEquals("", partial.turn.answer)
+        assertEquals("partial A", (partial.turn.work.single() as WorkEvent.Thought).text)
         assertTrue(storage.rows.getValue("B").isEmpty())
     }
 
@@ -208,7 +208,7 @@ class ShareSessionViewModelTest {
         vm.openChat(summary("B"))
         runCurrent()
         assertEquals("B", vm.chatId)
-        assertEquals(listOf("one", "two"), storage.rows.getValue("new-1").map { it.userText })
+        assertEquals(listOf("one", "two"), storage.rows.getValue("new-1").map { it.turn.userText })
         assertEquals(1, storage.created)
     }
 
@@ -224,11 +224,11 @@ class ShareSessionViewModelTest {
         runCurrent()
         assertNull(vm.chatId)
         storage.beforeLoad = { error("read failed") }
-        vm.turns.add(StoredTurn(answer = "retained"))
+        vm.turns.add(StoredTurnEntry("retained", StoredTurn(answer = "retained")))
         vm.openChat(summary("B"))
         runCurrent()
         assertNull(vm.chatId)
-        assertEquals("retained", vm.turns.single().answer)
+        assertEquals("retained", vm.turns.single().turn.answer)
         assertFalse(vm.isChangingConversation)
     }
 
@@ -246,7 +246,7 @@ class ShareSessionViewModelTest {
         assertTrue(storage.rows.getValue("A").isEmpty())
         write.complete(Unit)
         runCurrent()
-        assertEquals("partial", (storage.rows.getValue("A").single().work.single() as WorkEvent.Thought).text)
+        assertEquals("partial", (storage.rows.getValue("A").single().turn.work.single() as WorkEvent.Thought).text)
         assertFalse(vm.scope.isActive)
     }
 
@@ -270,7 +270,7 @@ class ShareSessionViewModelTest {
         assertEquals("B", vm.chatId)
         assertTrue(vm.turns.isEmpty())
         assertEquals(1, storage.rows.getValue("A").size)
-        assertEquals("", storage.rows.getValue("A").single().answer)
+        assertEquals("", storage.rows.getValue("A").single().turn.answer)
     }
 
     @Test fun earlySetupFailureReleasesStreamingAndPayloadFailureCanRetry() = runTest(dispatcher) {
@@ -292,21 +292,111 @@ class ShareSessionViewModelTest {
         assertTrue(vm.canSend)
     }
 
+    @Test fun deleteTurnRemovesRowAndMemoryAndRollbackKeepsTarget() = runTest(dispatcher) {
+        val vm = vm()
+        storage.rows["A"] = listOf("one", "two", "three")
+            .map { StoredTurnEntry("id-$it", StoredTurn(userText = it)) }
+            .toMutableList()
+        ready(vm, "A")
+        vm.deleteTurnMessage("id-two")
+        runCurrent()
+        assertEquals(listOf("one", "three"), vm.turns.map { it.turn.userText })
+        assertEquals(listOf("one", "three"), storage.rows.getValue("A").map { it.turn.userText })
+        assertEquals(listOf("id-two"), storage.deletedTurns)
+        vm.rollbackToTurn("id-one")
+        runCurrent()
+        assertEquals(listOf("one"), vm.turns.map { it.turn.userText })
+        assertEquals(listOf("one"), storage.rows.getValue("A").map { it.turn.userText })
+        assertEquals(listOf("id-two", "id-one"), storage.deletedTurns)
+    }
+
+    @Test fun rollbackRunsAfterPendingAppendAndRemovesItFromDatabaseToo() = runTest(dispatcher) {
+        val vm = vm()
+        storage.rows["A"] = mutableListOf(StoredTurnEntry("id-one", StoredTurn(userText = "one")))
+        ready(vm, "A")
+        val write = CompletableDeferred<Unit>()
+        storage.beforeAppend = { write.await() }
+        vm.ask(request("two"))
+        runCurrent()
+        // Стирание встаёт в очередь после незавершённой дозаписи и сносит её.
+        vm.rollbackToTurn("id-one")
+        runCurrent()
+        write.complete(Unit)
+        runCurrent()
+        assertEquals(listOf("one"), vm.turns.map { it.turn.userText })
+        assertEquals(listOf("one"), storage.rows.getValue("A").map { it.turn.userText })
+        assertEquals(listOf("id-one"), storage.deletedTurns)
+    }
+
+    @Test fun deletingUnsavedTurnTouchesOnlyMemory() = runTest(dispatcher) {
+        val vm = vm()
+        ready(vm)
+        vm.autoSave = false
+        vm.ask(request("one"))
+        runCurrent()
+        vm.deleteTurnMessage(vm.turns.single().id)
+        runCurrent()
+        assertTrue(vm.turns.isEmpty())
+        assertTrue(storage.deletedTurns.isEmpty())
+        assertTrue(storage.rows.values.all { it.isEmpty() })
+    }
+
+    @Test fun failedRemovalKeepsMemoryAndConversationUsable() = runTest(dispatcher) {
+        val vm = vm()
+        storage.rows["A"] = listOf("one", "two")
+            .map { StoredTurnEntry("id-$it", StoredTurn(userText = it)) }
+            .toMutableList()
+        ready(vm, "A")
+        storage.beforeDeleteTurn = { error("disk failure") }
+        vm.deleteTurnMessage("id-two")
+        runCurrent()
+        assertEquals(listOf("one", "two"), vm.turns.map { it.turn.userText })
+        assertEquals(listOf("one", "two"), storage.rows.getValue("A").map { it.turn.userText })
+        assertFalse(vm.saveFailed)
+        assertTrue(vm.canSend)
+        storage.beforeDeleteTurn = {}
+        vm.deleteTurnMessage("id-two")
+        runCurrent()
+        assertEquals(listOf("one"), vm.turns.map { it.turn.userText })
+        assertEquals(listOf("one"), storage.rows.getValue("A").map { it.turn.userText })
+    }
+
     private class Store : ShareChatStore {
-        val rows = mutableMapOf("A" to mutableListOf<StoredTurn>(), "B" to mutableListOf())
+        val rows = mutableMapOf("A" to mutableListOf<StoredTurnEntry>(), "B" to mutableListOf())
         val deleted = mutableListOf<String>()
+        /** Ходы, переданные в deleteTurn/deleteTurnsAfter (цель стирания). */
+        val deletedTurns = mutableListOf<String>()
         var created = 0
         var failBind = false
         var beforeLoad: suspend (String) -> Unit = {}
         var beforeCreate: suspend () -> Unit = {}
         var beforeAppend: suspend (StoredTurn) -> Unit = {}
-        override suspend fun loadTurns(id: String): List<StoredTurn> { beforeLoad(id); return rows[id].orEmpty().toList() }
+        var beforeDeleteTurn: suspend (String) -> Unit = {}
+        override suspend fun loadTurnEntries(id: String): List<StoredTurnEntry> {
+            beforeLoad(id)
+            return rows[id].orEmpty().toList()
+        }
         override suspend fun title(id: String) = id
         override suspend fun createChat(mode: AssistMode, title: String): String {
             beforeCreate()
             return "new-${++created}".also { rows[it] = mutableListOf() }
         }
-        override suspend fun appendTurn(id: String, turn: StoredTurn) { beforeAppend(turn); rows.getValue(id).add(turn) }
+        override suspend fun appendTurn(id: String, turn: StoredTurn, turnId: String) {
+            beforeAppend(turn)
+            rows.getValue(id).add(StoredTurnEntry(turnId, turn))
+        }
+        override suspend fun deleteTurn(id: String, turnId: String) {
+            beforeDeleteTurn(turnId)
+            deletedTurns.add(turnId)
+            rows[id]?.removeAll { it.id == turnId }
+        }
+        override suspend fun deleteTurnsAfter(id: String, turnId: String) {
+            beforeDeleteTurn(turnId)
+            deletedTurns.add(turnId)
+            val list = rows[id] ?: return
+            val index = list.indexOfFirst { it.id == turnId }
+            if (index >= 0) while (list.size > index + 1) list.removeAt(list.size - 1)
+        }
         override suspend fun deleteChat(id: String) { deleted.add(id); rows.remove(id) }
         override suspend fun renameChat(id: String, title: String) = Unit
         override fun diagnosticGeneration(id: String) = 0L

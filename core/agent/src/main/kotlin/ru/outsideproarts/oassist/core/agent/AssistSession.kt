@@ -16,11 +16,15 @@ import ru.outsideproarts.oassist.core.model.ImagePart
 class AssistSession internal constructor() {
 
     private val lock = Any()
-    private val messages = mutableListOf<ChatMessage>()
+
+    /** Ходы сессии: реплика пользователя + её транскрипт; [SessionTurn.id] — id хода в БД. */
+    private val units = mutableListOf<SessionTurn>()
+
+    private data class SessionTurn(val id: String, val messages: List<ChatMessage>)
 
     /** Снимок истории для [AgentLoop.stream]. */
     val history: List<ChatMessage>
-        get() = synchronized(lock) { messages.toList() }
+        get() = synchronized(lock) { units.flatMap { it.messages } }
 
     /** Контекст текущего экрана; обновляется каждым assist-жестом. */
     @Volatile
@@ -34,12 +38,23 @@ class AssistSession internal constructor() {
     @Volatile
     var voiceLoop: Boolean = true
 
-    /** Добавить реплику пользователя и сообщения её хода (assistant/tool, без system/user). */
-    fun appendTurn(user: ChatMessage, turn: List<ChatMessage>) {
+    /**
+     * Добавить реплику пользователя и сообщения её хода (assistant/tool, без
+     * system/user). [turnId] — id хода в БД: по нему ход стирается из истории.
+     */
+    fun appendTurn(user: ChatMessage, turn: List<ChatMessage>, turnId: String = "") {
         synchronized(lock) {
-            messages.add(user)
-            messages.addAll(turn)
+            units.add(SessionTurn(turnId, listOf(user) + turn))
         }
+    }
+
+    /**
+     * Стереть ходы по их id (удаление сообщения/откат из истории чата): живое
+     * зеркало не должно отдавать модели стёртые сообщения. Реплики незаписанных
+     * ходов без id не сопоставлены стираниям и остаются.
+     */
+    fun removeTurns(turnIds: Set<String>) {
+        synchronized(lock) { units.removeAll { it.id in turnIds } }
     }
 }
 

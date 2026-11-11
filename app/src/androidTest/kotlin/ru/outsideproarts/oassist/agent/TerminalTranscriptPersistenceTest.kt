@@ -187,7 +187,8 @@ class TerminalTranscriptPersistenceTest(private val mode: AssistMode, private va
         fun chat(id: String, stored: List<StoredTurn> = emptyList()) = ChatSessionViewModel().apply {
             chatId = id; chatTitle = "Terminal"; titleLocked = true
             chatKind = if (mode == AssistMode.ASSISTANT) ChatKind.ASSISTANT else ChatKind.REGULAR
-            turnStore.addAll(stored)
+            // VM наполняется напрямую (без записи): id строк ходов здесь не важны.
+            turnStore.addAll(stored.mapIndexed { index, turn -> StoredTurnEntry("seed-$index", turn) })
             chatOwners += this
             stores[this] = ViewModelStore().also { it.put("chat", this) }
         }

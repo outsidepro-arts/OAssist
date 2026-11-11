@@ -15,6 +15,7 @@ import ru.outsideproarts.oassist.core.data.chat.ChatMediaStore
 import ru.outsideproarts.oassist.core.data.chat.ChatRepository
 import ru.outsideproarts.oassist.core.data.db.OAssistDatabase
 import ru.outsideproarts.oassist.core.model.StoredTurn
+import ru.outsideproarts.oassist.core.model.StoredTurnEntry
 
 @RunWith(AndroidJUnit4::class)
 class AssistantTerminalOwnerTest {
@@ -30,21 +31,27 @@ class AssistantTerminalOwnerTest {
             val lateResult = CompletableDeferred<Unit>()
             val oldSave = launch {
                 lateResult.await()
-                repo.replaceAssistantTurns(listOf(StoredTurn(userText = "old owner")), old)
+                repo.replaceAssistantTurns(old) { listOf(StoredTurnEntry("old-owner", StoredTurn(userText = "old owner"))) }
             }
             val current = repo.beginAssistantSession()
             val first = StoredTurn(userText = "current owner")
-            repo.replaceAssistantTurns(listOf(first), current)
+            repo.replaceAssistantTurns(current) { listOf(StoredTurnEntry("first", first)) }
             lateResult.complete(Unit)
             oldSave.join()
             assertEquals(listOf(first), repo.loadTurns(ChatRepository.ASSISTANT_CHAT_ID))
             // Fail the actual SQLite insert after replacement has started; rollback must keep the old row.
             db.openHelper.writableDatabase.execSQL("CREATE TRIGGER terminal_fail BEFORE INSERT ON turns BEGIN SELECT RAISE(ABORT, 'terminal save fixture'); END")
             val second = StoredTurn(userText = "second terminal")
-            assertNotNull(runCatching { repo.replaceAssistantTurns(listOf(first, second), current) }.exceptionOrNull())
+            assertNotNull(runCatching {
+                repo.replaceAssistantTurns(current) {
+                    listOf(StoredTurnEntry("first", first), StoredTurnEntry("second", second))
+                }
+            }.exceptionOrNull())
             assertEquals(listOf(first), repo.loadTurns(ChatRepository.ASSISTANT_CHAT_ID))
             db.openHelper.writableDatabase.execSQL("DROP TRIGGER terminal_fail")
-            repo.replaceAssistantTurns(listOf(first, second), current)
+            repo.replaceAssistantTurns(current) {
+                listOf(StoredTurnEntry("first", first), StoredTurnEntry("second", second))
+            }
             db.close()
             db = open()
             assertEquals(listOf(first, second), ChatRepository(db, ChatMediaStore(media)).loadTurns(ChatRepository.ASSISTANT_CHAT_ID))

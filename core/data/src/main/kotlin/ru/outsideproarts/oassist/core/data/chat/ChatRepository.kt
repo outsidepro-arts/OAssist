@@ -20,6 +20,7 @@ import ru.outsideproarts.oassist.core.model.ChatKind
 import ru.outsideproarts.oassist.core.model.ChatMessage
 import ru.outsideproarts.oassist.core.model.ChatSummary
 import ru.outsideproarts.oassist.core.model.StoredTurn
+import ru.outsideproarts.oassist.core.model.StoredTurnEntry
 
 /**
  * Репозиторий сохранённых диалогов: список чатов + ходы (полный контекст —
@@ -80,10 +81,9 @@ class ChatRepository(
 
     suspend fun getChat(id: String): ChatSummary? = database.chatDao().findById(id)?.toSummary()
 
-    suspend fun appendTurn(chatId: String, turn: StoredTurn) {
+    suspend fun appendTurn(chatId: String, turn: StoredTurn, turnId: String = UUID.randomUUID().toString()) {
         diagnosticOwnershipLock.withLock {
             check(database.chatDao().findById(chatId) != null) { "Chat does not exist: $chatId" }
-            val turnId = UUID.randomUUID().toString()
             var committed = false
             var failure: Throwable? = null
             try {
@@ -115,40 +115,105 @@ class ChatRepository(
         }
     }
 
-    suspend fun loadTurns(chatId: String): List<StoredTurn> = diagnosticOwnershipLock.withLock {
-        database.turnDao().listForChat(chatId).mapNotNull { TurnCodec.decode(it.payload, media) }
+    /**
+     * Безвозвратное удаление одного хода: строка, медиафайлы и диагностика хода
+     * стираются. Отсутствующий ход — идемпотентный no-op: повтор и гонка с другим
+     * удалением не считаются ошибкой.
+     */
+    suspend fun deleteTurn(chatId: String, turnId: String) =
+        deleteTurnsWhere(chatId) { turns -> turns.filter { it.id == turnId } }
+
+    /**
+     * Откат истории: ход [turnId] остаётся последним, все следующие стираются
+     * безвозвратно (строки, медиафайлы и диагностика). Отсутствующий ход — no-op.
+     */
+    suspend fun deleteTurnsAfter(chatId: String, turnId: String) =
+        deleteTurnsWhere(chatId) { turns ->
+            val target = turns.firstOrNull { it.id == turnId }
+            if (target == null) emptyList() else turns.filter { it.seq > target.seq }
+        }
+
+    /**
+     * Стирает выбранные ходы. Диагностика — до транзакции (fail-closed, как в
+     * [deleteChat]): сбой стирания оставляет ходы и медиа на месте, повтор допустим.
+     * Медиа — только после коммита, чтобы сбой БД не оставил живой ход без файлов.
+     */
+    private suspend fun deleteTurnsWhere(chatId: String, select: (List<TurnEntity>) -> List<TurnEntity>) {
+        diagnosticOwnershipLock.withLock {
+            withContext(NonCancellable) {
+                val turns = select(database.turnDao().listForChat(chatId))
+                if (turns.isEmpty()) return@withContext
+                val roots = turns.mapNotNull { TurnCodec.diagnosticOperationId(it.payload) }.toSet()
+                if (roots.isNotEmpty()) {
+                    kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+                        roots.forEach { onDiagnosticDiscard(it) }
+                    }
+                }
+                val now = clock()
+                database.withTransaction {
+                    val chat = database.chatDao().findById(chatId)
+                    database.turnDao().deleteByIds(turns.map { it.id })
+                    if (chat != null) database.chatDao().update(chat.copy(updatedAt = now))
+                }
+                // Живое зеркало истории (оверлей ассистента) стирает ходы из памяти
+                // сессии сразу после коммита: сбой очистки медиа не должен оставить
+                // стёртые сообщения в контексте следующего запроса модели.
+                onTurnsDeleted(chatId, turns.map { it.id }.toSet())
+                turns.forEach { media.deleteTurn(chatId, it.id) }
+            }
+        }
     }
+
+    /** Ходы с идентификаторами строк (ручки удаления/отката); битые payload пропускаются. */
+    suspend fun loadTurnEntries(chatId: String): List<StoredTurnEntry> = diagnosticOwnershipLock.withLock {
+        database.turnDao().listForChat(chatId).mapNotNull { entity ->
+            TurnCodec.decode(entity.payload, media)?.let { StoredTurnEntry(entity.id, it) }
+        }
+    }
+
+    suspend fun loadTurns(chatId: String): List<StoredTurn> = loadTurnEntries(chatId).map { it.turn }
 
     /** История для модели: все ходы диалога (реплика пользователя + транскрипт). */
     suspend fun loadModelHistory(chatId: String): List<ChatMessage> =
         loadTurns(chatId).flatMap { it.modelMessages() }
 
     /**
-     * Полная перезапись закреплённого диалога «Ассистент» транскриптом
-     * последней сессии. Пустой список — тоже перезапись (вызывать только когда
-     * сессия непустая, см. вызывающего).
+     * Владелец закреплённого диалога «Ассистент»: перезапись чужим токеном
+     * игнорируется (поздняя запись закрытого оверлея).
      */
     private var assistantOwner = 0L
 
     /** Serializes ownership changes with writes from a closing overlay. */
     suspend fun beginAssistantSession(): Long = diagnosticOwnershipLock.withLock { ++assistantOwner }
 
-    suspend fun replaceAssistantTurns(turns: List<StoredTurn>, owner: Long? = null) = diagnosticOwnershipLock.withLock {
+    /**
+     * Полная перезапись закреплённого диалога «Ассистент» транскриптом
+     * последней сессии. Пустой список — тоже перезапись (вызывать только когда
+     * сессия непустая, см. вызывающего). Id ходов сохраняются: ручки удаления
+     * остаются валидными между перезаписями. [turns] читается под замком
+     * перезаписи — параллельное стирание ходов не затирается запоздалой записью.
+     *
+     * Инвариант: ходу с сохранённым id вызывающий передаёт те же байты — encode
+     * пишет его медиафайлы поверх закоммиченных до транзакции, и обрыв записи
+     * не должен менять содержимое уже сохранённого хода.
+     */
+    suspend fun replaceAssistantTurns(owner: Long? = null, turns: () -> List<StoredTurnEntry>) = diagnosticOwnershipLock.withLock {
         if (owner != null && owner != assistantOwner) return@withLock
         val oldTurns = database.turnDao().listForChat(ASSISTANT_CHAT_ID)
+        val oldIds = oldTurns.map { it.id }.toSet()
         val newTurnIds = mutableListOf<String>()
         var committed = false
         var failure: Throwable? = null
         try {
             val now = clock()
-            val replacements = turns.mapIndexed { index, turn ->
-                val turnId = UUID.randomUUID().toString()
+            val replacements = turns().map { entry ->
+                val turnId = entry.id.ifBlank { UUID.randomUUID().toString() }
                 newTurnIds.add(turnId)
                 TurnEntity(
                     id = turnId,
                     chatId = ASSISTANT_CHAT_ID,
-                    seq = index,
-                    payload = TurnCodec.encode(turn, ASSISTANT_CHAT_ID, turnId, media),
+                    seq = newTurnIds.size - 1,
+                    payload = TurnCodec.encode(entry.turn, ASSISTANT_CHAT_ID, turnId, media),
                     createdAt = now,
                 )
             }
@@ -174,19 +239,24 @@ class ChatRepository(
                     replacements.forEach { database.turnDao().insert(it) }
                 }
                 committed = true
-                // Only old UUIDs may be removed: the directory now also contains committed media.
-                oldTurns.forEach { media.deleteTurn(ASSISTANT_CHAT_ID, it.id) }
+                // Only vanished UUIDs may be removed: the directory now also contains committed media.
+                val kept = newTurnIds.toSet()
+                oldTurns.filter { it.id !in kept }.forEach { media.deleteTurn(ASSISTANT_CHAT_ID, it.id) }
             }
         } catch (error: Throwable) {
             failure = error
             throw error
         } finally {
-            if (!committed) newTurnIds.forEach { turnId ->
-                try {
-                    media.deleteTurn(ASSISTANT_CHAT_ID, turnId)
-                } catch (cleanupError: Throwable) {
-                    if (failure == null) throw cleanupError
-                    failure.addSuppressed(cleanupError)
+            if (!committed) {
+                // Стёрты только новые файлы: у переиспользованных id поверх лежат
+                // байты уже закоммиченного хода, их трогать нельзя (повтор записи).
+                newTurnIds.filter { it !in oldIds }.forEach { turnId ->
+                    try {
+                        media.deleteTurn(ASSISTANT_CHAT_ID, turnId)
+                    } catch (cleanupError: Throwable) {
+                        if (failure == null) throw cleanupError
+                        failure.addSuppressed(cleanupError)
+                    }
                 }
             }
         }
@@ -206,6 +276,9 @@ class ChatRepository(
     var onDiagnosticDelete: (String, Set<String>) -> Unit = { _, _ -> }
     var onDiagnosticBind: (String, String) -> Unit = { _, _ -> }
     var onDiagnosticDiscard: (String) -> Unit = { }
+
+    /** Живое зеркало истории (оверлей ассистента) синхронизирует память со стёртыми ходами. */
+    var onTurnsDeleted: (String, Set<String>) -> Unit = { _, _ -> }
 
     fun diagnosticGeneration(chatId: String): Long =
         diagnosticGenerations.computeIfAbsent(chatId) { AtomicLong() }.get()

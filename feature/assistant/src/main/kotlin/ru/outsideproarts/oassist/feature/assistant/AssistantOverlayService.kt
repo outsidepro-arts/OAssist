@@ -101,8 +101,13 @@ class AssistantOverlayService : LifecycleService(), SavedStateRegistryOwner {
     private var workEvents by mutableStateOf<List<ru.outsideproarts.oassist.core.model.WorkEvent>>(emptyList())
     private var turnUsage by mutableStateOf<ru.outsideproarts.oassist.core.model.ProviderUsage?>(null)
 
-/** Ходы текущей сессии для закреплённого диалога «Ассистент» (перезапись целиком). */
-private val sessionTurns = mutableListOf<ru.outsideproarts.oassist.core.model.StoredTurn>()
+/**
+ * Ходы текущей сессии для закреплённого диалога «Ассистент» (перезапись целиком).
+ * Id ходов совпадают со строками БД: стирание из истории дёргает живое зеркало.
+ * Доступ — только под [sessionTurnsLock] (снимок перезаписи и стирание ходов).
+ */
+private val sessionTurns = mutableListOf<ru.outsideproarts.oassist.core.model.StoredTurnEntry>()
+private val sessionTurnsLock = Any()
     private var assistantOwner: Long? = null
     private var assistantSavePending = false
     private var destroyed = false
@@ -198,6 +203,17 @@ private val sessionTurns = mutableListOf<ru.outsideproarts.oassist.core.model.St
         super.onCreate()
         ensureChannel()
         ru.outsideproarts.oassist.core.agent.OverlayControl.register(overlayControlImpl)
+        // Живое зеркало истории: стирание из истории чата не должно всплывать
+        // в контексте следующего хода сессии. Стирание точечное, по id ходов:
+        // идущий ход (пока не записан) не затрагивается.
+        ru.outsideproarts.oassist.core.data.chat.ChatHandle.get()?.onTurnsDeleted = { chatId, turnIds ->
+            if (chatId == ru.outsideproarts.oassist.core.data.chat.ChatRepository.ASSISTANT_CHAT_ID) {
+                synchronized(sessionTurnsLock) {
+                    sessionTurns.removeAll { it.id in turnIds }
+                    (ownedSession ?: AssistSessionStore.current())?.removeTurns(turnIds)
+                }
+            }
+        }
         // Авто-повтор отложенного хода только по фронту offline→online.
         serviceScope.launch {
             val net = ru.outsideproarts.oassist.core.net.NetworkHandle.get()
@@ -330,6 +346,7 @@ private val sessionTurns = mutableListOf<ru.outsideproarts.oassist.core.model.St
         notificationUpdates.close()
         pendingSttStart.cancel()
         ru.outsideproarts.oassist.core.agent.OverlayControl.unregister(overlayControlImpl)
+        ru.outsideproarts.oassist.core.data.chat.ChatHandle.get()?.onTurnsDeleted = { _, _ -> }
         execute(voiceFlow.onClose())
         sounds?.playIfEnabled(AgentSound.OVERLAY_STOP, soundEnabled)
         mediaRouter?.release()
@@ -703,6 +720,7 @@ private val sessionTurns = mutableListOf<ru.outsideproarts.oassist.core.model.St
         providerNotice = null
         turnUsage = null
         var turnTranscript: List<ChatMessage> = emptyList()
+        var turnEntryId: String? = null
         val timeline = ru.outsideproarts.oassist.core.agent.WorkTimelineBuilder()
         hintText = null
         speech?.stop()
@@ -757,7 +775,11 @@ private val sessionTurns = mutableListOf<ru.outsideproarts.oassist.core.model.St
                         userMessage = text,
                         images = screenImage?.let { listOf(it) },
                         onTurnMessages = { turn ->
-                            session.appendTurn(ChatMessage(ChatRole.USER, text), turn)
+                            // Id хода — общий для памяти сессии и записи: стирание
+                            // из истории симметрично трогает и то, и другое.
+                            val entryId = java.util.UUID.randomUUID().toString()
+                            turnEntryId = entryId
+                            session.appendTurn(ChatMessage(ChatRole.USER, text), turn, entryId)
                             turnTranscript = turn
                         },
                     ),
@@ -892,7 +914,7 @@ private val sessionTurns = mutableListOf<ru.outsideproarts.oassist.core.model.St
                 }, continueDialog = continueDialog, channel = tts.channel)
             } finally {
                 try {
-                    persistAssistantTurn(text, diagnosticId, timeline, turnTranscript)
+                    persistAssistantTurn(text, diagnosticId, timeline, turnTranscript, turnEntryId)
                 } finally {
                     if (!destroyed && turnJob === coroutineContext[Job]) {
                         isStreaming = false
@@ -915,17 +937,22 @@ private val sessionTurns = mutableListOf<ru.outsideproarts.oassist.core.model.St
         diagnosticId: String,
         timeline: ru.outsideproarts.oassist.core.agent.WorkTimelineBuilder,
         transcript: List<ChatMessage>,
+        entryId: String?,
     ) {
         if (timeline.isEmpty && transcript.isEmpty()) return
-        val stored = ru.outsideproarts.oassist.core.model.StoredTurn(
-            diagnosticOperationId = diagnosticId,
-            userText = userText,
-            work = timeline.work,
-            answer = timeline.answerText,
-            usage = timeline.usage,
-            turn = transcript,
+        val stored = ru.outsideproarts.oassist.core.model.StoredTurnEntry(
+            // Тот же id, что у хода в памяти сессии (см. onTurnMessages).
+            id = entryId ?: java.util.UUID.randomUUID().toString(),
+            turn = ru.outsideproarts.oassist.core.model.StoredTurn(
+                diagnosticOperationId = diagnosticId,
+                userText = userText,
+                work = timeline.work,
+                answer = timeline.answerText,
+                usage = timeline.usage,
+                turn = transcript,
+            ),
         )
-        sessionTurns.add(stored)
+        synchronized(sessionTurnsLock) { sessionTurns.add(stored) }
         val repo = ru.outsideproarts.oassist.core.data.chat.ChatHandle.get() ?: return
         assistantSavePending = true
         if (!saveAssistantSnapshot(repo) && !destroyed && turnJob === kotlinx.coroutines.currentCoroutineContext()[Job]) {
@@ -936,7 +963,11 @@ private val sessionTurns = mutableListOf<ru.outsideproarts.oassist.core.model.St
     private suspend fun saveAssistantSnapshot(repo: ru.outsideproarts.oassist.core.data.chat.ChatRepository): Boolean =
         kotlinx.coroutines.withContext(kotlinx.coroutines.NonCancellable) {
             try {
-                repo.replaceAssistantTurns(sessionTurns.toList(), assistantOwner)
+                // Список читается под замком перезаписи: параллельное стирание
+                // ходов из истории не затирается запоздалой записью снимка.
+                repo.replaceAssistantTurns(assistantOwner) {
+                    synchronized(sessionTurnsLock) { sessionTurns.toList() }
+                }
                 assistantSavePending = false
                 true
             } catch (error: Exception) {

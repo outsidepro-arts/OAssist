@@ -90,6 +90,10 @@ class ChatRepositoryInstrumentedTest {
             it.relativeTo(mediaRoot).path to Base64.getEncoder().encodeToString(it.readBytes())
         }
 
+    /** Записи с уникальными id: перезапись сохраняет id, повторный вызов — новые ходы. */
+    private fun entries(vararg turns: StoredTurn): List<StoredTurnEntry> =
+        turns.map { StoredTurnEntry(java.util.UUID.randomUUID().toString(), it) }
+
     private fun abort(event: String, table: String) {
         database.openHelper.writableDatabase.execSQL(
             "CREATE TRIGGER fail_write BEFORE $event ON $table BEGIN SELECT RAISE(ABORT, 'test abort'); END",
@@ -128,19 +132,19 @@ class ChatRepositoryInstrumentedTest {
 
     @Test fun abortedReplacementKeepsOldBytesAndRetryCommitsOnlyNewReferences() = runBlocking {
         val id = ChatRepository.ASSISTANT_CHAT_ID
-        repository.replaceAssistantTurns(listOf(turn("old")))
+        repository.replaceAssistantTurns { entries(turn("old")) }
         val previous = files()
         abort("INSERT", "turns")
-        assertNotNull(runCatching { repository.replaceAssistantTurns(listOf(turn("new"), turn("second"))) }.exceptionOrNull())
+        assertNotNull(runCatching { repository.replaceAssistantTurns { entries(turn("new"), turn("second")) } }.exceptionOrNull())
         assertEquals(previous, files())
         reopen()
         assertEquals(listOf(turn("old")), repository.loadTurns(id))
         allowWrites()
-        repository.replaceAssistantTurns(listOf(turn("new"), turn("second")))
+        repository.replaceAssistantTurns { entries(turn("new"), turn("second")) }
         assertTrue(previous.keys.intersect(files().keys).isEmpty())
         reopen()
         assertEquals(listOf(turn("new"), turn("second")), repository.loadTurns(id))
-        repository.replaceAssistantTurns(emptyList())
+        repository.replaceAssistantTurns { emptyList() }
         reopen()
         assertTrue(repository.loadTurns(id).isEmpty())
         assertTrue(files().isEmpty())
@@ -176,7 +180,7 @@ class ChatRepositoryInstrumentedTest {
     @Test fun cancellationBeforeCommitCleansStagedMediaAndKeepsPreviousReferences() = runBlocking {
         repository.createChat(AssistMode.CHAT, "chat", "chat")
         repository.appendTurn("chat", turn("old"))
-        repository.replaceAssistantTurns(listOf(turn("assistant")))
+        repository.replaceAssistantTurns { entries(turn("assistant")) }
         val previous = files()
         lateinit var owner: Job
         val cancelling = ChatRepository(database, ChatMediaStore(mediaRoot)) {
@@ -188,7 +192,7 @@ class ChatRepositoryInstrumentedTest {
         owner.join()
         assertTrue(owner.isCancelled)
         assertEquals(previous, files())
-        owner = launch(start = CoroutineStart.LAZY) { cancelling.replaceAssistantTurns(listOf(turn("cancelled"))) }
+        owner = launch(start = CoroutineStart.LAZY) { cancelling.replaceAssistantTurns { entries(turn("cancelled")) } }
         owner.start()
         owner.join()
         assertTrue(owner.isCancelled)
@@ -255,7 +259,7 @@ class ChatRepositoryInstrumentedTest {
     }
 
     @Test fun hydrationAndReplacementUseTheSameStorageBoundary() = runBlocking {
-        repository.replaceAssistantTurns(listOf(turn("old")))
+        repository.replaceAssistantTurns { entries(turn("old")) }
         val entered = CountDownLatch(1)
         val release = CountDownLatch(1)
         val controlledRoot = object : File(mediaRoot.absolutePath) {
@@ -270,7 +274,7 @@ class ChatRepositoryInstrumentedTest {
         try {
             assertTrue(entered.await(10, TimeUnit.SECONDS))
             val replacement = launch(start = CoroutineStart.UNDISPATCHED) {
-                controlled.replaceAssistantTurns(listOf(turn("new")))
+                controlled.replaceAssistantTurns { entries(turn("new")) }
             }
             assertFalse(replacement.isCompleted)
             release.countDown()
@@ -282,5 +286,205 @@ class ChatRepositoryInstrumentedTest {
         }
         reopen()
         assertEquals(listOf(turn("new")), repository.loadTurns(ChatRepository.ASSISTANT_CHAT_ID))
+    }
+
+    @Test fun deleteTurnRemovesRowMediaAndDiagnosticRootAndSurvivesReopen() = runBlocking {
+        repository.createChat(AssistMode.CHAT, "chat", "chat")
+        repository.appendTurn("chat", turn("a"))
+        repository.appendTurn("chat", turn("b"))
+        repository.appendTurn("chat", turn("c"))
+        val rows = database.turnDao().listForChat("chat")
+        val discarded = mutableListOf<String>()
+        repository.onDiagnosticDiscard = { discarded.add(it) }
+        repository.deleteTurn("chat", rows[1].id)
+        assertEquals(listOf("operation-b"), discarded)
+        assertEquals(listOf(turn("a"), turn("c")), repository.loadTurns("chat"))
+        val names = files().keys
+        assertTrue(names.any { it.startsWith("chat/${rows[0].id}_") })
+        assertTrue(names.none { it.startsWith("chat/${rows[1].id}_") })
+        assertTrue(names.any { it.startsWith("chat/${rows[2].id}_") })
+        reopen()
+        assertEquals(listOf(turn("a"), turn("c")), repository.loadTurns("chat"))
+        assertEquals(turn("a").modelMessages() + turn("c").modelMessages(), repository.loadModelHistory("chat"))
+    }
+
+    @Test fun deleteTurnsAfterKeepsTargetTurnAndSurvivesReopen() = runBlocking {
+        repository.createChat(AssistMode.CHAT, "chat", "chat")
+        repository.appendTurn("chat", turn("a"))
+        repository.appendTurn("chat", turn("b"))
+        repository.appendTurn("chat", turn("c"))
+        val rows = database.turnDao().listForChat("chat")
+        val discarded = mutableListOf<String>()
+        repository.onDiagnosticDiscard = { discarded.add(it) }
+        repository.deleteTurnsAfter("chat", rows[0].id)
+        assertEquals(setOf("operation-b", "operation-c"), discarded.toSet())
+        assertEquals(listOf(turn("a")), repository.loadTurns("chat"))
+        val names = files().keys
+        assertTrue(names.any { it.startsWith("chat/${rows[0].id}_") })
+        assertTrue(names.none { it.startsWith("chat/${rows[1].id}_") || it.startsWith("chat/${rows[2].id}_") })
+        reopen()
+        assertEquals(listOf(turn("a")), repository.loadTurns("chat"))
+    }
+
+    @Test fun appendAcceptsCallerTurnIdAndLoadTurnEntriesExposesIt() = runBlocking {
+        repository.createChat(AssistMode.CHAT, "chat", "chat")
+        repository.appendTurn("chat", turn("a"), turnId = "turn-a")
+        repository.appendTurn("chat", turn("b"))
+        val entries = repository.loadTurnEntries("chat")
+        assertEquals("turn-a", entries[0].id)
+        assertEquals(listOf(turn("a"), turn("b")), entries.map { it.turn })
+        repository.deleteTurn("chat", "turn-a")
+        assertEquals(listOf("b"), repository.loadTurnEntries("chat").map { it.turn.userText })
+    }
+
+    @Test fun replacementPreservesTurnIdsAndDeletionReportsThemToMirror() = runBlocking {
+        val id = ChatRepository.ASSISTANT_CHAT_ID
+        repository.replaceAssistantTurns {
+            listOf(StoredTurnEntry("turn-a", turn("a")), StoredTurnEntry("turn-b", turn("b")))
+        }
+        assertEquals(listOf("turn-a", "turn-b"), database.turnDao().listForChat(id).map { it.id })
+        repository.replaceAssistantTurns { listOf(StoredTurnEntry("turn-b", turn("b"))) }
+        assertEquals(listOf("turn-b"), database.turnDao().listForChat(id).map { it.id })
+        val deleted = mutableMapOf<String, Set<String>>()
+        repository.onTurnsDeleted = { chatId, turnIds -> deleted[chatId] = turnIds }
+        repository.deleteTurn(id, "turn-b")
+        assertEquals(mapOf(id to setOf("turn-b")), deleted)
+    }
+
+    @Test fun abortedRewriteOfPreservedIdsKeepsCommittedBytes() = runBlocking {
+        val id = ChatRepository.ASSISTANT_CHAT_ID
+        repository.replaceAssistantTurns { listOf(StoredTurnEntry("turn-a", turn("a"))) }
+        val previous = files()
+        abort("INSERT", "turns")
+        assertNotNull(runCatching {
+            repository.replaceAssistantTurns {
+                listOf(StoredTurnEntry("turn-a", turn("a")), StoredTurnEntry("turn-b", turn("b")))
+            }
+        }.exceptionOrNull())
+        // Сохранённый id перезаписан теми же байтами, новые файлы стёрты.
+        assertEquals(previous, files())
+        reopen()
+        assertEquals(listOf(turn("a")), repository.loadTurns(id))
+        allowWrites()
+        repository.replaceAssistantTurns {
+            listOf(StoredTurnEntry("turn-a", turn("a")), StoredTurnEntry("turn-b", turn("b")))
+        }
+        assertEquals(listOf(turn("a"), turn("b")), repository.loadTurns(id))
+    }
+
+    @Test fun deletionQueuedBehindRewriteCommitsAfterItWithoutResurrection() = runBlocking {
+        val id = ChatRepository.ASSISTANT_CHAT_ID
+        val mirror = mutableListOf(StoredTurnEntry("turn-a", turn("a")), StoredTurnEntry("turn-b", turn("b")))
+        repository.onTurnsDeleted = { _, turnIds ->
+            synchronized(mirror) { mirror.removeAll { entry -> entry.id in turnIds } }
+        }
+        repository.replaceAssistantTurns { synchronized(mirror) { mirror.toList() } }
+        val entered = CountDownLatch(1)
+        val release = CountDownLatch(1)
+        onQuery = { sql ->
+            if (sql.contains("INSERT", ignoreCase = true) && sql.contains("turns")) {
+                entered.countDown()
+                check(release.await(10, TimeUnit.SECONDS))
+            }
+        }
+        val rewrite = launch(Dispatchers.IO) {
+            repository.replaceAssistantTurns { synchronized(mirror) { mirror.toList() } }
+        }
+        try {
+            assertTrue(entered.await(10, TimeUnit.SECONDS))
+            // Стирание встаёт в очередь за перезаписью и сносит ход и из БД,
+            // и из живого зеркала — следующий снимок его не воскрешает.
+            val deletion = launch(Dispatchers.IO) { repository.deleteTurn(id, "turn-b") }
+            assertFalse(deletion.isCompleted)
+            release.countDown()
+            rewrite.join()
+            deletion.join()
+        } finally {
+            release.countDown()
+            onQuery = null
+        }
+        assertEquals(listOf("a"), repository.loadTurns(id).map { it.userText })
+        assertEquals(listOf("turn-a"), synchronized(mirror) { mirror.map { it.id } })
+    }
+
+    @Test fun deletingMissingTurnIsIdempotentNoOp() = runBlocking {
+        repository.createChat(AssistMode.CHAT, "chat", "chat")
+        repository.appendTurn("chat", turn("a"))
+        val previous = files()
+        val discarded = mutableListOf<String>()
+        repository.onDiagnosticDiscard = { discarded.add(it) }
+        repository.deleteTurn("chat", "missing")
+        repository.deleteTurnsAfter("chat", "missing")
+        assertTrue(discarded.isEmpty())
+        assertEquals(listOf(turn("a")), repository.loadTurns("chat"))
+        assertEquals(previous, files())
+    }
+
+    @Test fun failedTurnDeleteKeepsRowsAndMediaUntilDatabaseCommit() = runBlocking {
+        repository.createChat(AssistMode.CHAT, "chat", "chat")
+        repository.appendTurn("chat", turn("a"))
+        repository.appendTurn("chat", turn("b"))
+        val rows = database.turnDao().listForChat("chat")
+        val previous = files()
+        val discarded = mutableListOf<String>()
+        repository.onDiagnosticDiscard = { discarded.add(it) }
+        abort("DELETE", "turns")
+        assertNotNull(runCatching { repository.deleteTurn("chat", rows[1].id) }.exceptionOrNull())
+        // Диагностика стирается до транзакции (fail-closed, как у deleteChat):
+        // сбой БД оставляет ход и медиа, но не откатывает стирание диагностики.
+        assertEquals(listOf("operation-b"), discarded)
+        assertEquals(previous, files())
+        reopen()
+        assertEquals(listOf(turn("a"), turn("b")), repository.loadTurns("chat"))
+        allowWrites()
+        repository.deleteTurn("chat", rows[1].id)
+        assertEquals(listOf("operation-b", "operation-b"), discarded)
+        reopen()
+        assertEquals(listOf(turn("a")), repository.loadTurns("chat"))
+        assertTrue(files().keys.none { it.startsWith("chat/${rows[1].id}_") })
+    }
+
+    @Test fun diagnosticDiscardFailureKeepsTurnLiveAndAllowsRetry() = runBlocking {
+        repository.createChat(AssistMode.CHAT, "chat", "chat")
+        repository.appendTurn("chat", turn("a"))
+        repository.appendTurn("chat", turn("b"))
+        val rows = database.turnDao().listForChat("chat")
+        val previous = files()
+        val attempts = mutableListOf<String>()
+        repository.onDiagnosticDiscard = { root ->
+            attempts.add(root)
+            if (attempts.size == 1) error("diagnostic failure")
+        }
+        assertTrue(runCatching { repository.deleteTurn("chat", rows[1].id) }.isFailure)
+        assertEquals(listOf("operation-b"), attempts)
+        assertEquals(listOf(turn("a"), turn("b")), repository.loadTurns("chat"))
+        assertEquals(previous, files())
+        repository.deleteTurn("chat", rows[1].id)
+        assertEquals(listOf("operation-b", "operation-b"), attempts)
+        assertEquals(listOf(turn("a")), repository.loadTurns("chat"))
+    }
+
+    @Test fun cancellationDuringTurnDeleteStillRemovesRowAndMedia() = runBlocking {
+        repository.createChat(AssistMode.CHAT, "chat", "chat")
+        repository.appendTurn("chat", turn("a"))
+        repository.appendTurn("chat", turn("b"))
+        val rows = database.turnDao().listForChat("chat")
+        val deleting = CountDownLatch(1)
+        val resume = CountDownLatch(1)
+        repository.onDiagnosticDiscard = {
+            deleting.countDown()
+            check(resume.await(10, TimeUnit.SECONDS))
+        }
+        val job = async(Dispatchers.IO) { repository.deleteTurn("chat", rows[1].id) }
+        try {
+            assertTrue(deleting.await(10, TimeUnit.SECONDS))
+            job.cancel()
+            resume.countDown()
+            job.cancelAndJoin()
+            assertEquals(listOf(turn("a")), repository.loadTurns("chat"))
+            assertTrue(files().keys.none { it.startsWith("chat/${rows[1].id}_") })
+        } finally {
+            resume.countDown()
+        }
     }
 }

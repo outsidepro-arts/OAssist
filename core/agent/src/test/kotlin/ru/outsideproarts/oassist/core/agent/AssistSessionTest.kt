@@ -136,4 +136,32 @@ class AssistSessionTest {
         assertEquals(30, history.count { it.images.isNotEmpty() })
         assertToolPairsIntact(history)
     }
+
+    @Test
+    fun removeTurns_deletesOnlyMatchingTurns() {
+        AssistSessionStore.clear()
+        val session = AssistSessionStore.getOrCreate()
+        session.appendTurn(
+            user = ChatMessage(ChatRole.USER, "первый вопрос"),
+            turn = listOf(ChatMessage(ChatRole.ASSISTANT, "первый ответ")),
+            turnId = "turn-1",
+        )
+        session.appendTurn(
+            user = ChatMessage(ChatRole.USER, "второй вопрос"),
+            turn = listOf(ChatMessage(ChatRole.ASSISTANT, "второй ответ")),
+            turnId = "turn-2",
+        )
+        session.appendTurn(
+            user = ChatMessage(ChatRole.USER, "третий вопрос"),
+            turn = listOf(ChatMessage(ChatRole.ASSISTANT, "третий ответ")),
+        )
+
+        session.removeTurns(setOf("turn-2", "неизвестный"))
+
+        val history = session.history
+        assertEquals(
+            listOf("первый вопрос", "первый ответ", "третий вопрос", "третий ответ"),
+            history.map { it.content },
+        )
+    }
 }

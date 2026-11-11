@@ -304,6 +304,9 @@ private fun ShareFlow(payload: SharePayload) {
             chatTitle = vm.chatTitle,
             isSaved = vm.chatId != null,
             turns = vm.turns,
+            canManageTurns = !vm.isStreaming && !vm.isChangingConversation && !vm.isSaving,
+            onDeleteTurn = vm::deleteTurnMessage,
+            onRollbackToTurn = vm::rollbackToTurn,
             activeUserMsg = vm.activeUserMsg,
             workEvents = vm.workEvents,
             response = vm.response,
@@ -434,7 +437,11 @@ private fun ShareConversation(
     payloadLoadFailed: Boolean,
     chatTitle: String,
     isSaved: Boolean,
-    turns: List<StoredTurn>,
+    turns: List<ru.outsideproarts.oassist.core.model.StoredTurnEntry>,
+    /** Действия с сообщениями доступны вне стрима/записи/смены разговора. */
+    canManageTurns: Boolean,
+    onDeleteTurn: (String) -> Unit,
+    onRollbackToTurn: (String) -> Unit,
     activeUserMsg: String?,
     workEvents: List<ru.outsideproarts.oassist.core.model.WorkEvent>,
     response: String,
@@ -518,12 +525,21 @@ private fun ShareConversation(
                 modifier = Modifier.fillMaxSize(),
                 verticalArrangement = Arrangement.spacedBy(OAssistDimens.ItemSpacing),
             ) {
-                items(turns) { turn ->
+                items(turns) { entry ->
+                    val turn = entry.turn
+                    val managedId = if (canManageTurns) entry.id else null
+                    val onDelete: (() -> Unit)? = managedId?.let { id -> ({ onDeleteTurn(id) }) }
+                    // Откат скрыт на последнем ходе: после него стирать нечего.
+                    val onRollback: (() -> Unit)? = managedId
+                        ?.takeIf { id -> turns.lastOrNull()?.id != id }
+                        ?.let { id -> ({ onRollbackToTurn(id) }) }
                     ChatMessageBubble(
                         isUser = true,
                         answer = turn.userText,
                         audio = turn.userAudio,
                         speakLabel = speakLabel,
+                        onDelete = onDelete,
+                        onRollback = onRollback,
                     )
                     val speakTurn: (() -> Unit)? = if (turn.answer.isNotBlank()) {
                         {
@@ -541,6 +557,8 @@ private fun ShareConversation(
                         usage = turn.usage,
                         onSpeak = speakTurn,
                         speakLabel = speakLabel,
+                        onDelete = onDelete,
+                        onRollback = onRollback,
                     )
                 }
                 if (activeUserMsg != null) {

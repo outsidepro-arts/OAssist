@@ -78,3 +78,12 @@ data class StoredTurn(
         if (answer.isNotBlank()) listOf(ChatMessage(ChatRole.ASSISTANT, answer)) else emptyList()
     }
 }
+
+/**
+ * Сохранённый ход с идентификатором его строки: стабильная ручка для удаления
+ * сообщения и отката истории (`deleteTurn`/`deleteTurnsAfter`).
+ */
+data class StoredTurnEntry(
+    val id: String,
+    val turn: StoredTurn,
+)

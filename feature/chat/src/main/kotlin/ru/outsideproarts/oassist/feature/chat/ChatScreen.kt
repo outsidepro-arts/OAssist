@@ -74,6 +74,7 @@ import ru.outsideproarts.oassist.core.model.ChatSortOrder
 import ru.outsideproarts.oassist.core.model.ChatSummary
 import ru.outsideproarts.oassist.core.model.ProviderUsage
 import ru.outsideproarts.oassist.core.model.StoredTurn
+import ru.outsideproarts.oassist.core.model.StoredTurnEntry
 import ru.outsideproarts.oassist.core.provider.ChatChunk
 import ru.outsideproarts.oassist.core.model.ChatMessage
 import ru.outsideproarts.oassist.core.model.AudioPart
@@ -108,6 +109,8 @@ import ru.outsideproarts.oassist.core.ui.components.rememberChatListScroll
  * Одна реплика ленты. У ассистента три раздельные проекции:
  * [work] — полотно «Ход работы» (мыслевые блоки и тулы в хронологии),
  * [answer] — основной ответ. У пользователя [answer] — текст, [work] пусто.
+ * [turnId] — id хода ([ru.outsideproarts.oassist.core.model.StoredTurnEntry]):
+ * ручка для действий «удалить/откатиться»; null у реплики без записанного хода.
  */
 data class ChatItem(
     val role: ChatRole,
@@ -118,6 +121,7 @@ data class ChatItem(
     val audio: AudioPart? = null,
     /** Статистика хода (токены/cost от провайдера); null — провайдер не прислал. */
     val usage: ru.outsideproarts.oassist.core.model.ProviderUsage? = null,
+    val turnId: String? = null,
 )
 
 /** Ключ памяти позиций прокрутки для несохранённого черновика основного окна. */
@@ -277,12 +281,12 @@ fun ChatScreen(
         if (chatKind == ChatKind.ASSISTANT) AssistMode.ASSISTANT else AssistMode.CHAT
 
     /** Фоновое имя диалога от модели; до ответа остаётся плейсхолдер. */
-    fun generateTitle(userMsg: String, expectedFirstTurn: StoredTurn) {
+    fun generateTitle(userMsg: String, expectedFirstTurn: StoredTurnEntry) {
         if (titleLocked || turnStore.firstOrNull() !== expectedFirstTurn) return
-        scope.launch(ru.outsideproarts.oassist.core.model.diagnostics.DiagnosticContext(expectedFirstTurn.diagnosticOperationId ?: ru.outsideproarts.oassist.core.model.diagnostics.Diagnostics.newOperationId())) {
+        scope.launch(ru.outsideproarts.oassist.core.model.diagnostics.DiagnosticContext(expectedFirstTurn.turn.diagnosticOperationId ?: ru.outsideproarts.oassist.core.model.diagnostics.Diagnostics.newOperationId())) {
             if (titleLocked || turnStore.firstOrNull() !== expectedFirstTurn) return@launch
             val generated = runCatching {
-                ChatTitler.generateTitle(sendMode(), userMsg, AgentFactory.get(), firstAnswer = expectedFirstTurn.answer)
+                ChatTitler.generateTitle(sendMode(), userMsg, AgentFactory.get(), firstAnswer = expectedFirstTurn.turn.answer)
             }.getOrNull() ?: return@launch
             if (!titleLocked && turnStore.firstOrNull() === expectedFirstTurn) {
                 chatTitle = generated
@@ -296,7 +300,7 @@ fun ChatScreen(
         repo: ru.outsideproarts.oassist.core.data.chat.ChatRepository,
         saver: ChatTurnSaver,
         currentId: String?,
-        stored: StoredTurn,
+        stored: StoredTurnEntry,
         savedMode: AssistMode,
         savedTitle: String,
         operations: List<String>,
@@ -311,10 +315,10 @@ fun ChatScreen(
             },
         ) { id ->
             operations.forEach { repo.bindDiagnosticOperation(id, it) }
-            repo.appendTurn(id, stored)
+            repo.appendTurn(id, stored.turn, stored.id)
             if (viewModel.turnSavers.current === saver && chatId == null) chatId = id
             if (isFirstTurn && viewModel.turnSavers.current === saver && chatId == id) {
-                generateTitle(stored.userText, stored)
+                generateTitle(stored.turn.userText, stored)
             }
         }
     }
@@ -326,6 +330,7 @@ fun ChatScreen(
      * в памяти до кнопки «Сохранить чат».
      */
     fun recordTurn(
+        turnId: String,
         userMsg: String,
         audio: AudioPart?,
         work: List<ru.outsideproarts.oassist.core.model.WorkEvent>,
@@ -335,14 +340,17 @@ fun ChatScreen(
         diagnosticOperationId: String,
     ) {
         turnStore.add(
-            StoredTurn(
-                diagnosticOperationId = diagnosticOperationId,
-                userText = userMsg,
-                userAudio = audio,
-                work = work,
-                answer = answer,
-                usage = usage,
-                turn = turn,
+            StoredTurnEntry(
+                id = turnId,
+                turn = StoredTurn(
+                    diagnosticOperationId = diagnosticOperationId,
+                    userText = userMsg,
+                    userAudio = audio,
+                    work = work,
+                    answer = answer,
+                    usage = usage,
+                    turn = turn,
+                ),
             ),
         )
         val repo = ChatHandle.get()
@@ -366,8 +374,8 @@ fun ChatScreen(
         }
     }
 
-    fun launchTurn(userMsg: String, audio: AudioPart?) {
-        val history: List<ChatMessage> = turnStore.flatMap { it.modelMessages() }
+    fun launchTurn(userMsg: String, audio: AudioPart?, turnId: String) {
+        val history: List<ChatMessage> = turnStore.flatMap { it.turn.modelMessages() }
         val assistantIndex: Int
         val waiting = messages.lastOrNull()
         if (waiting != null && waiting.role == ChatRole.ASSISTANT && waiting.isStreaming &&
@@ -376,7 +384,7 @@ fun ChatScreen(
             assistantIndex = messages.size - 1
         } else {
             assistantIndex = messages.size
-            messages.add(ChatItem(ChatRole.ASSISTANT, isStreaming = true))
+            messages.add(ChatItem(ChatRole.ASSISTANT, isStreaming = true, turnId = turnId))
         }
         val diagnosticId = ru.outsideproarts.oassist.core.model.diagnostics.Diagnostics.newOperationId()
         viewModel.diagnosticOperations.add(diagnosticId)
@@ -404,6 +412,7 @@ fun ChatScreen(
                     answer = timeline.answerText,
                     isStreaming = streaming,
                     usage = timeline.usage,
+                    turnId = turnId,
                 )
             }
             var error: ru.outsideproarts.oassist.core.provider.ProviderError? = null
@@ -460,6 +469,7 @@ fun ChatScreen(
                             // ещё не в scope — поэтому отдельный флаг).
                             if (chunk.abrupt) sawAbrupt = true
                             recordTurn(
+                                turnId = turnId,
                                 userMsg = userMsg,
                                 audio = audio,
                                 work = timeline.work,
@@ -492,6 +502,7 @@ fun ChatScreen(
                     // AgentLoop delivers the terminal transcript even when collection fails or is cancelled.
                     if (!turnRecorded) {
                         recordTurn(
+                            turnId = turnId,
                             userMsg = userMsg,
                             audio = audio,
                             work = timeline.work,
@@ -513,8 +524,8 @@ fun ChatScreen(
                     // Возвращаем состояние ожидания — как в пре-чеке send(): ждущий
                     // пузырь + isStreaming=true. Иначе эффект фронта не отличит
                     // ожидание от готовности и не повторит ход.
-                    pendingRetry = PendingChatTurn(userMsg, audio)
-                    messages.add(ChatItem(ChatRole.ASSISTANT, isStreaming = true))
+                    pendingRetry = PendingChatTurn(userMsg, audio, turnId)
+                    messages.add(ChatItem(ChatRole.ASSISTANT, isStreaming = true, turnId = turnId))
                     isStreaming = true
                     Toast.makeText(context, offlineRetryText, Toast.LENGTH_LONG).show()
                 } else {
@@ -534,23 +545,26 @@ fun ChatScreen(
     fun send(text: String, audio: AudioPart? = null) {
         val userMsg = text.trim()
         if ((userMsg.isEmpty() && audio == null) || isStreaming || viewModel.isLoadingHistory) return
-        messages.add(ChatItem(ChatRole.USER, answer = userMsg, audio = audio))
+        // Id хода генерируется до записи: реплики ленты сразу несут ручку
+        // удаления/отката, а запись использует тот же id строки.
+        val turnId = java.util.UUID.randomUUID().toString()
+        messages.add(ChatItem(ChatRole.USER, answer = userMsg, audio = audio, turnId = turnId))
         isStreaming = true
         // Своё сообщение всегда показываем снизу: ленту ждём в конце.
         viewModel.scrollRequester.scrollToEnd()
         // Barge-in: новый вопрос прерывает озвучку предыдущего ответа.
         stopSpeech?.invoke()
         sounds?.playIfEnabled(AgentSound.MSG_SEND, soundEnabled)
-        messages.add(ChatItem(ChatRole.ASSISTANT, isStreaming = true))
+        messages.add(ChatItem(ChatRole.ASSISTANT, isStreaming = true, turnId = turnId))
         val net = ru.outsideproarts.oassist.core.net.NetworkHandle.get()
         if (net != null && !net.isOnline.value) {
             // Оффлайн: пузыри уже в ленте, стрим стартует фронтом сети (эффект ниже).
-            pendingRetry = PendingChatTurn(userMsg, audio)
+            pendingRetry = PendingChatTurn(userMsg, audio, turnId)
             Toast.makeText(context, offlineRetryText, Toast.LENGTH_LONG).show()
             return
         }
         pendingRetry = null
-        launchTurn(userMsg, audio)
+        launchTurn(userMsg, audio, turnId)
     }
     // Стоп хода: отмена стрима или снятие ожидания сети. Без запущенной job
     // висящие пузыри ожидания убираются и флаг сбрасывается здесь
@@ -570,17 +584,19 @@ fun ChatScreen(
         }
     }
 
-    fun loadTurnsIntoUi(turns: List<StoredTurn>) {
+    fun loadTurnsIntoUi(turns: List<StoredTurnEntry>) {
         messages.clear()
         providerNotice = null
-        turns.forEach { turn ->
-            messages.add(ChatItem(ChatRole.USER, answer = turn.userText, audio = turn.userAudio))
+        turns.forEach { entry ->
+            val turn = entry.turn
+            messages.add(ChatItem(ChatRole.USER, answer = turn.userText, audio = turn.userAudio, turnId = entry.id))
             messages.add(
                 ChatItem(
                     role = ChatRole.ASSISTANT,
                     work = turn.work,
                     answer = turn.answer,
                     usage = turn.usage,
+                    turnId = entry.id,
                 ),
             )
         }
@@ -599,7 +615,7 @@ fun ChatScreen(
             try {
                 previousStream?.join()
                 check(saver.awaitSaved())
-                val turns = repo?.loadTurns(summary.id).orEmpty()
+                val turns = repo?.loadTurnEntries(summary.id).orEmpty()
                 if (viewModel.historyGeneration != generation) return@launch
                 viewModel.turnSavers.openChat(summary.id)
                 viewModel.diagnosticOperations = mutableListOf()
@@ -674,8 +690,8 @@ fun ChatScreen(
         val diagnosticOperations = viewModel.diagnosticOperations.toList()
         // Аудио-ход без текста: имя — из первого текстового хода или ответа.
         val fallbackTitle = ChatTitler.placeholder(
-            turns.firstOrNull { it.userText.isNotBlank() }?.userText
-                ?: turns.firstOrNull { it.answer.isNotBlank() }?.answer.orEmpty(),
+            turns.firstOrNull { it.turn.userText.isNotBlank() }?.turn?.userText
+                ?: turns.firstOrNull { it.turn.answer.isNotBlank() }?.turn?.answer.orEmpty(),
         )
         if (chatTitle.isBlank()) chatTitle = fallbackTitle
         val title = chatTitle
@@ -747,6 +763,57 @@ fun ChatScreen(
             resetChat()
         }
     }
+
+    /**
+     * Стереть ходы из ленты, истории модели и БД. Лента и ходы усекаются после
+     * успешного стирания БД: сбой записи не оставляет вид и БД в разных
+     * состояниях, задание остаётся в очереди с кнопкой повтора. Стирание встаёт
+     * в очередь записи: незаписанные ходы успевают доехать до БД и только потом
+     * стираются, а ожидание сохранения при открытии чата ждёт и стирание.
+     * Несохранённый черновик живёт только в памяти.
+     */
+    fun removeTurns(turnId: String, afterOnly: Boolean) {
+        val trim: () -> Unit = {
+            val index = turnStore.indexOfFirst { it.id == turnId }
+            if (index >= 0) {
+                if (afterOnly) {
+                    while (turnStore.size > index + 1) turnStore.removeAt(turnStore.size - 1)
+                } else {
+                    turnStore.removeAt(index)
+                }
+            }
+            val lastItem = messages.indexOfLast { it.turnId == turnId }
+            if (afterOnly) {
+                if (lastItem >= 0) while (messages.size > lastItem + 1) messages.removeAt(messages.size - 1)
+            } else {
+                messages.removeAll { it.turnId == turnId }
+            }
+        }
+        val repo = ChatHandle.get()
+        val knownId = chatId
+        val saver = if (knownId != null) viewModel.turnSavers.forChat(knownId) else viewModel.turnSavers.current
+        if (repo == null || (knownId == null && !saver.hasSaveRequest)) {
+            trim()
+            return
+        }
+        knownId?.let { viewModel.turnSavers.register(it, saver) }
+        saver.save(currentId = knownId, create = { knownId ?: error("Removal of an unpersisted chat") }) { id ->
+            if (afterOnly) repo.deleteTurnsAfter(id, turnId) else repo.deleteTurn(id, turnId)
+            trim()
+        }
+    }
+
+    /**
+     * Удалить сообщение (ход целиком, с полотном «Ход работы»). Реплика без
+     * записанного хода (отменённый пустой ход) удаляется только из ленты.
+     */
+    fun deleteTurnMessage(turnId: String) = removeTurns(turnId, afterOnly = false)
+
+    /**
+     * Откатиться к сообщению: выбранный ход остаётся последним, все следующие
+     * стираются безвозвратно. История для модели продолжается с выбранного хода.
+     */
+    fun rollbackToTurn(turnId: String) = removeTurns(turnId, afterOnly = true)
     // Проверяем текущее состояние при входе и дальнейшие переходы offline→online.
     // Позиция — после launchTurn/send/cancelTurn: эффект их вызывает,
     // локальные fun видны только ниже объявления.
@@ -760,7 +827,7 @@ fun ChatScreen(
                 if (retry != null && streamJob == null && isStreaming) {
                     pendingRetry = null
                     Toast.makeText(context, repeatingText, Toast.LENGTH_SHORT).show()
-                    launchTurn(retry.text, retry.audio)
+                    launchTurn(retry.text, retry.audio, retry.turnId)
                 }
             }
             wasOnline = online
@@ -1028,7 +1095,7 @@ fun ChatScreen(
             ChatInfoScreen(
                 initialTitle = chatTitle,
                 kind = chatKind,
-                turns = turnStore,
+                turns = turnStore.map { it.turn },
                 onBack = { showChatInfo = false },
                 onRename = ::renameCurrentChat,
             )
@@ -1122,6 +1189,10 @@ fun ChatScreen(
                             val canSpeak = speakSentence != null &&
                                 item.role == ChatRole.ASSISTANT &&
                                 item.answer.isNotBlank()
+                            // Действия доступны только для записанных/завершённых ходов:
+                            // во время стрима и загрузки истории лента неизменяема.
+                            val managedTurnId =
+                                if (!isStreaming && !viewModel.isLoadingHistory) item.turnId else null
                             MessageBubble(
                                 item = item,
                                 onSpeak = if (canSpeak) {
@@ -1134,6 +1205,10 @@ fun ChatScreen(
                                     null
                                 },
                                 speakLabel = speakAnswerLabel,
+                                onDelete = managedTurnId?.let { id -> ({ deleteTurnMessage(id) }) },
+                                onRollback = managedTurnId
+                                    ?.takeIf { id -> turnStore.indexOfFirst { it.id == id } in 0 until turnStore.size - 1 }
+                                    ?.let { id -> ({ rollbackToTurn(id) }) },
                             )
                         }
                     }
@@ -1316,13 +1391,16 @@ fun ChatScreen(
 
 /**
  * Реплика ленты: общий пузырь [ChatMessageBubble] (полотно «Ход работы»,
- * голосовой плейсхолдер, действие «Озвучить ответ»).
+ * голосовой плейсхолдер, действие «Озвучить ответ», действия «Удалить
+ * сообщение»/«Откатиться к этому сообщению» с подтверждением).
  */
 @Composable
 private fun MessageBubble(
     item: ChatItem,
     onSpeak: (() -> Unit)?,
     speakLabel: String,
+    onDelete: (() -> Unit)? = null,
+    onRollback: (() -> Unit)? = null,
 ) {
     ChatMessageBubble(
         isUser = item.role == ChatRole.USER,
@@ -1333,5 +1411,7 @@ private fun MessageBubble(
         onSpeak = onSpeak,
         speakLabel = speakLabel,
         isStreaming = item.isStreaming,
+        onDelete = onDelete,
+        onRollback = onRollback,
     )
 }

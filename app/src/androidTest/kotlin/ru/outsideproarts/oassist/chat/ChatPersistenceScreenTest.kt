@@ -42,6 +42,7 @@ import ru.outsideproarts.oassist.core.model.ChatMessage
 import ru.outsideproarts.oassist.core.model.ChatRole
 import ru.outsideproarts.oassist.core.model.ModelInfo
 import ru.outsideproarts.oassist.core.model.StoredTurn
+import ru.outsideproarts.oassist.core.model.StoredTurnEntry
 import ru.outsideproarts.oassist.core.net.NetworkHandle
 import ru.outsideproarts.oassist.core.provider.ChatChunk
 import ru.outsideproarts.oassist.core.provider.ModelClient
@@ -80,9 +81,9 @@ class ChatPersistenceScreenTest {
                     }
                     pending.release.countDown()
                     try {
-                        compose.waitUntil(10_000) { !vm.isLoadingHistory && vm.turnStore.map { it.userText } == listOf("first") }
+                        compose.waitUntil(10_000) { !vm.isLoadingHistory && vm.turnStore.map { it.turn.userText } == listOf("first") }
                     } catch (error: Throwable) {
-                        throw AssertionError("id=${vm.chatId}, loading=${vm.isLoadingHistory}, turns=${vm.turnStore.map { it.userText }}, db=${runBlocking { fixture.repository.loadTurns(id).map { it.userText } }}", error)
+                        throw AssertionError("id=${vm.chatId}, loading=${vm.isLoadingHistory}, turns=${vm.turnStore.map { it.turn.userText }}, db=${runBlocking { fixture.repository.loadTurns(id).map { it.userText } }}", error)
                     }
                     compose.onNodeWithContentDescription(context.getString(ChatR.string.chat_send)).performClick()
                     compose.waitUntil(10_000) { requests.size == 2 }
@@ -105,10 +106,10 @@ class ChatPersistenceScreenTest {
                     assertTrue(pending.entered.await(10, TimeUnit.SECONDS))
                     open("Target")
                     pending.release.countDown()
-                    compose.waitUntil(10_000) { vm.turnStore.any { it.userText == "from B" } }
+                    compose.waitUntil(10_000) { vm.turnStore.any { it.turn.userText == "from B" } }
                     compose.runOnIdle {
                         assertEquals(b, vm.chatId)
-                        assertEquals(listOf("from B"), vm.turnStore.map { it.userText })
+                        assertEquals(listOf("from B"), vm.turnStore.map { it.turn.userText })
                     }
                 }
             }
@@ -119,7 +120,7 @@ class ChatPersistenceScreenTest {
         val entered = CountDownLatch(1)
         val resume = CountDownLatch(1)
             ChatPersistenceFixture().use { fixture ->
-                fixture.repository.replaceAssistantTurns(emptyList())
+                fixture.repository.replaceAssistantTurns { emptyList() }
                 val target = ChatRepository.ASSISTANT_CHAT_ID
                 fixture.repository.onDiagnosticBind = { _, _ ->
                     entered.countDown()
@@ -135,7 +136,7 @@ class ChatPersistenceScreenTest {
                     try {
                         compose.waitUntil(10_000) { vm.chatId == target }
                     } catch (error: Throwable) {
-                        throw AssertionError("manual save: current=${vm.chatId}, kind=${vm.chatKind}, loading=${vm.isLoadingHistory}, turns=${vm.turnStore.map { it.userText }}", error)
+                        throw AssertionError("manual save: current=${vm.chatId}, kind=${vm.chatKind}, loading=${vm.isLoadingHistory}, turns=${vm.turnStore.map { it.turn.userText }}", error)
                     }
                     resume.countDown()
                     compose.waitUntil(10_000) { runBlocking { fixture.repository.observeChats().first().size == 2 } }
@@ -166,7 +167,7 @@ class ChatPersistenceScreenTest {
                 compose.waitUntil(10_000) { compose.onAllNodesWithText(context.getString(ChatR.string.chat_save_failed_retry)).fetchSemanticsNodes().isNotEmpty() }
                 send("second")
                 assertTrue(runBlocking { fixture.repository.loadTurns(id).isEmpty() })
-                assertEquals(listOf("first", "second"), vm.turnStore.map { it.userText })
+                assertEquals(listOf("first", "second"), vm.turnStore.map { it.turn.userText })
                 fixture.database.openHelper.writableDatabase.execSQL("DROP TRIGGER fail_turn")
                 compose.onNodeWithText(context.getString(ChatR.string.chat_save_failed_retry)).performClick()
                 compose.waitUntil(10_000) { runBlocking { fixture.repository.loadTurns(id).size == 2 } }
@@ -191,14 +192,14 @@ class ChatPersistenceScreenTest {
                     compose.waitUntil(10_000) { !vm.isLoadingHistory }
                     compose.runOnIdle {
                         assertEquals(source, vm.chatId)
-                        assertEquals(listOf("source turn"), vm.turnStore.map { it.userText })
+                        assertEquals(listOf("source turn"), vm.turnStore.map { it.turn.userText })
                     }
                 } finally {
                     db.execSQL("ALTER TABLE unavailable_turns RENAME TO turns")
                 }
                 open("Target")
                 compose.waitUntil(10_000) { !vm.isLoadingHistory && vm.chatId == target }
-                assertEquals(listOf("target turn"), vm.turnStore.map { it.userText })
+                assertEquals(listOf("target turn"), vm.turnStore.map { it.turn.userText })
             }
         }
     }
@@ -271,7 +272,7 @@ class ChatPersistenceScreenTest {
                         assertTrue(pendingAppend.entered.await(10, TimeUnit.SECONDS))
                         compose.runOnIdle {
                             assertEquals(null, vm.chatId)
-                            assertEquals(listOf("first"), vm.turnStore.map { it.userText })
+                            assertEquals(listOf("first"), vm.turnStore.map { it.turn.userText })
                             assertTrue(vm.messages.isNotEmpty())
                         }
                         compose.onNodeWithContentDescription(context.getString(ChatR.string.chat_open_list)).performClick()
@@ -324,7 +325,9 @@ class ChatPersistenceScreenTest {
             timestamp = 2000L
             fixture.repository.createChat(AssistMode.CHAT, "Cherry")
             timestamp = 4000L
-            fixture.repository.replaceAssistantTurns(listOf(StoredTurn(userText = "assistant turn")))
+            fixture.repository.replaceAssistantTurns {
+                listOf(StoredTurnEntry("assistant-turn", StoredTurn(userText = "assistant turn")))
+            }
             withScreen(fixture, null, "") { _, _ ->
                 compose.onNodeWithContentDescription(context.getString(ChatR.string.chat_open_list)).performClick()
                 val assistant = context.getString(UiR.string.chats_assistant_title)

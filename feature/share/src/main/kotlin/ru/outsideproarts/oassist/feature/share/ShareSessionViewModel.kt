@@ -31,6 +31,7 @@ import ru.outsideproarts.oassist.core.model.ImagePart
 import ru.outsideproarts.oassist.core.model.ModelUserInput
 import ru.outsideproarts.oassist.core.model.ProviderUsage
 import ru.outsideproarts.oassist.core.model.StoredTurn
+import ru.outsideproarts.oassist.core.model.StoredTurnEntry
 import ru.outsideproarts.oassist.core.model.TtsConfig
 import ru.outsideproarts.oassist.core.model.WorkEvent
 import ru.outsideproarts.oassist.core.model.diagnostics.DiagnosticContext
@@ -85,8 +86,9 @@ class ShareSessionViewModel internal constructor(private val chatStore: ShareCha
     var chatTitle by mutableStateOf("")
     var titleLocked by mutableStateOf(false)
 
-    /** Ходы накапливаются в памяти — источник истины для истории и записи в БД. */
-    val turns = mutableStateListOf<StoredTurn>()
+    /** Ходы накапливаются в памяти — источник истины для истории и записи в БД.
+     *  Каждый ход несёт id своей строки (ручка удаления/отката). */
+    val turns = mutableStateListOf<StoredTurnEntry>()
     var diagnosticOperations = mutableListOf<String>()
 
     /**
@@ -112,7 +114,9 @@ class ShareSessionViewModel internal constructor(private val chatStore: ShareCha
     private var payloadJob: Job? = null
     private var streamJob: Job? = null
     private var changeJob: Job? = null
-    private var saveJob: Job? = null
+    /** Хвост цепочки записи: дозаписи ходов и стирания идут строго по очереди. */
+    private var lastWrite: Job? = null
+    private var writesInFlight = 0
     private var titleJob: Job? = null
     private var savedTurnCount = 0
 
@@ -149,7 +153,7 @@ class ShareSessionViewModel internal constructor(private val chatStore: ShareCha
                 streamJob?.join()
                 isStreaming = false
                 titleJob?.join()
-                saveJob?.join()
+                lastWrite?.join()
                 if (saveFailed && !discard) return@launch
                 change()
             } catch (cancel: CancellationException) {
@@ -250,7 +254,7 @@ class ShareSessionViewModel internal constructor(private val chatStore: ShareCha
                 changeJob?.join()
                 streamJob?.join()
                 titleJob?.join()
-                saveJob?.join()
+                lastWrite?.join()
             } finally {
                 scope.cancel()
             }
@@ -260,7 +264,7 @@ class ShareSessionViewModel internal constructor(private val chatStore: ShareCha
     /** Вход в разговор с сохранённым диалогом: история читается из БД. */
     fun openChat(summary: ChatSummary) {
         changeConversation {
-            val loaded = chatStore?.loadTurns(summary.id).orEmpty()
+            val loaded = chatStore?.loadTurnEntries(summary.id).orEmpty()
             coroutineContext.ensureActive()
             resetConversation()
             chatId = summary.id
@@ -346,7 +350,7 @@ class ShareSessionViewModel internal constructor(private val chatStore: ShareCha
         changeConversation {
             val repo = chatStore ?: return@changeConversation
             val title = repo.title(id)
-            val loaded = repo.loadTurns(id)
+            val loaded = repo.loadTurnEntries(id)
             coroutineContext.ensureActive()
             resetConversation()
             chatId = id
@@ -373,7 +377,7 @@ class ShareSessionViewModel internal constructor(private val chatStore: ShareCha
         activeUserMsg = userMsg
         // Свой вопрос всегда показываем снизу: ленту ждём в конце.
         scrollRequester.scrollToEnd()
-        val history = turns.flatMap { it.modelMessages() }
+        val history = turns.flatMap { it.turn.modelMessages() }
         val timeline = WorkTimelineBuilder()
         workEvents = emptyList()
         response = ""
@@ -390,15 +394,18 @@ class ShareSessionViewModel internal constructor(private val chatStore: ShareCha
             if (turnRecorded) return
             turnRecorded = true
             if (timeline.isEmpty && turnTranscript.isEmpty()) return
-            val stored = StoredTurn(
-                diagnosticOperationId = diagnosticId,
-                userText = userMsg,
-                modelUserInput = modelInput,
-                userImages = sentImages,
-                work = timeline.work,
-                answer = timeline.answerText,
-                usage = timeline.usage,
-                turn = turnTranscript,
+            val stored = StoredTurnEntry(
+                id = java.util.UUID.randomUUID().toString(),
+                turn = StoredTurn(
+                    diagnosticOperationId = diagnosticId,
+                    userText = userMsg,
+                    modelUserInput = modelInput,
+                    userImages = sentImages,
+                    work = timeline.work,
+                    answer = timeline.answerText,
+                    usage = timeline.usage,
+                    turn = turnTranscript,
+                ),
             )
             turns.add(stored)
             activeUserMsg = null
@@ -552,48 +559,100 @@ class ShareSessionViewModel internal constructor(private val chatStore: ShareCha
     }
 
     /** Ход в БД: в сохранённый диалог, при autoSave — создать новый, иначе в память. */
-    private fun persistTurn(stored: StoredTurn, nameSeed: String) {
+    private fun persistTurn(stored: StoredTurnEntry, nameSeed: String) {
         if (chatTitle.isBlank()) chatTitle = ChatTitler.placeholder(nameSeed)
         if (chatId != null || autoSave) saveTurns()
         if (turns.size == 1 && !isChangingConversation && !isClosing) generateTitle(nameSeed, stored)
     }
 
-    /** Navigation waits for this writer; successful prefixes are never appended twice on retry. */
-    private fun saveTurns() {
-        if (isSaving || turns.isEmpty()) return
-        val repo = chatStore ?: return
+    /**
+     * Единая цепочка записи: дозаписи ходов и стирания идут строго по очереди —
+     * стирание выполняется после незаписанных ходов и до новых, поэтому счётчик
+     * сохранённых ходов и БД не расходятся с лентой. [reportFailure] — для
+     * дозаписей (см. [saveFailed] и «Повторить»); стирания сообщают ошибку тостом.
+     */
+    private fun enqueueWrite(reportFailure: Boolean = true, op: suspend () -> Unit) {
+        writesInFlight++
         isSaving = true
-        saveFailed = false
-        saveJob = scope.launch {
+        val previous = lastWrite
+        lastWrite = scope.launch {
+            previous?.join()
             try {
-                val id = chatId ?: repo.createChat(
-                    AssistMode.SHARE,
-                    chatTitle.ifBlank { ChatTitler.placeholder(turns.first().userText) },
-                ).also { chatId = it }
-                diagnosticOperations.toList().forEach { repo.bindDiagnosticOperation(id, it) }
-                while (savedTurnCount < turns.size) {
-                    repo.appendTurn(id, turns[savedTurnCount])
-                    savedTurnCount++
-                }
+                op()
             } catch (cancel: CancellationException) {
                 throw cancel
             } catch (error: Exception) {
-                saveFailed = true
+                if (reportFailure) saveFailed = true
                 _toasts.tryEmit(ShareToast.Error(ProviderError.from(error)))
             } finally {
-                isSaving = false
+                writesInFlight--
+                if (writesInFlight == 0) isSaving = false
             }
         }
     }
 
-    private fun generateTitle(nameSeed: String, expectedFirstTurn: StoredTurn) {
+    /** Navigation waits for this writer; successful prefixes are never appended twice on retry. */
+    private fun saveTurns() {
+        if (turns.isEmpty()) return
+        val repo = chatStore ?: return
+        saveFailed = false
+        enqueueWrite {
+            if (turns.isEmpty()) return@enqueueWrite
+            val id = chatId ?: repo.createChat(
+                AssistMode.SHARE,
+                chatTitle.ifBlank { ChatTitler.placeholder(turns.first().turn.userText) },
+            ).also { chatId = it }
+            diagnosticOperations.toList().forEach { repo.bindDiagnosticOperation(id, it) }
+            while (savedTurnCount < turns.size) {
+                val entry = turns[savedTurnCount]
+                repo.appendTurn(id, entry.turn, entry.id)
+                savedTurnCount++
+            }
+        }
+    }
+
+    /**
+     * Удалить сообщение (ход целиком, с полотном «Ход работы»): лента и БД —
+     * в общей цепочке записи, память меняется после успешного стирания.
+     */
+    fun deleteTurnMessage(turnId: String) = removeTurns(turnId, afterOnly = false)
+
+    /**
+     * Откатиться к сообщению: выбранный ход остаётся последним, все следующие
+     * стираются безвозвратно (лента и БД). История для модели продолжается
+     * с выбранного хода.
+     */
+    fun rollbackToTurn(turnId: String) = removeTurns(turnId, afterOnly = true)
+
+    private fun removeTurns(turnId: String, afterOnly: Boolean) {
+        if (isClosing || isChangingConversation) return
+        enqueueWrite(reportFailure = false) {
+            val index = turns.indexOfFirst { it.id == turnId }
+            if (index < 0) return@enqueueWrite
+            val from = if (afterOnly) index + 1 else index
+            val until = if (afterOnly) turns.size else index + 1
+            if (from >= until) return@enqueueWrite
+            // Сотрутся только сохранённые ходы: незаписанные исчезнут и так.
+            val savedDoomed = (from until until).count { it < savedTurnCount }
+            if (savedDoomed > 0) {
+                chatId?.let { id ->
+                    if (afterOnly) chatStore?.deleteTurnsAfter(id, turnId)
+                    else chatStore?.deleteTurn(id, turnId)
+                }
+            }
+            for (i in until - 1 downTo from) turns.removeAt(i)
+            savedTurnCount -= savedDoomed
+        }
+    }
+
+    private fun generateTitle(nameSeed: String, expectedFirstTurn: StoredTurnEntry) {
         if (titleLocked || turns.firstOrNull() !== expectedFirstTurn) return
         titleJob = scope.launch(
             DiagnosticContext(
-                expectedFirstTurn.diagnosticOperationId ?: Diagnostics.newOperationId(),
+                expectedFirstTurn.turn.diagnosticOperationId ?: Diagnostics.newOperationId(),
             ),
         ) {
-            saveJob?.join()
+            lastWrite?.join()
             if (saveFailed) return@launch
             if (titleLocked || turns.firstOrNull() !== expectedFirstTurn) return@launch
             val generated = runCatching {

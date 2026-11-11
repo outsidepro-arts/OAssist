@@ -104,6 +104,15 @@
     <string name="msg_tool_call">Выполняю: %1$s</string>
     <string name="msg_tool_result">Готово: %1$s</string>
     <string name="msg_image_attached">Изображение</string>
+    <string name="msg_actions_menu">Действия с сообщением</string>
+    <string name="msg_action_delete">Удалить сообщение</string>
+    <string name="msg_action_rollback">Откатиться к этому сообщению</string>
+    <string name="msg_delete_title">Удалить сообщение?</string>
+    <string name="msg_delete_message">Сообщение вместе с ответом ассистента и «Ходом работы» будут удалены безвозвратно, включая историю для модели.</string>
+    <string name="msg_delete_confirm">Удалить</string>
+    <string name="msg_rollback_title">Откатиться к этому сообщению?</string>
+    <string name="msg_rollback_message">Все сообщения после выбранного будут удалены безвозвратно. История для модели продолжится с выбранного сообщения.</string>
+    <string name="msg_rollback_confirm">Откатиться</string>
     <string name="chats_unsaved_title">Несохранённый чат</string>
     <string name="chats_unsaved_message">Текущий диалог не сохранён. Что сделать с ним перед продолжением?</string>
     <string name="chats_unsaved_save">Сохранить и продолжить</string>

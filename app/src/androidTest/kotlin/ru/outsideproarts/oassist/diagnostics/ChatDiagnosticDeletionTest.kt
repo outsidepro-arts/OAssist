@@ -115,10 +115,10 @@ class ChatDiagnosticDeletionTest {
             data.diagnostics.record(DiagnosticEvent(DiagnosticKind.PROVIDER_REQUEST, "late-bind", content = "late-bind-private"))
 
             val assistant = ChatRepository.ASSISTANT_CHAT_ID
-            data.chats.replaceAssistantTurns(emptyList())
+            data.chats.replaceAssistantTurns { emptyList() }
             val oldGeneration = data.chats.diagnosticGeneration(assistant)
             data.chats.deleteChat(assistant)
-            data.chats.replaceAssistantTurns(emptyList())
+            data.chats.replaceAssistantTurns { emptyList() }
             val newGeneration = data.chats.diagnosticGeneration(assistant)
             data.chats.bindDiagnosticOperation(assistant, "new-assistant", newGeneration)
             data.diagnostics.record(DiagnosticEvent(DiagnosticKind.PROVIDER_REQUEST, "new-assistant", content = "new-assistant-content"))

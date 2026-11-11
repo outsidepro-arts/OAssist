@@ -8,9 +8,15 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ExpandLess
 import androidx.compose.material.icons.filled.ExpandMore
+import androidx.compose.material.icons.filled.MoreVert
+import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -44,6 +50,10 @@ private const val MAX_TOOL_OUTPUT_CHARS = 500
  * статистика — последней строкой) и текст. Голосовой ход — плейсхолдер с
  * длительностью, байты не показываются. Видимый текст не live region —
  * озвучка идёт каналом речи, повтор действием «Озвучить ответ».
+ *
+ * Действия с сообщением (удалить, откатиться) — через меню «⋮» и
+ * CustomAccessibilityAction; оба требуют подтверждения диалогом.
+ * Null у действия — оно недоступно (идущий ход, реплика без записанного хода).
  */
 @Composable
 fun ChatMessageBubble(
@@ -56,6 +66,10 @@ fun ChatMessageBubble(
     isStreaming: Boolean = false,
     onSpeak: (() -> Unit)? = null,
     speakLabel: String,
+    /** Удалить сообщение (ход целиком) — вызывается после подтверждения. */
+    onDelete: (() -> Unit)? = null,
+    /** Откатиться к этому сообщению — вызывается после подтверждения. */
+    onRollback: (() -> Unit)? = null,
     modifier: Modifier = Modifier,
 ) {
     val roleLabel = if (isUser) {
@@ -65,15 +79,22 @@ fun ChatMessageBubble(
     }
     val bodyText = audio?.let { stringResource(R.string.msg_voice_message, it.durationSec) }
         ?: answer.ifEmpty { "…" }
+    val deleteLabel = stringResource(R.string.msg_action_delete)
+    val rollbackLabel = stringResource(R.string.msg_action_rollback)
 
-    val speakModifier = if (onSpeak != null) {
-        Modifier.semantics {
-            customActions = listOf(
-                CustomAccessibilityAction(speakLabel) { onSpeak(); true },
-            )
-        }
-    } else {
+    var menuExpanded by remember { mutableStateOf(false) }
+    var confirmDelete by remember { mutableStateOf(false) }
+    var confirmRollback by remember { mutableStateOf(false) }
+
+    val bodyActions = buildList {
+        onSpeak?.let { speak -> add(CustomAccessibilityAction(speakLabel) { speak(); true }) }
+        onDelete?.let { delete -> add(CustomAccessibilityAction(deleteLabel) { confirmDelete = true; true }) }
+        onRollback?.let { rollback -> add(CustomAccessibilityAction(rollbackLabel) { confirmRollback = true; true }) }
+    }
+    val bodyModifier = if (bodyActions.isEmpty()) {
         Modifier
+    } else {
+        Modifier.semantics { customActions = bodyActions }
     }
 
     Column(
@@ -82,11 +103,44 @@ fun ChatMessageBubble(
             .semantics { paneTitle = roleLabel },
         horizontalAlignment = if (isUser) Alignment.End else Alignment.Start,
     ) {
-        Text(
-            text = roleLabel,
-            style = MaterialTheme.typography.labelSmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-        )
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text(
+                text = roleLabel,
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            if (onDelete != null || onRollback != null) {
+                IconButton(
+                    onClick = { menuExpanded = true },
+                    modifier = Modifier.oassistTouchTarget(),
+                ) {
+                    Icon(
+                        imageVector = Icons.Filled.MoreVert,
+                        contentDescription = stringResource(R.string.msg_actions_menu),
+                    )
+                }
+                DropdownMenu(expanded = menuExpanded, onDismissRequest = { menuExpanded = false }) {
+                    if (onDelete != null) {
+                        DropdownMenuItem(
+                            text = { Text(deleteLabel) },
+                            onClick = {
+                                menuExpanded = false
+                                confirmDelete = true
+                            },
+                        )
+                    }
+                    if (onRollback != null) {
+                        DropdownMenuItem(
+                            text = { Text(rollbackLabel) },
+                            onClick = {
+                                menuExpanded = false
+                                confirmRollback = true
+                            },
+                        )
+                    }
+                }
+            }
+        }
         if (!isUser && (work.isNotEmpty() || usage != null)) {
             WorkBlock(work = work, usage = usage, isStreaming = isStreaming)
         }
@@ -95,16 +149,69 @@ fun ChatMessageBubble(
                 text = bodyText,
                 style = MaterialTheme.typography.bodyLarge,
                 color = MaterialTheme.colorScheme.onSurface,
-                modifier = speakModifier,
+                modifier = bodyModifier,
             )
         } else {
             Text(
                 text = bodyText,
                 style = MaterialTheme.typography.bodyLarge,
                 color = MaterialTheme.colorScheme.primary,
-                modifier = speakModifier,
+                modifier = bodyModifier,
             )
         }
+    }
+
+    if (confirmDelete) {
+        AlertDialog(
+            onDismissRequest = { confirmDelete = false },
+            title = { Text(stringResource(R.string.msg_delete_title)) },
+            text = { Text(stringResource(R.string.msg_delete_message)) },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        confirmDelete = false
+                        onDelete?.invoke()
+                    },
+                    modifier = Modifier.oassistTouchTarget(),
+                ) {
+                    Text(stringResource(R.string.msg_delete_confirm))
+                }
+            },
+            dismissButton = {
+                TextButton(
+                    onClick = { confirmDelete = false },
+                    modifier = Modifier.oassistTouchTarget(),
+                ) {
+                    Text(stringResource(R.string.chats_cancel))
+                }
+            },
+        )
+    }
+    if (confirmRollback) {
+        AlertDialog(
+            onDismissRequest = { confirmRollback = false },
+            title = { Text(stringResource(R.string.msg_rollback_title)) },
+            text = { Text(stringResource(R.string.msg_rollback_message)) },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        confirmRollback = false
+                        onRollback?.invoke()
+                    },
+                    modifier = Modifier.oassistTouchTarget(),
+                ) {
+                    Text(stringResource(R.string.msg_rollback_confirm))
+                }
+            },
+            dismissButton = {
+                TextButton(
+                    onClick = { confirmRollback = false },
+                    modifier = Modifier.oassistTouchTarget(),
+                ) {
+                    Text(stringResource(R.string.chats_cancel))
+                }
+            },
+        )
     }
 }
 
