@@ -91,6 +91,7 @@ object ToolGroups {
         "call_log_list",
         "memory_get", "skill_list", "skill_get",
         "memory_put", "memory_forget",
+        "message_pin", "message_unpin",
         "notify_list",
         "notify_open", "notify_clear",
         "ui_get_screen", "ui_screenshot", "ui_screenshot_region", "ui_screenshot_node", "ui_wait_for",
@@ -118,7 +119,7 @@ object ToolGroups {
         "call_log_list" -> key(ToolCategory.CALL_LOG, ToolAccess.READ)
         "memory_get", "skill_list", "skill_get" ->
             key(ToolCategory.APP_DATA, ToolAccess.READ)
-        "memory_put", "memory_forget" ->
+        "memory_put", "memory_forget", "message_pin", "message_unpin" ->
             key(ToolCategory.APP_DATA, ToolAccess.WRITE)
         "notify_list" -> key(ToolCategory.NOTIFICATIONS, ToolAccess.READ)
         "notify_open", "notify_clear" ->

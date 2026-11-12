@@ -1,10 +1,6 @@
 package ru.outsideproarts.oassist.feature.chat
 
 import ru.outsideproarts.oassist.core.model.diagnostics.launchDiagnostic
-import android.Manifest
-import android.content.pm.PackageManager
-import androidx.activity.compose.rememberLauncherForActivityResult
-import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -39,7 +35,6 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.rememberDrawerState
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
@@ -55,8 +50,6 @@ import androidx.compose.ui.text.input.KeyboardCapitalization
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.TextFieldValue
 import androidx.lifecycle.Lifecycle
-import androidx.lifecycle.LifecycleEventObserver
-import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.compose.ui.semantics.semantics
 import android.widget.Toast
 import kotlinx.coroutines.launch
@@ -82,28 +75,23 @@ import ru.outsideproarts.oassist.core.model.ChatRole
 import ru.outsideproarts.oassist.core.provider.collectSafe
 import ru.outsideproarts.oassist.core.provider.isEarlyRetryable
 import ru.outsideproarts.oassist.core.speech.AgentSound
-import ru.outsideproarts.oassist.core.speech.BtInputDecision
-import ru.outsideproarts.oassist.core.speech.CaptureError
-import ru.outsideproarts.oassist.core.speech.CaptureState
 import ru.outsideproarts.oassist.core.speech.SentenceSplitter
 import ru.outsideproarts.oassist.core.speech.SoundHandle
-import ru.outsideproarts.oassist.core.speech.SttError
-import ru.outsideproarts.oassist.core.speech.SttListener
 import ru.outsideproarts.oassist.core.speech.StreamSpeaker
-import ru.outsideproarts.oassist.core.speech.VoiceHandle
-import ru.outsideproarts.oassist.core.speech.VoiceInputRoute
 import ru.outsideproarts.oassist.core.model.SttConfig
-import ru.outsideproarts.oassist.core.model.SttEngine
 import ru.outsideproarts.oassist.core.ui.OAssistDimens
 import ru.outsideproarts.oassist.core.ui.components.ApprovalDialog
 import ru.outsideproarts.oassist.core.ui.components.ChatDeleteDialog
+import ru.outsideproarts.oassist.core.ui.components.ChatInputButton
 import ru.outsideproarts.oassist.core.ui.components.ChatMessageBubble
 import ru.outsideproarts.oassist.core.ui.components.ChatPickerList
 import ru.outsideproarts.oassist.core.ui.components.ChatScrollMemory
 import ru.outsideproarts.oassist.core.ui.components.ChatScrollToEndButton
 import ru.outsideproarts.oassist.core.ui.components.ChatUnsavedDialog
 import ru.outsideproarts.oassist.core.ui.components.OAssistPanel
+import ru.outsideproarts.oassist.core.ui.components.VoiceInputStrings
 import ru.outsideproarts.oassist.core.ui.components.rememberChatListScroll
+import ru.outsideproarts.oassist.core.ui.components.rememberVoiceInputController
 
 /**
  * Одна реплика ленты. У ассистента три раздельные проекции:
@@ -137,6 +125,7 @@ fun ChatScreen(
         List<ChatMessage>,
         AudioPart?,
         (List<ChatMessage>) -> Unit,
+        suspend (ru.outsideproarts.oassist.core.model.PinChange) -> Unit,
     ) -> AgentSession,
     modifier: Modifier = Modifier,
     /** Озвучить одно завершённое предложение (неблокирующе). Null — озвучка выключена. */
@@ -195,8 +184,6 @@ fun ChatScreen(
         }.getOrDefault(true)
     }
     var input by viewModel::input
-    /** Живой preview распознавания — НЕ в поле ввода, уходит сразу в сообщение. */
-    var sttPreview by remember { mutableStateOf("") }
     var isStreaming by viewModel::isStreaming
     var streamJob by viewModel::streamJob
     /** Ход, отложенный до появления сети (пре-чек или ранний обрыв без сети). */
@@ -245,35 +232,8 @@ fun ChatScreen(
     val stopVoiceLabel = stringResource(R.string.chat_mic_stop)
     val micIdleLabel = stringResource(R.string.chat_mic_idle)
 
-    // Голосовой ввод — единый in-app захват (VoiceHandle поверх VoiceListener).
-    // Распознанное не пишется в поле; удержание подтверждается отпусканием, partials —
-    // только в preview-статус. Порядок: send → слушатель → старт/стоп → mic.
-    val voice = remember { VoiceHandle.get() }
-    val lifecycleOwner = LocalLifecycleOwner.current
-    val toggleSttOwner = remember(voice, lifecycleOwner) { ChatToggleSttOwner(voice) }
-    DisposableEffect(toggleSttOwner, lifecycleOwner) {
-        val observer = LifecycleEventObserver { _, event ->
-            when (event) {
-                Lifecycle.Event.ON_RESUME -> toggleSttOwner.resume()
-                Lifecycle.Event.ON_PAUSE -> toggleSttOwner.pause()
-                else -> Unit
-            }
-        }
-        lifecycleOwner.lifecycle.addObserver(observer)
-        onDispose {
-            lifecycleOwner.lifecycle.removeObserver(observer)
-            toggleSttOwner.dispose()
-        }
-    }
-    DisposableEffect(toggleSttOwner, registerDestinationExit) {
-        val unregister = registerDestinationExit?.invoke { toggleSttOwner.leaveDestination() }
-        onDispose { unregister?.invoke() }
-    }
-    var capturing by remember { mutableStateOf(false) }
-    var holdSession by remember { mutableStateOf<ChatVoiceHoldSession?>(null) }
-    LaunchedEffect(voice) {
-        voice?.captureState()?.collect { capturing = it is CaptureState.Listening }
-    }
+    // Голосовой ввод — общий контроллер (toggle-STT, hold-to-talk, разрешения);
+    // кнопка и preview-статус — ниже, см. voiceInput.
     // Запуск/повтор стрима. Висящий пузырь ожидания сети (пустой, streaming)
     // переиспользуется — иначе после повтора в ленте было бы два пузыря ответа.
     // Текстовый порядок: launchTurn раньше send (локальные fun вызываются только ниже).
@@ -337,6 +297,7 @@ fun ChatScreen(
         answer: String,
         usage: ProviderUsage?,
         turn: List<ChatMessage>,
+        pins: List<ru.outsideproarts.oassist.core.model.PinChange>,
         diagnosticOperationId: String,
     ) {
         turnStore.add(
@@ -350,7 +311,7 @@ fun ChatScreen(
                     answer = answer,
                     usage = usage,
                     turn = turn,
-                ),
+                ).withPinChanges(pins),
             ),
         )
         val repo = ChatHandle.get()
@@ -374,8 +335,40 @@ fun ChatScreen(
         }
     }
 
+    /**
+     * Закрепление из `message_pin`/`message_unpin`: текущего хода — к ходу при
+     * записи, прошлых — сразу к ленте (бюджеты следующего хода) и к БД
+     * сохранённого диалога. Черновик без чата хранит флаг в памяти: он попадёт
+     * в БД вместе с записью хода.
+     */
+    suspend fun applyPinChange(
+        change: ru.outsideproarts.oassist.core.model.PinChange,
+        currentPins: MutableList<ru.outsideproarts.oassist.core.model.PinChange>,
+    ) {
+        val ref = ru.outsideproarts.oassist.core.model.parseMessageId(change.messageId) ?: return
+        if (ref.turnId == ru.outsideproarts.oassist.core.model.CURRENT_TURN_ID) {
+            currentPins.add(change)
+            return
+        }
+        val index = turnStore.indexOfFirst { it.id == ref.turnId }
+        if (index >= 0) {
+            turnStore[index] = turnStore[index].copy(
+                turn = turnStore[index].turn.withMessagePin(ref.index, change.pinned, change.note),
+            )
+        }
+        val repo = ChatHandle.get() ?: return
+        // Запись — через общую очередь записи ходов: флаг не теряется, если ход
+        // цели ещё не дозаписан (см. ChatTurnPins).
+        ChatTurnPins(viewModel.turnSavers.current, chatId) { id, turnId, messageIndex, pinned, note ->
+            repo.setPin(id, turnId, messageIndex, pinned, note)
+        }.queue(change)
+    }
+
     fun launchTurn(userMsg: String, audio: AudioPart?, turnId: String) {
-        val history: List<ChatMessage> = turnStore.flatMap { it.turn.modelMessages() }
+        val history: List<ChatMessage> = turnStore.flatMap { it.modelMessages() }
+        // Закрепления текущего хода применяются к ходу при записи; закрепления
+        // прошлых ходов применяются сразу (см. applyPinChange).
+        val turnPins = mutableListOf<ru.outsideproarts.oassist.core.model.PinChange>()
         val assistantIndex: Int
         val waiting = messages.lastOrNull()
         if (waiting != null && waiting.role == ChatRole.ASSISTANT && waiting.isStreaming &&
@@ -424,7 +417,14 @@ fun ChatScreen(
                 if (diagnosticChatId != null && diagnosticRepo != null && diagnosticGeneration != null) {
                     diagnosticRepo.bindDiagnosticOperation(diagnosticChatId, diagnosticId, diagnosticGeneration)
                 }
-                val session = sendMessage(sendMode(), userMsg, history, audio) { turnTranscript = it }
+                val session = sendMessage(
+                    sendMode(),
+                    userMsg,
+                    history,
+                    audio,
+                    { turnTranscript = it },
+                    { change -> applyPinChange(change, turnPins) },
+                )
                 error = session.chunks.collectSafe { chunk ->
                     when (chunk) {
                         is ChatChunk.ProviderNotice -> providerNotice = chunk.kind
@@ -476,6 +476,7 @@ fun ChatScreen(
                                 answer = timeline.answerText,
                                 usage = chunk.usage,
                                 turn = turnTranscript,
+                                pins = turnPins,
                                 diagnosticOperationId = diagnosticId,
                             )
                             turnRecorded = true
@@ -509,6 +510,7 @@ fun ChatScreen(
                             answer = timeline.answerText,
                             usage = timeline.usage,
                             turn = turnTranscript,
+                            pins = turnPins,
                             diagnosticOperationId = diagnosticId,
                         )
                         turnRecorded = true
@@ -833,242 +835,37 @@ fun ChatScreen(
             wasOnline = online
         }
     }
-    // Итог удержания отправляется только после принятого отпускания.
-    fun sendRecognizedText(text: String) {
-        if (text.isNotBlank()) {
+    // Голосовой ввод: toggle-STT по тапу, hold-to-talk (STT/RAW), preview и
+    // разрешения — общий контроллер (ядро поведения Chat и Share).
+    val voiceInput = rememberVoiceInputController(
+        stt = stt,
+        audioIn = audioIn,
+        strings = VoiceInputStrings(
+            micDenied = micDeniedText,
+            micEmpty = micEmptyText,
+            micError = micErrorText,
+            noRecognizer = noRecognizerText,
+            btFallback = micBtFallbackText,
+            voiceShort = voiceShortText,
+        ),
+        soundEnabled = soundEnabled,
+        canCapture = !isStreaming && !viewModel.isLoadingHistory,
+        isStreaming = isStreaming,
+        onBargeIn = { cancelTurn() },
+        stopSpeech = stopSpeech,
+        onSendText = { text ->
+            // Итог удержания/распознавания: при загрузке истории текст
+            // не теряется — уходит в поле ввода.
             if (viewModel.isLoadingHistory) {
                 input = TextFieldValue(text)
-                return
+            } else {
+                input = TextFieldValue("")
+                send(text)
             }
-            input = TextFieldValue("")
-            send(text)
-        }
-    }
-    fun sttListener(hold: ChatVoiceHoldSession? = null): SttListener = object : SttListener {
-        override fun onPartial(text: String) {
-            sttPreview = text
-        }
-
-        override fun onFinal(text: String) {
-            sttPreview = ""
-            sounds?.playIfEnabled(AgentSound.VOICE_FINISH, soundEnabled)
-            if (hold == null) sendRecognizedText(text) else hold.onFinal(text)?.let(::sendRecognizedText)
-        }
-
-        override fun onSttError(error: SttError) {
-            hold?.onError()
-            sttPreview = ""
-            sounds?.playIfEnabled(AgentSound.VOICE_FINISH, soundEnabled)
-            Toast.makeText(
-                context,
-                when (error) {
-                    SttError.NO_SPEECH -> micEmptyText
-                    SttError.NETWORK -> micErrorText
-                    SttError.BUSY -> micErrorText
-                    SttError.UNKNOWN -> micErrorText
-                },
-                Toast.LENGTH_LONG,
-            ).show()
-        }
-    }
-    fun sttErrorToast(error: CaptureError) {
-        sttPreview = ""
-        Toast.makeText(
-            context,
-            when (error) {
-                CaptureError.NO_RECOGNIZER -> noRecognizerText
-                CaptureError.NO_PERMISSION -> micDeniedText
-                CaptureError.BUSY,
-                CaptureError.INIT_FAILED -> micErrorText
-            },
-            Toast.LENGTH_LONG,
-        ).show()
-    }
-    // Старт toggle-STT после выданных разрешений.
-    fun startToggleStt() {
-        if (!toggleSttOwner.active) return
-        val handle = voice
-        if (handle == null || !handle.isSttAvailable(stt.recognizerComponent)) {
-            sttErrorToast(CaptureError.NO_RECOGNIZER)
-            return
-        }
-        val error = toggleSttOwner.start(stt.language, sttListener(), stt.recognizerComponent, stt.bluetoothInput)
-        if (error != null) sttErrorToast(error)
-        else sounds?.playIfEnabled(AgentSound.VOICE_START, soundEnabled)
-    }
-    // Только toggle можно продолжить после системного диалога.
-    val pendingMicToggle = remember { mutableStateOf(false) }
-    val micPermissionLauncher = rememberLauncherForActivityResult(
-        ActivityResultContracts.RequestPermission(),
-    ) { granted ->
-        val resumeToggle = pendingMicToggle.value
-        pendingMicToggle.value = false
-        if (granted && resumeToggle) {
-            toggleSttOwner.whenActive { startToggleStt() }
-        } else if (!granted) {
-            Toast.makeText(context, micDeniedText, Toast.LENGTH_LONG).show()
-        }
-    }
-    // BLUETOOTH_CONNECT запрашиваем один раз при подключённой гарнитуре; отказ
-    // не блокирует запись с микрофона. Старт возобновляет только toggle — из
-    // холда палец к этому моменту уже поднят.
-    val pendingBtStart = remember { mutableStateOf<(() -> Unit)?>(null) }
-    val btPermissionLauncher = rememberLauncherForActivityResult(
-        ActivityResultContracts.RequestPermission(),
-    ) { _ ->
-        val pending = pendingBtStart.value
-        pendingBtStart.value = null
-        if (pending != null) toggleSttOwner.whenActive(pending)
-    }
-    // Тап микрофона — toggle STT (доступная альтернатива удержанию).
-    fun toggleSttMic() {
-        val handle = voice ?: return
-        // Barge-in: прерываем и стрим, и озвучку, и активный захват
-        // (и ожидание сети, если ход отложен).
-        if (isStreaming) {
-            cancelTurn()
-        }
-        stopSpeech?.invoke()
-        when (val current = handle.captureState().value) {
-            is CaptureState.Listening -> {
-                if (current.mode == ru.outsideproarts.oassist.core.speech.CaptureMode.STT) {
-                    handle.stopStt()
-                } else {
-                    handle.cancelRaw()
-                    sounds?.playIfEnabled(AgentSound.VOICE_FINISH, soundEnabled)
-                }
-            }
-            else -> {
-                if (viewModel.isLoadingHistory) return
-                if (!handle.isSttAvailable(stt.recognizerComponent)) {
-                    sttErrorToast(CaptureError.NO_RECOGNIZER)
-                    return
-                }
-                if (context.checkSelfPermission(Manifest.permission.RECORD_AUDIO) !=
-                    PackageManager.PERMISSION_GRANTED
-                ) {
-                    pendingMicToggle.value = true
-                    micPermissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
-                    return
-                }
-                if (handle.bluetoothInputDecision(stt.bluetoothInput) == BtInputDecision.ASK_PERMISSION) {
-                    handle.markBluetoothPermissionRequested()
-                    pendingBtStart.value = { startToggleStt() }
-                    btPermissionLauncher.launch(Manifest.permission.BLUETOOTH_CONNECT)
-                    return
-                }
-                startToggleStt()
-            }
-        }
-    }
-    // Удержание Mic при пустом поле: RAW (аудио модели) или STT по режиму.
-    // MODEL_AUDIO без флага AUDIO_IN у модели — молча в STT (fail-safe).
-    fun useRawCapture(): Boolean = stt.engine == SttEngine.MODEL_AUDIO && audioIn
-    fun startHold(): Boolean {
-        stopSpeech?.invoke()
-        val handle = voice ?: return false
-        if (handle.captureState().value is CaptureState.Listening) return false
-        if (context.checkSelfPermission(Manifest.permission.RECORD_AUDIO) !=
-            PackageManager.PERMISSION_GRANTED
-        ) {
-            pendingMicToggle.value = false
-            micPermissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
-            return false
-        }
-        if (handle.bluetoothInputDecision(stt.bluetoothInput) == BtInputDecision.ASK_PERMISSION) {
-            handle.markBluetoothPermissionRequested()
-            btPermissionLauncher.launch(Manifest.permission.BLUETOOTH_CONNECT)
-            return false
-        }
-        val hold = ChatVoiceHoldSession(
-            if (useRawCapture()) ru.outsideproarts.oassist.core.speech.CaptureMode.RAW
-            else ru.outsideproarts.oassist.core.speech.CaptureMode.STT,
-        )
-        if (hold.mode == ru.outsideproarts.oassist.core.speech.CaptureMode.RAW) {
-            val error = handle.startRaw(bluetoothInput = stt.bluetoothInput)
-            if (error != null) {
-                sttErrorToast(error)
-                return false
-            }
-            sounds?.playIfEnabled(AgentSound.VOICE_START, soundEnabled)
-        } else {
-            if (!handle.isSttAvailable(stt.recognizerComponent)) {
-                sttErrorToast(CaptureError.NO_RECOGNIZER)
-                return false
-            }
-            val error = handle.startStt(
-                stt.language,
-                sttListener(hold),
-                stt.recognizerComponent,
-                stt.bluetoothInput,
-            )
-            if (error != null) {
-                sttErrorToast(error)
-                return false
-            }
-            sounds?.playIfEnabled(AgentSound.VOICE_START, soundEnabled)
-        }
-        holdSession = hold
-        return true
-    }
-    fun cancelHold(tooShort: Boolean) {
-        val handle = voice ?: return
-        val hold = holdSession ?: return
-        holdSession = null
-        if (hold.cancel()) {
-            val wasListening = handle.captureState().value is CaptureState.Listening
-            when (hold.mode) {
-                ru.outsideproarts.oassist.core.speech.CaptureMode.STT -> handle.cancelStt()
-                ru.outsideproarts.oassist.core.speech.CaptureMode.RAW -> handle.cancelRaw()
-            }
-            if (wasListening) sounds?.playIfEnabled(AgentSound.VOICE_FINISH, soundEnabled)
-        }
-        sttPreview = ""
-        if (tooShort) Toast.makeText(context, voiceShortText, Toast.LENGTH_SHORT).show()
-    }
-    // Отпускание холда: STT — финал придёт колбэком, RAW — забираем WAV.
-    fun stopHold() {
-        val handle = voice ?: return
-        val hold = holdSession ?: return
-        holdSession = null
-        when (hold.mode) {
-            ru.outsideproarts.oassist.core.speech.CaptureMode.STT -> {
-                val finalText = hold.release()
-                if (finalText != null) sendRecognizedText(finalText)
-                else if (hold.captureActive) handle.stopStt()
-            }
-            ru.outsideproarts.oassist.core.speech.CaptureMode.RAW -> {
-                val wasListening = handle.captureState().value is CaptureState.Listening
-                val wav = handle.stopRaw()
-                if (wasListening) sounds?.playIfEnabled(AgentSound.VOICE_FINISH, soundEnabled)
-                if (wav == null) {
-                    Toast.makeText(context, voiceShortText, Toast.LENGTH_SHORT).show()
-                } else {
-                    val base64 = android.util.Base64.encodeToString(wav.wav, android.util.Base64.NO_WRAP)
-                    send(
-                        "",
-                        AudioPart(base64, durationSec = wav.durationSec),
-                    )
-                }
-            }
-        }
-    }
-
-    // Фолбэк с гарнитуры mid-capture: route → микрофон при активном захвате.
-    // Штатный стоп снимает маршрут уже после Idle — без объявления.
-    val voiceRouteFlow = remember {
-        voice?.routeState() ?: kotlinx.coroutines.flow.MutableStateFlow(VoiceInputRoute.MICROPHONE)
-    }
-    val voiceRoute = voiceRouteFlow.collectAsState().value
-    var prevVoiceRoute by remember { mutableStateOf(VoiceInputRoute.MICROPHONE) }
-    LaunchedEffect(voiceRoute) {
-        if (prevVoiceRoute == VoiceInputRoute.BLUETOOTH && voiceRoute == VoiceInputRoute.MICROPHONE &&
-            voice?.captureState()?.value is CaptureState.Listening
-        ) {
-            Toast.makeText(context, micBtFallbackText, Toast.LENGTH_LONG).show()
-        }
-        prevVoiceRoute = voiceRoute
-    }
+        },
+        onSendAudio = { audio -> send("", audio) },
+        registerDestinationExit = registerDestinationExit,
+    )
 
     ModalNavigationDrawer(
         drawerState = drawerState,
@@ -1222,10 +1019,10 @@ fun ChatScreen(
             }
 
             ru.outsideproarts.oassist.core.ui.components.ThinkingContextNotice(providerNotice != null)
-            if (capturing) {
+            if (voiceInput.capturing) {
                 // Статус захвата — уместный live region (не стрим контента).
                 // Preview распознавания — здесь, не в поле ввода.
-                val status = if (sttPreview.isBlank()) listeningText else "$listeningText $sttPreview"
+                val status = if (voiceInput.preview.isBlank()) listeningText else "$listeningText $voiceInput.preview"
                 Text(
                     text = status,
                     style = MaterialTheme.typography.bodyMedium,
@@ -1260,7 +1057,7 @@ fun ChatScreen(
                         actionContent = stopLabel
                         Icons.Default.Stop
                     }
-                    capturing -> {
+                    voiceInput.capturing -> {
                         actionContent = stopLabel
                         Icons.Default.Stop
                     }
@@ -1279,27 +1076,27 @@ fun ChatScreen(
                 }
                 ChatInputButton(
                     icon = actionIcon,
-                    label = if (input.text.isBlank() && !isStreaming && !capturing && !isSpeaking) {
+                    label = if (input.text.isBlank() && !isStreaming && !voiceInput.capturing && !isSpeaking) {
                         "$micLabel. $holdHintText"
                     } else {
                         actionContent
                     },
                     holdLabel = holdActionLabel,
-                    canStartHold = (input.text.isBlank() || isSpeaking) && !isStreaming && !capturing && !viewModel.isLoadingHistory,
+                    canStartHold = (input.text.isBlank() || isSpeaking) && !isStreaming && !voiceInput.capturing && !viewModel.isLoadingHistory,
                     holdEnabled = !isStreaming && !viewModel.isLoadingHistory &&
-                        (input.text.isBlank() || capturing || isSpeaking || holdSession != null),
-                    onVoiceAction = ::toggleSttMic,
-                    onHoldStart = ::startHold,
-                    onHoldRelease = ::stopHold,
-                    onHoldCancel = ::cancelHold,
-                    voiceActionLabel = if (!isStreaming && (input.text.isBlank() || capturing || isSpeaking)) {
-                        if (capturing) stopVoiceLabel else startVoiceLabel
+                        (input.text.isBlank() || voiceInput.capturing || isSpeaking || voiceInput.holdActive),
+                    onVoiceAction = voiceInput::toggle,
+                    onHoldStart = voiceInput::startHold,
+                    onHoldRelease = voiceInput::releaseHold,
+                    onHoldCancel = voiceInput::cancelHold,
+                    voiceActionLabel = if (!isStreaming && (input.text.isBlank() || voiceInput.capturing || isSpeaking)) {
+                        if (voiceInput.capturing) stopVoiceLabel else startVoiceLabel
                     } else {
                         null
                     },
-                    voiceStateLabel = if (!isStreaming && (input.text.isBlank() || capturing || isSpeaking)) {
+                    voiceStateLabel = if (!isStreaming && (input.text.isBlank() || voiceInput.capturing || isSpeaking)) {
                         when {
-                            capturing -> listeningText
+                            voiceInput.capturing -> listeningText
                             isSpeaking -> speakingLabel
                             else -> micIdleLabel
                         }
@@ -1314,8 +1111,8 @@ fun ChatScreen(
                             cancelTurn()
                             return@ChatInputButton
                         }
-                        if (capturing) {
-                            toggleSttMic()
+                        if (voiceInput.capturing) {
+                            voiceInput.toggle()
                             return@ChatInputButton
                         }
                         if (isSpeaking) {
@@ -1326,10 +1123,10 @@ fun ChatScreen(
                         if (input.text.isNotBlank()) {
                             val userMsg = input.text.trim()
                             input = TextFieldValue("")
-                            sttPreview = ""
+                            voiceInput.clearPreview()
                             send(userMsg)
                         } else {
-                            toggleSttMic()
+                            voiceInput.toggle()
                         }
                     },
                 )

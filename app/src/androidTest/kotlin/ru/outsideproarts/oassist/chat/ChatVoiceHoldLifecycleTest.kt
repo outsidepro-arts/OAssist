@@ -56,7 +56,7 @@ class ChatVoiceHoldLifecycleTest {
                 MaterialTheme {
                     if (visible) {
                         ChatScreen(
-                            sendMessage = { _, _, _, _, _ ->
+                            sendMessage = { _, _, _, _, _, _ ->
                                 sends.incrementAndGet()
                                 error("Cancelled capture must not send a message")
                             },

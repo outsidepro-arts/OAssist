@@ -2,6 +2,8 @@ package ru.outsideproarts.oassist.core.agent
 
 import ru.outsideproarts.oassist.core.model.ChatMessage
 import ru.outsideproarts.oassist.core.model.ImagePart
+import ru.outsideproarts.oassist.core.model.MessagePin
+import ru.outsideproarts.oassist.core.model.turnMessageId
 
 /**
  * Сессия оверлея ассистента: контекст живёт, пока окно открыто, и уничтожается при закрытии.
@@ -40,11 +42,37 @@ class AssistSession internal constructor() {
 
     /**
      * Добавить реплику пользователя и сообщения её хода (assistant/tool, без
-     * system/user). [turnId] — id хода в БД: по нему ход стирается из истории.
+     * system/user). [turnId] — id хода в БД: по нему ход стирается из истории;
+     * он же задаёт адреса сообщений (`<turnId>:<индекс>`) для закрепления.
      */
     fun appendTurn(user: ChatMessage, turn: List<ChatMessage>, turnId: String = "") {
         synchronized(lock) {
-            units.add(SessionTurn(turnId, listOf(user) + turn))
+            units.add(
+                SessionTurn(
+                    turnId,
+                    (listOf(user) + turn).mapIndexed { index, message ->
+                        message.copy(id = turnMessageId(turnId, index))
+                    },
+                ),
+            )
+        }
+    }
+
+    /**
+     * Закрепить/открепить сообщение в живой истории ([messageId] — адрес
+     * `<id хода>:<индекс>`): медиа закреплённых не усекаются бюджетами.
+     * Неизвестный адрес — no-op.
+     */
+    fun pinMessage(messageId: String, pin: MessagePin?) {
+        synchronized(lock) {
+            for (index in units.indices) {
+                val unit = units[index]
+                if (unit.messages.none { it.id == messageId }) continue
+                units[index] = unit.copy(
+                    messages = unit.messages.map { if (it.id == messageId) it.copy(pin = pin) else it },
+                )
+                return
+            }
         }
     }
 

@@ -19,6 +19,34 @@ data class ChatMessage(
     val reasoning: ReasoningBlock? = null,
     /** Typed attachment for untrusted user/context data. It never carries a chat role. */
     val contextData: List<ContextData> = emptyList(),
+    /**
+     * Адресация сообщения для инструментов закрепления (`<id хода>:<индекс>`,
+     * см. `StoredTurnEntry.modelMessages`). Runtime-метаданные: в транскрипт и
+     * payload хода не сохраняются, при загрузке вычисляются заново.
+     */
+    val id: String? = null,
+    /** Закрепление сообщения: медиа не вырезаются бюджетами истории (см. [MessagePin]). */
+    val pin: MessagePin? = null,
+)
+
+/**
+ * Закрепление сообщения: его изображения и аудио не вырезаются при усечении
+ * истории (бюджеты образов/голоса, `sanitizeHistory`) и обязаны сохраняться
+ * будущим механизмом компактизации. [note] — зачем закреплено (для модели).
+ */
+@Serializable
+data class MessagePin(val note: String? = null)
+
+/**
+ * Эффект инструментов `message_pin`/`message_unpin`: закрепить ([pinned]) или
+ * открепить сообщение с адресом [messageId] (`<id хода>:<индекс>` или
+ * `current:<индекс>` текущего хода). Применяется к истории циклом агента
+ * и сохраняется вызывающим слоем вместе с ходом.
+ */
+data class PinChange(
+    val messageId: String,
+    val pinned: Boolean,
+    val note: String? = null,
 )
 
 /**

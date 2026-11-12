@@ -15,6 +15,7 @@ import ru.outsideproarts.oassist.core.model.ChatRole
 import ru.outsideproarts.oassist.core.model.ContextData
 import ru.outsideproarts.oassist.core.model.ContextSource
 import ru.outsideproarts.oassist.core.model.ImagePart
+import ru.outsideproarts.oassist.core.model.MessagePin
 import ru.outsideproarts.oassist.core.model.ModelUserInput
 import ru.outsideproarts.oassist.core.model.BillingSource
 import ru.outsideproarts.oassist.core.model.ProviderUsage
@@ -128,6 +129,72 @@ class TurnCodecTest {
         assertEquals("считаю", (restored.work[0] as WorkEvent.Thought).text)
         assertEquals("device_state", (restored.work[1] as WorkEvent.Tool).name)
         assertEquals("ответ", restored.answer)
+    }
+
+    @Test
+    fun roundTrip_preservesPins() {
+        val original = fullTurn()
+            .withMessagePin(0, pinned = true, note = "референс для сверки")
+            .withMessagePin(2, pinned = true)
+
+        val restored = TurnCodec.decode(TurnCodec.encode(original, "c1", "t1", media), media)!!
+
+        assertEquals(MessagePin("референс для сверки"), restored.userPin)
+        assertNull(restored.turn[0].pin)
+        assertEquals(MessagePin(), restored.turn[1].pin)
+    }
+
+    @Test
+    fun decode_payloadWithoutPinFields_readsUnpinned() {
+        // Payload отгруженных сборок до закрепления — без миграции.
+        val legacy = """{"userText":"q","userPin":{"note":"n"},"turn":[{"role":"ASSISTANT","content":"a","pin":{"note":"m"}}]}"""
+        val restored = TurnCodec.decode(legacy, media)!!
+        assertEquals(MessagePin("n"), restored.userPin)
+        assertEquals(MessagePin("m"), restored.turn.single().pin)
+
+        val unpinned = TurnCodec.decode("""{"userText":"q","turn":[{"role":"ASSISTANT","content":"a"}]}""", media)!!
+        assertNull(unpinned.userPin)
+        assertNull(unpinned.turn.single().pin)
+    }
+
+    @Test
+    fun pinPayload_matchesWithMessagePinSemantics() {
+        val payload = TurnCodec.encode(fullTurn(), "c1", "t1", media)
+
+        val pinned = TurnCodec.pinPayload(TurnCodec.pinPayload(payload, 0, MessagePin("n"))!!, 2, MessagePin())!!
+        val restored = TurnCodec.decode(pinned, media)!!
+        assertEquals(fullTurn().withMessagePin(0, pinned = true, note = "n").withMessagePin(2, pinned = true), restored)
+
+        val cleared = TurnCodec.decode(TurnCodec.pinPayload(pinned, 0, null)!!, media)!!
+        assertNull(cleared.userPin)
+        assertEquals(MessagePin(), cleared.turn[1].pin)
+    }
+
+    @Test
+    fun pinPayload_rejectsBadPayloadAndOutOfRangeIndex() {
+        val payload = TurnCodec.encode(fullTurn(), "c1", "t1", media)
+        assertNull(TurnCodec.pinPayload("{сломано", 0, MessagePin()))
+        // 0 — реплика, 1..3 — три сообщения транскрипта; 4 — уже вне хода.
+        assertNull(TurnCodec.pinPayload(payload, 4, MessagePin()))
+        assertNull(TurnCodec.pinPayload(payload, -1, MessagePin()))
+    }
+
+    @Test
+    fun pinPayload_doesNotAmputeMissingMediaRefs() {
+        // Ход с потерянными файлами: точечная правка не должна переписывать
+        // payload без рефов (их ампутировало бы перекодирование decode→encode).
+        val payload = """{"userText":"q","userImages":[{"path":"missing-u","mimeType":"image/jpeg"}],""" +
+            """"userAudio":{"path":"missing-a"},"turn":[{"role":"ASSISTANT","content":"a","images":[{"path":"missing-m"}]}]}"""
+
+        val pinned = TurnCodec.pinPayload(payload, 0, MessagePin("n"))!!
+        assertTrue(pinned.contains("missing-u"))
+        assertTrue(pinned.contains("missing-a"))
+        assertTrue(pinned.contains("missing-m"))
+        assertEquals(MessagePin("n"), TurnCodec.decode(pinned, media)!!.userPin)
+
+        val pinnedTool = TurnCodec.pinPayload(payload, 1, MessagePin())!!
+        assertTrue(pinnedTool.contains("missing-m"))
+        assertEquals(MessagePin(), TurnCodec.decode(pinnedTool, media)!!.turn.single().pin)
     }
 
     @Test

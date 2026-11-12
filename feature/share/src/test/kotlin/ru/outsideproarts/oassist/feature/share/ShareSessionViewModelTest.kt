@@ -10,6 +10,7 @@ import org.junit.Before
 import org.junit.Test
 import ru.outsideproarts.oassist.core.agent.*
 import ru.outsideproarts.oassist.core.model.*
+import ru.outsideproarts.oassist.core.net.NetworkHandle
 import ru.outsideproarts.oassist.core.provider.*
 import ru.outsideproarts.oassist.core.provider.openai.ToolSchemaDto
 
@@ -20,6 +21,10 @@ class ShareSessionViewModelTest {
     private val storage = Store()
     private val requests = mutableListOf<List<ChatMessage>>()
     private var reply: () -> Flow<ChatChunk> = { flowOf(ChatChunk.Content("answer"), ChatChunk.Finish("stop")) }
+    /** Политика подтверждений тестового агента; дефолт — с разрешённой записью APP_DATA. */
+    private var policy: ApprovalPolicy = InMemoryApprovalPolicy().apply {
+        setRemembered(ToolGroups.key(ToolCategory.APP_DATA, ToolAccess.WRITE), ApprovalState.ALLOW)
+    }
 
     @Before fun setup() {
         Dispatchers.setMain(dispatcher)
@@ -34,7 +39,15 @@ class ShareSessionViewModelTest {
             override suspend fun modeConfig(mode: AssistMode) = ModeConfig(mode, modelId = "model")
             override suspend fun providerForMode(mode: AssistMode) = ProviderProfile("provider", "test", ProviderPreset.OPENAI, "https://example.invalid")
             override suspend fun modelClientFor(profile: ProviderProfile): ModelClient = error("No generated titles in this fixture")
-            override suspend fun agentFor(profile: ProviderProfile, mode: AssistMode) = AgentLoop(client, diagnostics = ru.outsideproarts.oassist.core.model.diagnostics.Diagnostics)
+            override suspend fun agentFor(profile: ProviderProfile, mode: AssistMode) = AgentLoop(
+                client,
+                ToolRegistry(
+                    listOf(MessagePinTool(), MessageUnpinTool()),
+                    diagnostics = ru.outsideproarts.oassist.core.model.diagnostics.Diagnostics,
+                ),
+                approvalPolicy = policy,
+                diagnostics = ru.outsideproarts.oassist.core.model.diagnostics.Diagnostics,
+            )
             override fun clearSessionApprovals(mode: AssistMode) = Unit
             override fun usageTotals() = MutableStateFlow(UsageTotalsState())
             override suspend fun systemPromptFor(mode: AssistMode, screenContext: String?, sharedContent: String?) = RuntimePrompt("system")
@@ -201,7 +214,8 @@ class ShareSessionViewModelTest {
         runCurrent()
         assertEquals("new-1", vm.chatId)
         assertEquals(2, vm.turns.size)
-        assertFalse(vm.canSend)
+        // Сбой записи не останавливает диалог (паритет с Chat): отправка доступна.
+        assertTrue(vm.canSend)
         fail = false
         vm.saveChat()
         runCurrent()
@@ -352,13 +366,332 @@ class ShareSessionViewModelTest {
         runCurrent()
         assertEquals(listOf("one", "two"), vm.turns.map { it.turn.userText })
         assertEquals(listOf("one", "two"), storage.rows.getValue("A").map { it.turn.userText })
-        assertFalse(vm.saveFailed)
+        // Сбойное стирание — состояние «Повторить» (как очередь в Chat),
+        // но диалог остаётся рабочим.
+        assertTrue(vm.saveFailed)
         assertTrue(vm.canSend)
         storage.beforeDeleteTurn = {}
-        vm.deleteTurnMessage("id-two")
+        vm.retryWrites()
         runCurrent()
+        assertFalse(vm.saveFailed)
         assertEquals(listOf("one"), vm.turns.map { it.turn.userText })
         assertEquals(listOf("one"), storage.rows.getValue("A").map { it.turn.userText })
+    }
+
+    @Test fun deferAskShowsWaitingStateLikeChat() = runTest(dispatcher) {
+        val vm = vm()
+        ready(vm, "A")
+        val deferred = request("первый")
+
+        vm.deferAsk(deferred)
+        runCurrent()
+
+        // Вопрос сразу виден в ленте ожидания, стрим «идёт» — как в Chat.
+        assertEquals("первый", vm.activeUserMsg)
+        assertTrue(vm.isStreaming)
+        assertFalse(vm.canSend)
+    }
+
+    @Test fun voiceAudioAskRecordsAudioTurnLikeChat() = runTest(dispatcher) {
+        val vm = vm()
+        ready(vm, "A")
+        val audio = AudioPart("V0FW", durationSec = 2)
+        vm.ask(request("первый"))
+        runCurrent()
+
+        vm.ask(ShareAskRequest(query = "", userMsg = "", modelInput = ModelUserInput(""), contentDesc = "content", audio = audio))
+        runCurrent()
+
+        // Голосовой ход без текста сохраняется и доходит до модели — как в Chat.
+        val audioTurn = vm.turns.first { it.turn.userAudio != null }
+        assertEquals(audio, audioTurn.turn.userAudio)
+        assertTrue(requests.last().any { it.audio != null })
+    }
+
+    /**
+     * Регрессия: авто-повтор отложенного хода по фронту сети обязан работать
+     * (условия наблюдателя и вход повтора не должны взаимно блокироваться).
+     */
+    @Test fun offlineDeferredAskRetriesWhenNetworkReturns() = runTest(dispatcher) {
+        val net = FakeNetwork()
+        val previous = NetworkHandle.get()
+        NetworkHandle.register(net)
+        try {
+            val vm = vm()
+            ready(vm, "A")
+            vm.deferAsk(request("первый"))
+            runCurrent()
+            assertTrue(vm.isStreaming)
+            assertEquals(0, requests.size)
+
+            net.isOnline.value = true
+            runCurrent()
+
+            // Фронт online: отложенный ход ушёл повторно, ожидание завершено.
+            assertEquals(1, requests.size)
+            assertEquals(listOf("первый"), vm.turns.map { it.turn.userText })
+            assertFalse(vm.isStreaming)
+            assertNull(vm.pendingApproval)
+        } finally {
+            if (previous != null) NetworkHandle.register(previous) else NetworkHandle.register(FakeNetwork())
+        }
+    }
+
+    /** Регрессия: ранний обрыв без сети ждёт фронта online и повторяет ход. */
+    @Test fun earlyOfflineFailureRetriesOnNetworkFront() = runTest(dispatcher) {
+        val net = FakeNetwork()
+        val previous = NetworkHandle.get()
+        NetworkHandle.register(net)
+        try {
+            val vm = vm()
+            ready(vm, "A")
+            reply = { flow { throw ru.outsideproarts.oassist.core.provider.ProviderError.Network("offline") } }
+            vm.ask(request("первый"))
+            // Внутренние ретраи стрима исчерпываются по виртуальному времени.
+            dispatcher.scheduler.advanceUntilIdle()
+
+            // Ранний обрыв без сети: ход ждёт фронта online, состояние не зависает.
+            assertTrue(vm.isStreaming)
+            val attemptsBeforeRetry = requests.size
+
+            reply = { flowOf(ChatChunk.Content("ответ"), ChatChunk.Finish("stop")) }
+            net.isOnline.value = true
+            dispatcher.scheduler.advanceUntilIdle()
+
+            // Фронт online: ровно один новый запрос к модели — ход повторён и записан.
+            assertEquals(attemptsBeforeRetry + 1, requests.size)
+            assertEquals(listOf("первый"), vm.turns.map { it.turn.userText })
+            assertFalse(vm.isStreaming)
+        } finally {
+            if (previous != null) NetworkHandle.register(previous) else NetworkHandle.register(FakeNetwork())
+        }
+    }
+
+    /** Регрессия: «Стоп» в ожидании сети снимает состояние, а не зависает. */
+    @Test fun stopClearsWaitingStateAfterEarlyOfflineFailure() = runTest(dispatcher) {
+        val net = FakeNetwork()
+        val previous = NetworkHandle.get()
+        NetworkHandle.register(net)
+        try {
+            val vm = vm()
+            ready(vm, "A")
+            reply = { flow { throw ru.outsideproarts.oassist.core.provider.ProviderError.Network("offline") } }
+            vm.ask(request("первый"))
+            dispatcher.scheduler.advanceUntilIdle()
+            assertTrue(vm.isStreaming)
+
+            vm.cancelTurn()
+            runCurrent()
+
+            assertFalse(vm.isStreaming)
+            assertTrue(vm.canSend)
+            assertTrue(vm.turns.isEmpty())
+        } finally {
+            if (previous != null) NetworkHandle.register(previous) else NetworkHandle.register(FakeNetwork())
+        }
+    }
+
+    @Test fun retryWritesRetriesRemovalWithoutMaskingFailedAppend() = runTest(dispatcher) {
+        val vm = vm()
+        ready(vm)
+        vm.autoSave = false
+        listOf("one", "two", "three").forEach { text -> vm.ask(request(text)); runCurrent() }
+        var failAppend = true
+        storage.beforeAppend = { turn -> if (turn.userText == "two" && failAppend) error("disk full") }
+        vm.saveChat()
+        runCurrent()
+        assertTrue(vm.saveFailed)
+
+        storage.beforeDeleteTurn = { error("disk failure") }
+        vm.deleteTurnMessage(vm.turns.first().id)
+        runCurrent()
+        assertTrue(vm.saveFailed)
+        assertEquals(listOf("one", "two", "three"), vm.turns.map { it.turn.userText })
+
+        failAppend = false
+        storage.beforeDeleteTurn = {}
+        vm.retryWrites()
+        runCurrent()
+
+        // «Повторить» повторяет и стирание, и сбойную дозапись: ход не теряется.
+        assertFalse(vm.saveFailed)
+        assertEquals(listOf("two", "three"), vm.turns.map { it.turn.userText })
+        assertEquals(listOf("two", "three"), storage.rows.getValue("new-1").map { it.turn.userText })
+    }
+
+    @Test fun sharedContentRidesContextOnceAndQuestionIsRaw() = runTest(dispatcher) {
+        val vm = vm()
+        ready(vm, "A")
+        vm.ask(request("первый вопрос"))
+        runCurrent()
+        vm.ask(request("второй вопрос"))
+        runCurrent()
+
+        // Вопрос уходит сырым текстом (как в Chat); общий контент — один раз
+        // контекстом запроса, исторические конверты не несут его повторов.
+        val body = requests.last().joinToString("\n") { it.content }
+        assertTrue("вопрос не сырой: $body", body.contains("\"request\":\"второй вопрос\""))
+        assertEquals(1, Regex("\"SHARED_CONTENT\"").findAll(body).count())
+    }
+
+    @Test fun pinOfPastTurnUpdatesMemoryAndStorage_andPinOfCurrentRidesItsRecord() = runTest(dispatcher) {
+        val vm = vm()
+        ready(vm, "A")
+        vm.ask(request("first"))
+        runCurrent()
+        val pastId = vm.turns.single().id
+
+        var round = 0
+        reply = {
+            if (round++ == 0) flowOf(
+                ChatChunk.ToolCall("c1", "message_pin", """{"message_id":"$pastId:0","note":"референс"}"""),
+                ChatChunk.ToolCall("c2", "message_pin", """{"message_id":"current:0","note":"текущий"}"""),
+                ChatChunk.Finish("tool_calls"),
+            ) else flowOf(ChatChunk.Content("done"), ChatChunk.Finish("stop"))
+        }
+        vm.ask(request("second"))
+        runCurrent()
+
+        // Прошлый ход закреплён и в ленте (бюджеты следующих ходов), и в хранилище.
+        assertEquals(MessagePin("референс"), vm.turns.first { it.id == pastId }.turn.userPin)
+        // Текущий ход закреплён флагом своей реплики при записи.
+        assertEquals(MessagePin("текущий"), vm.turns.first { it.turn.userText == "second" }.turn.userPin)
+        val rows = storage.rows.getValue("A")
+        assertEquals(MessagePin("референс"), rows.first { it.id == pastId }.turn.userPin)
+        assertEquals(MessagePin("текущий"), rows.first { it.turn.userText == "second" }.turn.userPin)
+    }
+
+    /**
+     * Регрессия дефекта устройства: в Share закрепление запрашивается у
+     * пользователя (approval gate), а не отклоняется молча — иначе флаг не
+     * ставится и фото референса вырезается бюджетом на длинной сессии.
+     */
+    @Test fun pinRequestWaitsForUserDecisionInsteadOfAutoDeny() = runTest(dispatcher) {
+        policy = InMemoryApprovalPolicy()
+        val vm = vm()
+        ready(vm, "A")
+        var round = 0
+        reply = {
+            if (round++ == 0) flowOf(
+                ChatChunk.ToolCall("c1", "message_pin", """{"message_id":"current:0"}"""),
+                ChatChunk.Finish("tool_calls"),
+            ) else flowOf(ChatChunk.Content("done"), ChatChunk.Finish("stop"))
+        }
+        vm.ask(request("первый"))
+        runCurrent()
+
+        // Share ждёт решения пользователя: второй запрос к модели не ушёл.
+        assertEquals(1, requests.size)
+        assertTrue(vm.isStreaming)
+        assertNotNull(vm.pendingApproval)
+
+        vm.resolveApproval(ApprovalDecision.ALLOW_ONCE)
+        runCurrent()
+
+        // После разрешения закрепление выполняется и ход записывается с флагом.
+        assertEquals(2, requests.size)
+        assertEquals(MessagePin(), vm.turns.single().turn.userPin)
+    }
+
+    @Test fun deniedPinIsNotApplied() = runTest(dispatcher) {
+        policy = InMemoryApprovalPolicy()
+        val vm = vm()
+        ready(vm, "A")
+        var round = 0
+        reply = {
+            if (round++ == 0) flowOf(
+                ChatChunk.ToolCall("c1", "message_pin", """{"message_id":"current:0"}"""),
+                ChatChunk.Finish("tool_calls"),
+            ) else flowOf(ChatChunk.Content("done"), ChatChunk.Finish("stop"))
+        }
+        vm.ask(request("первый"))
+        runCurrent()
+        assertNotNull(vm.pendingApproval)
+
+        vm.resolveApproval(ApprovalDecision.DENY)
+        runCurrent()
+
+        assertNull(vm.pendingApproval)
+        assertNull(vm.turns.single().turn.userPin)
+    }
+
+    @Test fun pendingApprovalIsClearedWhenConversationChanges() = runTest(dispatcher) {
+        policy = InMemoryApprovalPolicy()
+        val vm = vm()
+        ready(vm, "A")
+        reply = {
+            flowOf(
+                ChatChunk.ToolCall("c1", "message_pin", """{"message_id":"current:0"}"""),
+                ChatChunk.Finish("tool_calls"),
+            )
+        }
+        vm.ask(request("первый"))
+        runCurrent()
+        assertNotNull(vm.pendingApproval)
+
+        vm.openChat(summary("B"))
+        runCurrent()
+
+        assertNull(vm.pendingApproval)
+    }
+
+    @Test fun cancelTurnStopsStreamWithoutRecordingEmptyTurn() = runTest(dispatcher) {
+        val vm = vm()
+        ready(vm, "A")
+        reply = { flow { awaitCancellation() } }
+        vm.ask(request("первый"))
+        runCurrent()
+        assertTrue(vm.isStreaming)
+
+        vm.cancelTurn()
+        runCurrent()
+
+        assertFalse(vm.isStreaming)
+        assertTrue(vm.turns.isEmpty())
+    }
+
+    @Test fun pinnedReferenceImageReachesLaterRequests() = runTest(dispatcher) {
+        val vm = vm()
+        val image = ImagePart("aW1hZ2U=")
+        vm.newChat()
+        vm.loadPayload { listOf(image) }
+        runCurrent()
+        vm.ask(request("первый"))
+        runCurrent()
+        val pastId = vm.turns.single().id
+
+        var round = 0
+        reply = {
+            if (round++ == 0) flowOf(
+                ChatChunk.ToolCall("c1", "message_pin", """{"message_id":"$pastId:0","note":"референс"}"""),
+                ChatChunk.Finish("tool_calls"),
+            ) else flowOf(ChatChunk.Content("done"), ChatChunk.Finish("stop"))
+        }
+        vm.ask(request("второй"))
+        runCurrent()
+
+        reply = { flowOf(ChatChunk.Content("готово"), ChatChunk.Finish("stop")) }
+        vm.ask(request("третий"))
+        runCurrent()
+
+        // Закреплённое фото референса доставляется в текущем сообщении каждого
+        // следующего запроса (свежая позиция — в поле зрения модели) с указанием
+        // источника и заметки закрепления рядом с образом; историческое сообщение
+        // остаётся с меткой.
+        val current = requests.last().last {
+            it.role == ChatRole.USER && it.content.contains("current_user_input")
+        }
+        assertNotNull("закреплённое фото не дошло до запроса", current.images.firstOrNull { it == image })
+        assertTrue("источник референса не указан", current.content.contains(pastId))
+        assertTrue("заметка закрепления не доставлена с референсом", current.content.contains("\"note\":\"референс\""))
+        assertTrue(
+            "историческое сообщение потеряло метку закрепления",
+            requests.last().any { it.content.contains(pastId) && it.content.contains("\"pinned\"") },
+        )
+    }
+
+    private class FakeNetwork : ru.outsideproarts.oassist.core.net.NetworkHandle {
+        override val isOnline = MutableStateFlow(false)
     }
 
     private class Store : ShareChatStore {
@@ -399,6 +732,13 @@ class ShareSessionViewModelTest {
         }
         override suspend fun deleteChat(id: String) { deleted.add(id); rows.remove(id) }
         override suspend fun renameChat(id: String, title: String) = Unit
+        override suspend fun setPin(id: String, turnId: String, messageIndex: Int, pinned: Boolean, note: String?): Boolean {
+            val entry = rows[id]?.indexOfFirst { it.id == turnId } ?: return false
+            if (entry < 0) return false
+            val list = rows.getValue(id)
+            list[entry] = list[entry].copy(turn = list[entry].turn.withMessagePin(messageIndex, pinned, note))
+            return true
+        }
         override fun diagnosticGeneration(id: String) = 0L
         override suspend fun bindDiagnosticOperation(id: String, operation: String, generation: Long?) { if (failBind) error("bind failed") }
     }

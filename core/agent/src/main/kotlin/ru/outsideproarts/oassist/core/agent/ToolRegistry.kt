@@ -1,6 +1,7 @@
 package ru.outsideproarts.oassist.core.agent
 
 import kotlinx.serialization.json.JsonObject
+import ru.outsideproarts.oassist.core.model.PinChange
 import ru.outsideproarts.oassist.core.model.PrivilegeLevel
 import ru.outsideproarts.oassist.core.model.ToolGroups
 import ru.outsideproarts.oassist.core.model.ImagePart
@@ -26,6 +27,8 @@ data class ToolResult(
     val images: List<ImagePart> = emptyList(),
     /** App-owned instruction attachment, populated only by a successful built-in skill lookup. */
     val ownerInstructions: String? = null,
+    /** Эффект закрепления/открепления сообщения (message_pin/message_unpin); применяется циклом агента. */
+    val pinChange: PinChange? = null,
 )
 
 /** Инструмент агента. */

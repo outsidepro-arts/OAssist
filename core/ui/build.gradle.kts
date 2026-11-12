@@ -29,6 +29,7 @@ dependencies {
 
     implementation(libs.androidx.core.ktx)
     implementation(libs.androidx.appcompat)
+    implementation(libs.androidx.activity.compose)
     implementation(platform(libs.androidx.compose.bom))
     api(libs.androidx.compose.ui)
     api(libs.androidx.compose.ui.graphics)
@@ -36,6 +37,7 @@ dependencies {
     implementation(libs.androidx.compose.material.icons.extended)
     implementation(libs.androidx.lifecycle.runtime.compose)
     implementation(libs.kotlinx.coroutines.android)
+    implementation(project(":core:speech"))
 
     testImplementation(libs.junit)
     testImplementation(platform(libs.androidx.compose.bom))

@@ -89,6 +89,8 @@ object ToolCatalog {
         MemoryGetTool(memory),
         MemoryPutTool(memory),
         MemoryForgetTool(memory),
+        MessagePinTool(),
+        MessageUnpinTool(),
         SkillListTool(skills),
         SkillGetTool(skills),
         ShellExecTool(priv),

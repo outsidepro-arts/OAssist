@@ -41,7 +41,7 @@ class ChatHoldPermissionTest {
         try {
             compose.setContent {
                 chatView = LocalView.current
-                MaterialTheme { ChatScreen(sendMessage = { _, _, _, _, _ -> error("Unexpected send") }) }
+                MaterialTheme { ChatScreen(sendMessage = { _, _, _, _, _, _ -> error("Unexpected send") }) }
             }
             val mic = compose.onNode(hasContentDescription(context.getString(ChatR.string.chat_mic), substring = true))
             val bounds = mic.fetchSemanticsNode().boundsInRoot

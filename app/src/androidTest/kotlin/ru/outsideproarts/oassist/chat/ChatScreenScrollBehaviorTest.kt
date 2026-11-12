@@ -69,7 +69,7 @@ class ChatScreenScrollBehaviorTest {
                 ChatScreen(
                     viewModel = vm,
                     soundEnabled = false,
-                    sendMessage = { _, _, _, _, _ -> error("Unexpected send") },
+                    sendMessage = { _, _, _, _, _, _ -> error("Unexpected send") },
                 )
             }
         }

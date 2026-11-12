@@ -1,4 +1,4 @@
-package ru.outsideproarts.oassist.feature.chat
+package ru.outsideproarts.oassist.core.ui.components
 
 import android.os.SystemClock
 import androidx.compose.foundation.combinedClickable

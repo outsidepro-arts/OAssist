@@ -216,7 +216,7 @@ private fun OAssistApp(
                 val chatAudioIn = chatModels.find { it.id == chatConfig?.modelId }
                     ?.capabilities?.contains(ru.outsideproarts.oassist.core.model.ModelCapability.AUDIO_IN) == true
                 ChatScreen(
-                    sendMessage = { mode, userMsg, history, audio, onTurnMessages ->
+                    sendMessage = { mode, userMsg, history, audio, onTurnMessages, onPinChange ->
                         val config = graph.providers.observeModeConfigs().first()
                             .find { it.mode == mode }
                         val profile = graph.providers.observeProviders().first()
@@ -244,6 +244,7 @@ private fun OAssistApp(
                                 userMessage = userMsg,
                                 audio = audio,
                                 onTurnMessages = onTurnMessages,
+                                onPinChange = onPinChange,
                             ),
                             agent = agent,
                         )

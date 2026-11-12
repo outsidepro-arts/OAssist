@@ -308,6 +308,12 @@ class AppGraph private constructor(context: Context) {
             return data.providers.observeProviders().first().find { it.id == config.providerId }
         }
 
+        override suspend fun modelInfo(mode: ru.outsideproarts.oassist.core.model.AssistMode): ru.outsideproarts.oassist.core.model.ModelInfo? {
+            val modelId = data.providers.modeConfig(mode).modelId?.takeIf { it.isNotBlank() } ?: return null
+            val profile = providerForMode(mode) ?: return null
+            return data.providers.observeModelCatalog(profile.id).first()?.models?.find { it.id == modelId }
+        }
+
         override suspend fun agentFor(profile: ProviderProfile, mode: ru.outsideproarts.oassist.core.model.AssistMode): ru.outsideproarts.oassist.core.agent.AgentLoop {
             val diagnosticId = kotlin.coroutines.coroutineContext[ru.outsideproarts.oassist.core.model.diagnostics.DiagnosticContext]?.operationId
                 ?: ru.outsideproarts.oassist.core.model.diagnostics.Diagnostics.newOperationId()

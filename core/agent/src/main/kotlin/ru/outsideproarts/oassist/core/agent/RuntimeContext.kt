@@ -1,13 +1,16 @@
 package ru.outsideproarts.oassist.core.agent
 
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.encodeToJsonElement
 import ru.outsideproarts.oassist.core.model.ChatMessage
 import ru.outsideproarts.oassist.core.model.ChatRole
 import ru.outsideproarts.oassist.core.model.ContextData
+import ru.outsideproarts.oassist.core.model.MessagePin
 import ru.outsideproarts.oassist.core.model.ModelUserInput
+import ru.outsideproarts.oassist.core.model.currentMessageId
 
 private val runtimeJson = Json { encodeDefaults = true }
 
@@ -44,6 +47,8 @@ internal fun buildRuntimeMessages(
     currentInput: ModelUserInput,
     skillInstructions: List<String>,
     liveToolStatuses: Map<Int, Boolean>,
+    /** Закреплённые образы в текущем сообщении: источник, заметка, число образов (см. hoistPinnedImages). */
+    pinnedImages: List<HoistedPinnedSource> = emptyList(),
 ): List<ChatMessage> {
     val request = ownerInstructions?.trim().orEmpty()
     val systemParts = buildList {
@@ -53,15 +58,18 @@ internal fun buildRuntimeMessages(
     }
     val context = (promptContext + currentInput.context).distinct()
     val wireCallIds = mutableSetOf<String>()
-    val beforeCurrent = sanitizeHistory(transcript.take(currentUserIndex), 0, wireCallIds, emptyMap())
+    val beforeCurrent = sanitizeHistory(transcript.take(currentUserIndex), 0, currentUserIndex, wireCallIds, emptyMap())
     val afterCurrent = sanitizeHistory(
         transcript.drop(currentUserIndex + 1),
         currentUserIndex + 1,
+        currentUserIndex,
         wireCallIds,
         liveToolStatuses,
     )
-    val current = transcript.getOrNull(currentUserIndex)?.copy(
-        content = currentUserEnvelope(currentInput.copy(context = context)), contextData = context,
+    val currentMessage = transcript.getOrNull(currentUserIndex)
+    val current = currentMessage?.copy(
+        content = currentUserEnvelope(currentInput.copy(context = context), currentMessage.pin, pinnedImages),
+        contextData = context,
     )
     return buildList {
         add(ChatMessage(ChatRole.SYSTEM, systemParts.joinToString("\n\n")))
@@ -74,6 +82,7 @@ internal fun buildRuntimeMessages(
 private fun sanitizeHistory(
     history: List<ChatMessage>,
     transcriptOffset: Int,
+    currentBase: Int,
     wireCallIds: MutableSet<String>,
     liveToolStatuses: Map<Int, Boolean>,
 ): List<ChatMessage> {
@@ -81,8 +90,9 @@ private fun sanitizeHistory(
     var index = 0
     while (index < history.size) {
         val message = history[index]
+        val absoluteIndex = transcriptOffset + index
         if (message.role == ChatRole.SYSTEM) {
-            result += historicalData(message)
+            result += historicalData(message, envelopeId(message, absoluteIndex, currentBase))
             index++
             continue
         }
@@ -97,35 +107,54 @@ private fun sanitizeHistory(
                 replies.all { !it.toolCallId.isNullOrBlank() }
             if (valid) {
                 val remappedIds = ids.mapIndexed { callOffset, id ->
-                    uniqueWireCallId(id, transcriptOffset + index, callOffset, wireCallIds)
+                    uniqueWireCallId(id, absoluteIndex, callOffset, wireCallIds)
                 }
                 val remapped = ids.zip(remappedIds).toMap()
                 result += message.copy(
                     toolCallId = null,
-                    audio = null,
-                    images = emptyList(),
+                    audio = if (message.pin != null) message.audio else null,
+                    images = if (message.pin != null) message.images else emptyList(),
                     toolCalls = calls.map { it.copy(id = remapped.getValue(it.id)) },
                 )
                 replies.forEachIndexed { replyOffset, reply ->
-                    val absoluteIndex = transcriptOffset + index + replyOffset + 1
+                    val replyIndex = absoluteIndex + replyOffset + 1
                     result += wrapToolResult(
                         reply.copy(toolCallId = remapped.getValue(reply.toolCallId!!)),
-                        liveToolStatuses[absoluteIndex],
+                        liveToolStatuses[replyIndex],
+                        envelopeId(reply, replyIndex, currentBase),
                     )
                 }
                 index += count + 1
             } else {
-                result += historicalData(message.copy(toolCalls = null, reasoning = null, audio = null))
+                result += historicalData(
+                    message.copy(
+                        toolCalls = null,
+                        reasoning = null,
+                        audio = if (message.pin != null) message.audio else null,
+                    ),
+                    envelopeId(message, absoluteIndex, currentBase),
+                )
                 index++
             }
             continue
         }
         if (message.role == ChatRole.TOOL) {
-            result += historicalData(message.copy(toolCalls = null, reasoning = null, audio = null))
+            result += historicalData(
+                message.copy(
+                    toolCalls = null,
+                    reasoning = null,
+                    audio = if (message.pin != null) message.audio else null,
+                ),
+                envelopeId(message, absoluteIndex, currentBase),
+            )
         } else {
             result += when (message.role) {
-                ChatRole.USER -> historicalData(message)
-                ChatRole.ASSISTANT -> message.copy(toolCallId = null, audio = null, images = emptyList())
+                ChatRole.USER -> historicalData(message, envelopeId(message, absoluteIndex, currentBase))
+                ChatRole.ASSISTANT -> message.copy(
+                    toolCallId = null,
+                    audio = if (message.pin != null) message.audio else null,
+                    images = if (message.pin != null) message.images else emptyList(),
+                )
                 ChatRole.SYSTEM, ChatRole.TOOL -> error("Handled above")
             }
         }
@@ -134,13 +163,33 @@ private fun sanitizeHistory(
     return result
 }
 
-private fun historicalData(message: ChatMessage): ChatMessage = ChatMessage(
+/**
+ * Адрес сообщения в конверте для инструментов закрепления: у сообщений текущего
+ * хода — `current:<индекс>` по позиции, у исторических — id сообщения
+ * (`<id хода>:<индекс>`, назначает вызывающий слой).
+ */
+private fun envelopeId(message: ChatMessage, absoluteIndex: Int, currentBase: Int): String? =
+    if (absoluteIndex >= currentBase) currentMessageId(absoluteIndex - currentBase) else message.id
+
+/** Поля адресации и закрепления конверта: `id`, `pinned`, `pinNote`. */
+private fun addressFields(id: String?, pin: MessagePin?): List<Pair<String, kotlinx.serialization.json.JsonElement>> =
+    buildList {
+        id?.let { add("id" to JsonPrimitive(it)) }
+        if (pin != null) {
+            add("pinned" to JsonPrimitive(true))
+            pin.note?.takeIf { it.isNotBlank() }?.let { add("pinNote" to JsonPrimitive(it)) }
+        }
+    }
+
+private fun historicalData(message: ChatMessage, id: String?): ChatMessage = ChatMessage(
     role = ChatRole.USER,
     content = envelope(
-        "kind" to JsonPrimitive("history"),
-        "sourceRole" to JsonPrimitive(message.role.name.lowercase()),
-        "content" to JsonPrimitive(message.content),
-        "context" to runtimeJson.encodeToJsonElement(message.contextData),
+        listOfNotNull(
+            "kind" to JsonPrimitive("history"),
+            "sourceRole" to JsonPrimitive(message.role.name.lowercase()),
+            "content" to JsonPrimitive(message.content),
+            "context" to runtimeJson.encodeToJsonElement(message.contextData),
+        ) + addressFields(id, message.pin),
     ),
     audio = message.audio,
     images = message.images,
@@ -154,24 +203,60 @@ private fun uniqueWireCallId(id: String, groupIndex: Int, callOffset: Int, used:
     return candidate
 }
 
-private fun wrapToolResult(message: ChatMessage, success: Boolean?): ChatMessage = message.copy(
+private fun wrapToolResult(message: ChatMessage, success: Boolean?, id: String?): ChatMessage = message.copy(
     content = envelope(
-        "kind" to JsonPrimitive("tool_result"),
-        "source" to JsonPrimitive("tool"),
-        "status" to JsonPrimitive(success?.let { if (it) "success" else "error" } ?: "unknown_history"),
-        "data" to JsonPrimitive(message.content),
+        listOfNotNull(
+            "kind" to JsonPrimitive("tool_result"),
+            "source" to JsonPrimitive("tool"),
+            "status" to JsonPrimitive(success?.let { if (it) "success" else "error" } ?: "unknown_history"),
+            "data" to JsonPrimitive(message.content),
+        ) + addressFields(id, message.pin),
     ),
     contextData = emptyList(),
     toolCalls = null,
-    audio = null,
+    audio = if (message.pin != null) message.audio else null,
     reasoning = null,
 )
 
-private fun currentUserEnvelope(input: ModelUserInput): String = envelope(
-    "kind" to JsonPrimitive("current_user_input"),
-    "request" to JsonPrimitive(input.requestText),
-    "context" to runtimeJson.encodeToJsonElement(input.context),
+private fun currentUserEnvelope(
+    input: ModelUserInput,
+    pin: MessagePin?,
+    pinnedImages: List<HoistedPinnedSource> = emptyList(),
+): String = envelope(
+    listOfNotNull(
+        "kind" to JsonPrimitive("current_user_input"),
+        "request" to JsonPrimitive(input.requestText),
+        "context" to runtimeJson.encodeToJsonElement(input.context),
+    ) + pinnedImageFields(pinnedImages) + addressFields(currentMessageId(0), pin),
 )
 
-private fun envelope(vararg fields: Pair<String, kotlinx.serialization.json.JsonElement>): String =
-    JsonObject(linkedMapOf(*fields)).toString()
+/**
+ * Описание закреплённых образов текущего сообщения: модель должна понимать, что
+ * первые изображения — референсы из указанных сообщений (с их заметками), а не
+ * новые вложения запроса. Позиции — 1-based порядок изображений этого сообщения.
+ */
+private fun pinnedImageFields(
+    sources: List<HoistedPinnedSource>,
+): List<Pair<String, kotlinx.serialization.json.JsonElement>> {
+    if (sources.isEmpty()) return emptyList()
+    var position = 0
+    val annotations = JsonArray(sources.map { source ->
+        val start = position + 1
+        position += source.imageCount
+        JsonObject(
+            listOfNotNull(
+                "source" to JsonPrimitive(source.id),
+                "images" to JsonPrimitive("$start-$position"),
+                source.note?.let { "note" to JsonPrimitive(it) },
+            ).toMap(),
+        )
+    })
+    val hint = JsonPrimitive(
+        "Закреплённые референсы — первые изображения этого сообщения " +
+            "(позиции и заметки — в pinnedImages); остальные изображения — новые вложения текущего запроса.",
+    )
+    return listOf("pinnedImages" to annotations, "pinnedHint" to hint)
+}
+
+private fun envelope(fields: List<Pair<String, kotlinx.serialization.json.JsonElement>>): String =
+    JsonObject(linkedMapOf(*fields.toTypedArray())).toString()

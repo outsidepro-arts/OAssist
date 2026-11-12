@@ -21,6 +21,8 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.Send
+import androidx.compose.material.icons.filled.Mic
+import androidx.compose.material.icons.filled.Stop
 import androidx.compose.material3.Button
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -43,6 +45,9 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.input.KeyboardCapitalization
 import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.semantics.LiveRegionMode
+import androidx.compose.ui.semantics.liveRegion
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.viewmodel.compose.viewModel
@@ -66,7 +71,9 @@ import ru.outsideproarts.oassist.core.provider.ImageCodec
 import ru.outsideproarts.oassist.core.speech.SentenceSplitter
 import ru.outsideproarts.oassist.core.speech.SpeechHandle
 import ru.outsideproarts.oassist.core.ui.OAssistDimens
+import ru.outsideproarts.oassist.core.ui.components.ApprovalDialog
 import ru.outsideproarts.oassist.core.ui.components.ChatDeleteDialog
+import ru.outsideproarts.oassist.core.ui.components.ChatInputButton
 import ru.outsideproarts.oassist.core.ui.components.ChatMessageBubble
 import ru.outsideproarts.oassist.core.ui.components.ChatPickerList
 import ru.outsideproarts.oassist.core.ui.components.ChatScrollRequester
@@ -75,7 +82,9 @@ import ru.outsideproarts.oassist.core.ui.components.ChatUnsavedDialog
 import ru.outsideproarts.oassist.core.ui.components.OAssistImageThumbnail
 import ru.outsideproarts.oassist.core.ui.components.OAssistPanel
 import ru.outsideproarts.oassist.core.ui.components.OAssistLiveStatus
+import ru.outsideproarts.oassist.core.ui.components.VoiceInputStrings
 import ru.outsideproarts.oassist.core.ui.components.rememberChatListScroll
+import ru.outsideproarts.oassist.core.ui.components.rememberVoiceInputController
 import ru.outsideproarts.oassist.core.ui.theme.OAssistTheme
 
 private const val SHARE_MAX_IMAGES = 4
@@ -107,6 +116,19 @@ internal suspend fun loadShareImages(
 }
 
 class ShareActivity : AppCompatActivity() {
+
+    override fun onResume() {
+        super.onResume()
+        // Якорь анонсов скринридера (канал SCREEN_READER): фразы «Хода работы»
+        // и ответа постятся от View окна (как в MainActivity). Отвязка в onPause:
+        // следующее окно OAssist привязывается своим onResume уже после неё.
+        runCatching { SpeechHandle.get()?.setScreenReaderAnchor(window.decorView) }
+    }
+
+    override fun onPause() {
+        runCatching { SpeechHandle.get()?.setScreenReaderAnchor(null) }
+        super.onPause()
+    }
 
     override fun onDestroy() {
         super.onDestroy()
@@ -167,7 +189,6 @@ private data class SharePromptTemplates(
     val text: String,
     val image: String,
     val file: String,
-    val question: String,
 )
 
 /**
@@ -200,14 +221,10 @@ private fun buildShareAsk(
         payload.imageUris.forEach { append(String.format(templates.image, it)) }
         payload.otherUris.forEach { append(String.format(templates.file, it)) }
     }
-    val userMsg = String.format(templates.question, contentDesc, query)
-    val modelInput = ModelUserInput(
-        requestText = query,
-        context = if (contentDesc.isBlank()) emptyList() else {
-            listOf(ContextData(ContextSource.SHARED_CONTENT, contentDesc))
-        },
-    )
-    return ShareAskRequest(query = query, userMsg = userMsg, modelInput = modelInput, contentDesc = contentDesc)
+    // Вопрос уходит сырым текстом (как в Chat); общий контент не входит в текст
+    // сообщения — он передаётся данными контекста запроса (см. ShareSessionViewModel).
+    val modelInput = ModelUserInput(requestText = query)
+    return ShareAskRequest(query = query, userMsg = query, modelInput = modelInput, contentDesc = contentDesc)
 }
 
 /**
@@ -236,13 +253,66 @@ private fun ShareFlow(payload: SharePayload) {
     var pendingSwitch by remember { mutableStateOf<(() -> Unit)?>(null) }
     var deleteAsk by remember { mutableStateOf(false) }
 
-    val offlineRetryText = stringResource(ru.outsideproarts.oassist.core.ui.R.string.net_offline_retry)
     // Шаблоны промпта — через stringResource (ленивая локаль), не context.getString.
     val templates = SharePromptTemplates(
         text = stringResource(R.string.share_prompt_text),
         image = stringResource(R.string.share_prompt_image),
         file = stringResource(R.string.share_prompt_file),
-        question = stringResource(R.string.share_prompt_question),
+    )
+
+    // Голосовой ввод — общий контроллер (toggle-STT, hold-to-talk, разрешения),
+    // то же поведение, что в Chat. Конфиг режима читается один раз.
+    var voiceStt by remember { mutableStateOf(ru.outsideproarts.oassist.core.model.SttConfig.DEFAULT) }
+    var voiceAudioIn by remember { mutableStateOf(false) }
+    var voiceSoundEnabled by remember { mutableStateOf(true) }
+    LaunchedEffect(Unit) {
+        val factory = runCatching { AgentFactory.get() }.getOrNull() ?: return@LaunchedEffect
+        val config = runCatching { factory.modeConfig(ru.outsideproarts.oassist.core.model.AssistMode.SHARE) }.getOrNull()
+        voiceStt = config?.effectiveStt() ?: ru.outsideproarts.oassist.core.model.SttConfig.DEFAULT
+        voiceSoundEnabled = config?.effectiveSoundEnabled() ?: true
+        voiceAudioIn = runCatching {
+            factory.modelInfo(ru.outsideproarts.oassist.core.model.AssistMode.SHARE)?.capabilities
+                ?.contains(ru.outsideproarts.oassist.core.model.ModelCapability.AUDIO_IN) == true
+        }.getOrDefault(false)
+    }
+    val isSpeaking by (SpeechHandle.get()?.speaking
+        ?: remember { kotlinx.coroutines.flow.MutableStateFlow(false) }).collectAsState()
+    val voiceInput = rememberVoiceInputController(
+        stt = voiceStt,
+        audioIn = voiceAudioIn,
+        strings = VoiceInputStrings(
+            micDenied = stringResource(R.string.share_mic_denied),
+            micEmpty = stringResource(R.string.share_mic_empty),
+            micError = stringResource(R.string.share_mic_error),
+            noRecognizer = stringResource(R.string.share_no_recognizer),
+            btFallback = stringResource(R.string.share_mic_bt_fallback),
+            voiceShort = stringResource(R.string.share_voice_short),
+        ),
+        soundEnabled = voiceSoundEnabled,
+        canCapture = vm.canSend,
+        isStreaming = vm.isStreaming,
+        onBargeIn = { vm.cancelTurn() },
+        stopSpeech = { SpeechHandle.get()?.stop() },
+        onSendText = { text ->
+            if (payload.unsupported) {
+                // Отправка недоступна: распознанное не теряется — уходит в поле.
+                vm.question = TextFieldValue(text)
+            } else {
+                val request = buildShareAsk(payload, text.trim(), templates)
+                val net = ru.outsideproarts.oassist.core.net.NetworkHandle.get()
+                if (net != null && !net.isOnline.value) vm.deferAsk(request) else vm.ask(request)
+                vm.question = TextFieldValue("")
+            }
+        },
+        onSendAudio = { audio ->
+            // Голосовой ход без текста — как в Chat; пре-чек сети общий.
+            if (!payload.unsupported) {
+                val request = buildShareAsk(payload, "", templates)
+                    .copy(userMsg = "", modelInput = ModelUserInput(""), audio = audio)
+                val net = ru.outsideproarts.oassist.core.net.NetworkHandle.get()
+                if (net != null && !net.isOnline.value) vm.deferAsk(request) else vm.ask(request)
+            }
+        },
     )
 
     // Смерть процесса: VM с историей погибает, но id открытого разговора
@@ -319,20 +389,24 @@ private fun ShareFlow(payload: SharePayload) {
             scrollRequester = vm.scrollRequester,
             question = vm.question,
             onQuestionChange = { vm.question = it },
-            onSend = {
-                if (vm.question.text.isNotBlank() && vm.canSend && !payload.unsupported) {
+            onSend = { text ->
+                if (text.isNotBlank() && vm.canSend && !payload.unsupported) {
                     val net = ru.outsideproarts.oassist.core.net.NetworkHandle.get()
-                    val request = buildShareAsk(payload, vm.question.text.trim(), templates)
+                    val request = buildShareAsk(payload, text.trim(), templates)
                     if (net != null && !net.isOnline.value) {
-                        // Сеть пропала: запрос встанет в очередь на повтор.
+                        // Сеть пропала: запрос встанет в очередь на повтор
+                        // и сразу покажется в ленте ожидания (как в Chat).
                         vm.deferAsk(request)
-                        Toast.makeText(context, offlineRetryText, Toast.LENGTH_LONG).show()
                     } else {
                         vm.ask(request)
-                        vm.question = TextFieldValue("")
                     }
+                    vm.question = TextFieldValue("")
                 }
             },
+            onCancelTurn = vm::cancelTurn,
+            onStopSpeech = { SpeechHandle.get()?.stop() },
+            voiceInput = voiceInput,
+            isSpeaking = isSpeaking,
             onBack = {
                 if (vm.turns.isNotEmpty() && vm.chatId == null) {
                     pendingSwitch = { vm.leaveConversation() }
@@ -341,6 +415,7 @@ private fun ShareFlow(payload: SharePayload) {
                 }
             },
             onSaveChat = vm::saveChat,
+            onRetryWrites = vm::retryWrites,
             onDeleteChat = { deleteAsk = true },
         )
     }
@@ -357,6 +432,14 @@ private fun ShareFlow(payload: SharePayload) {
                 pendingSwitch = null
             },
             onDismiss = { pendingSwitch = null },
+        )
+    }
+
+    // Подтверждения действий — общий диалог, как в Chat.
+    vm.pendingApproval?.let { (request, _) ->
+        ApprovalDialog(
+            request = request,
+            onDecision = { decision -> vm.resolveApproval(decision) },
         )
     }
 
@@ -454,14 +537,29 @@ private fun ShareConversation(
     scrollRequester: ChatScrollRequester,
     question: TextFieldValue,
     onQuestionChange: (TextFieldValue) -> Unit,
-    onSend: () -> Unit,
+    onSend: (String) -> Unit,
+    onCancelTurn: () -> Unit,
+    onStopSpeech: () -> Unit,
+    voiceInput: ru.outsideproarts.oassist.core.ui.components.VoiceInputController,
+    isSpeaking: Boolean,
     onBack: () -> Unit,
     onSaveChat: () -> Unit,
+    onRetryWrites: () -> Unit,
     onDeleteChat: () -> Unit,
 ) {
     val backLabel = stringResource(R.string.share_back)
     val askLabel = stringResource(R.string.share_ask_label)
     val sendLabel = stringResource(R.string.share_send)
+    val stopLabel = stringResource(R.string.share_stop)
+    val stopSpeechLabel = stringResource(R.string.share_stop_speech)
+    val speakingLabel = stringResource(R.string.share_speaking)
+    val micLabel = stringResource(R.string.share_mic)
+    val holdHintText = stringResource(R.string.share_hold_hint)
+    val holdActionLabel = stringResource(R.string.share_hold_action)
+    val startVoiceLabel = stringResource(R.string.share_mic_start)
+    val stopVoiceLabel = stringResource(R.string.share_mic_stop)
+    val micIdleLabel = stringResource(R.string.share_mic_idle)
+    val listeningText = stringResource(R.string.share_listening)
     val speakLabel = stringResource(R.string.share_speak_answer)
     val saveLabel = stringResource(R.string.share_save_chat)
     val deleteLabel = stringResource(R.string.share_delete_chat)
@@ -502,7 +600,7 @@ private fun ShareConversation(
             )
             if (turns.isNotEmpty() || activeUserMsg != null) {
                 if (saveFailed) {
-                    TextButton(onClick = onSaveChat, modifier = Modifier.oassistTouchTarget()) {
+                    TextButton(onClick = onRetryWrites, modifier = Modifier.oassistTouchTarget()) {
                         Text(stringResource(R.string.share_retry_save))
                     }
                 }
@@ -565,25 +663,29 @@ private fun ShareConversation(
                     item {
                         ChatMessageBubble(isUser = true, answer = activeUserMsg.orEmpty(), speakLabel = speakLabel)
                     }
-                    item {
-                        val speakTurn: (() -> Unit)? = if (response.isNotBlank()) {
-                            {
-                                SpeechHandle.get()?.let { speech ->
-                                    SentenceSplitter.splitSentences(response).forEach { speech.speak(it) }
+                    // Пузырь ассистента — только с содержимым или в процессе стрима:
+                    // отменённый пустой ход не оставляет пустой ответ (как в Chat).
+                    if (isStreaming || workEvents.isNotEmpty() || response.isNotBlank()) {
+                        item {
+                            val speakTurn: (() -> Unit)? = if (response.isNotBlank()) {
+                                {
+                                    SpeechHandle.get()?.let { speech ->
+                                        SentenceSplitter.splitSentences(response).forEach { speech.speak(it) }
+                                    }
                                 }
+                            } else {
+                                null
                             }
-                        } else {
-                            null
+                            ChatMessageBubble(
+                                isUser = false,
+                                answer = response,
+                                work = workEvents,
+                                usage = usage,
+                                isStreaming = isStreaming,
+                                onSpeak = speakTurn,
+                                speakLabel = speakLabel,
+                            )
                         }
-                        ChatMessageBubble(
-                            isUser = false,
-                            answer = response,
-                            work = workEvents,
-                            usage = usage,
-                            isStreaming = isStreaming,
-                            onSpeak = speakTurn,
-                            speakLabel = speakLabel,
-                        )
                     }
                 }
                 item {
@@ -599,6 +701,17 @@ private fun ShareConversation(
         }
 
         ru.outsideproarts.oassist.core.ui.components.ThinkingContextNotice(thinkingContextReduced)
+        if (voiceInput.capturing) {
+            // Статус захвата — уместный live region (не стрим контента).
+            // Preview распознавания — здесь, не в поле ввода (как в Chat).
+            val status = if (voiceInput.preview.isBlank()) listeningText else "$listeningText ${voiceInput.preview}"
+            Text(
+                text = status,
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.primary,
+                modifier = Modifier.semantics { liveRegion = LiveRegionMode.Polite },
+            )
+        }
         Row(
             modifier = Modifier.fillMaxWidth(),
             verticalAlignment = Alignment.CenterVertically,
@@ -615,16 +728,83 @@ private fun ShareConversation(
                     capitalization = KeyboardCapitalization.Sentences,
                 ),
             )
-            IconButton(
-                onClick = onSend,
-                enabled = question.text.isNotBlank() && canSend,
-                modifier = Modifier.oassistTouchTarget(),
-            ) {
-                Icon(
-                    imageVector = Icons.AutoMirrored.Filled.Send,
-                    contentDescription = sendLabel,
-                )
+            // Единая action-кнопка (Send / Stop / Mic) — как в Chat.
+            // Войс — холд Mic, тап — toggle для TalkBack.
+            val actionContent: String
+            val actionIcon = when {
+                isStreaming -> {
+                    actionContent = stopLabel
+                    Icons.Filled.Stop
+                }
+                voiceInput.capturing -> {
+                    actionContent = stopLabel
+                    Icons.Filled.Stop
+                }
+                isSpeaking -> {
+                    actionContent = stopSpeechLabel
+                    Icons.Filled.Stop
+                }
+                question.text.isBlank() -> {
+                    actionContent = holdHintText
+                    Icons.Filled.Mic
+                }
+                else -> {
+                    actionContent = sendLabel
+                    Icons.AutoMirrored.Filled.Send
+                }
             }
+            ChatInputButton(
+                icon = actionIcon,
+                label = if (question.text.isBlank() && !isStreaming && !voiceInput.capturing && !isSpeaking) {
+                    "$micLabel. $holdHintText"
+                } else {
+                    actionContent
+                },
+                holdLabel = holdActionLabel,
+                canStartHold = (question.text.isBlank() || isSpeaking) && !isStreaming && !voiceInput.capturing && canSend,
+                holdEnabled = !isStreaming && canSend &&
+                    (question.text.isBlank() || voiceInput.capturing || isSpeaking || voiceInput.holdActive),
+                onVoiceAction = { voiceInput.toggle() },
+                onHoldStart = voiceInput::startHold,
+                onHoldRelease = voiceInput::releaseHold,
+                onHoldCancel = voiceInput::cancelHold,
+                voiceActionLabel = if (!isStreaming && (question.text.isBlank() || voiceInput.capturing || isSpeaking)) {
+                    if (voiceInput.capturing) stopVoiceLabel else startVoiceLabel
+                } else {
+                    null
+                },
+                voiceStateLabel = if (!isStreaming && (question.text.isBlank() || voiceInput.capturing || isSpeaking)) {
+                    when {
+                        voiceInput.capturing -> listeningText
+                        isSpeaking -> speakingLabel
+                        else -> micIdleLabel
+                    }
+                } else {
+                    null
+                },
+                onClick = {
+                    if (isStreaming) {
+                        onCancelTurn()
+                        return@ChatInputButton
+                    }
+                    if (voiceInput.capturing) {
+                        voiceInput.toggle()
+                        return@ChatInputButton
+                    }
+                    if (isSpeaking) {
+                        onStopSpeech()
+                        return@ChatInputButton
+                    }
+                    if (question.text.isNotBlank()) {
+                        val text = question.text.trim()
+                        onQuestionChange(TextFieldValue(""))
+                        voiceInput.clearPreview()
+                        onSend(text)
+                    } else {
+                        voiceInput.toggle()
+                    }
+                },
+            )
         }
     }
 }

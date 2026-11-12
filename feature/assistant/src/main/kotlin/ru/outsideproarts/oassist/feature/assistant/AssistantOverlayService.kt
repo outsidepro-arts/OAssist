@@ -214,6 +214,25 @@ private val sessionTurnsLock = Any()
                 }
             }
         }
+        // Закрепления из других экранов (история чата) не должны стираться
+        // следующей перезаписью снимка из зеркала сессии.
+        ru.outsideproarts.oassist.core.data.chat.ChatHandle.get()?.onTurnPinned = { chatId, turnId, messageIndex, pinned, note ->
+            if (chatId == ru.outsideproarts.oassist.core.data.chat.ChatRepository.ASSISTANT_CHAT_ID) {
+                val pin = if (pinned) ru.outsideproarts.oassist.core.model.MessagePin(note) else null
+                synchronized(sessionTurnsLock) {
+                    val index = sessionTurns.indexOfFirst { it.id == turnId }
+                    if (index >= 0) {
+                        sessionTurns[index] = sessionTurns[index].copy(
+                            turn = sessionTurns[index].turn.withMessagePin(messageIndex, pinned, note),
+                        )
+                    }
+                    (ownedSession ?: AssistSessionStore.current())?.pinMessage(
+                        ru.outsideproarts.oassist.core.model.turnMessageId(turnId, messageIndex),
+                        pin,
+                    )
+                }
+            }
+        }
         // Авто-повтор отложенного хода только по фронту offline→online.
         serviceScope.launch {
             val net = ru.outsideproarts.oassist.core.net.NetworkHandle.get()
@@ -347,6 +366,7 @@ private val sessionTurnsLock = Any()
         pendingSttStart.cancel()
         ru.outsideproarts.oassist.core.agent.OverlayControl.unregister(overlayControlImpl)
         ru.outsideproarts.oassist.core.data.chat.ChatHandle.get()?.onTurnsDeleted = { _, _ -> }
+        ru.outsideproarts.oassist.core.data.chat.ChatHandle.get()?.onTurnPinned = { _, _, _, _, _ -> }
         execute(voiceFlow.onClose())
         sounds?.playIfEnabled(AgentSound.OVERLAY_STOP, soundEnabled)
         mediaRouter?.release()
@@ -721,6 +741,9 @@ private val sessionTurnsLock = Any()
         turnUsage = null
         var turnTranscript: List<ChatMessage> = emptyList()
         var turnEntryId: String? = null
+        // Закрепления текущего хода применяются к памяти сессии и ходу при записи;
+        // закрепления прошлых ходов применяются сразу (см. applyPinChange).
+        val turnPins = mutableListOf<ru.outsideproarts.oassist.core.model.PinChange>()
         val timeline = ru.outsideproarts.oassist.core.agent.WorkTimelineBuilder()
         hintText = null
         speech?.stop()
@@ -780,8 +803,21 @@ private val sessionTurnsLock = Any()
                             val entryId = java.util.UUID.randomUUID().toString()
                             turnEntryId = entryId
                             session.appendTurn(ChatMessage(ChatRole.USER, text), turn, entryId)
+                            // Реплика пользователя не входит в транскрипт: закрепление
+                            // текущего хода применяется к памяти сессии здесь.
+                            turnPins.forEach { change ->
+                                val ref = ru.outsideproarts.oassist.core.model.parseMessageId(change.messageId)
+                                    ?: return@forEach
+                                if (ref.turnId == ru.outsideproarts.oassist.core.model.CURRENT_TURN_ID) {
+                                    session.pinMessage(
+                                        ru.outsideproarts.oassist.core.model.turnMessageId(entryId, ref.index),
+                                        if (change.pinned) ru.outsideproarts.oassist.core.model.MessagePin(change.note) else null,
+                                    )
+                                }
+                            }
                             turnTranscript = turn
                         },
+                        onPinChange = { change -> applyPinChange(session, change, turnPins) },
                     ),
                     agent = agent,
                 )
@@ -914,7 +950,7 @@ private val sessionTurnsLock = Any()
                 }, continueDialog = continueDialog, channel = tts.channel)
             } finally {
                 try {
-                    persistAssistantTurn(text, diagnosticId, timeline, turnTranscript, turnEntryId)
+                    persistAssistantTurn(text, diagnosticId, timeline, turnTranscript, turnEntryId, turnPins)
                 } finally {
                     if (!destroyed && turnJob === coroutineContext[Job]) {
                         isStreaming = false
@@ -928,6 +964,41 @@ private val sessionTurnsLock = Any()
     }
 
     /**
+     * Закрепление из `message_pin`/`message_unpin`: текущего хода — к памяти
+     * сессии при записи хода, прошлых — сразу к памяти сессии, зеркалу записи
+     * и БД (перезапись снимка идёт из зеркала — значения сходятся).
+     */
+    private suspend fun applyPinChange(
+        session: ru.outsideproarts.oassist.core.agent.AssistSession,
+        change: ru.outsideproarts.oassist.core.model.PinChange,
+        currentPins: MutableList<ru.outsideproarts.oassist.core.model.PinChange>,
+    ) {
+        val ref = ru.outsideproarts.oassist.core.model.parseMessageId(change.messageId) ?: return
+        if (ref.turnId == ru.outsideproarts.oassist.core.model.CURRENT_TURN_ID) {
+            currentPins.add(change)
+            return
+        }
+        val pin = if (change.pinned) ru.outsideproarts.oassist.core.model.MessagePin(change.note) else null
+        session.pinMessage(change.messageId, pin)
+        synchronized(sessionTurnsLock) {
+            val index = sessionTurns.indexOfFirst { it.id == ref.turnId }
+            if (index >= 0) {
+                sessionTurns[index] = sessionTurns[index].copy(
+                    turn = sessionTurns[index].turn.withMessagePin(ref.index, change.pinned, change.note),
+                )
+            }
+        }
+        val repo = ru.outsideproarts.oassist.core.data.chat.ChatHandle.get() ?: return
+        repo.setPin(
+            ru.outsideproarts.oassist.core.data.chat.ChatRepository.ASSISTANT_CHAT_ID,
+            ref.turnId,
+            ref.index,
+            change.pinned,
+            change.note,
+        )
+    }
+
+    /**
      * Сохранить ход в закреплённый диалог «Ассистент»: вся сессия пишется
      * перезаписью (новая сессия — новый набор ходов). Пустой ход не пишется:
      * случайно открытый оверлей не затирает сохранённую историю.
@@ -938,6 +1009,7 @@ private val sessionTurnsLock = Any()
         timeline: ru.outsideproarts.oassist.core.agent.WorkTimelineBuilder,
         transcript: List<ChatMessage>,
         entryId: String?,
+        pins: List<ru.outsideproarts.oassist.core.model.PinChange>,
     ) {
         if (timeline.isEmpty && transcript.isEmpty()) return
         val stored = ru.outsideproarts.oassist.core.model.StoredTurnEntry(
@@ -950,7 +1022,7 @@ private val sessionTurnsLock = Any()
                 answer = timeline.answerText,
                 usage = timeline.usage,
                 turn = transcript,
-            ),
+            ).withPinChanges(pins),
         )
         synchronized(sessionTurnsLock) { sessionTurns.add(stored) }
         val repo = ru.outsideproarts.oassist.core.data.chat.ChatHandle.get() ?: return

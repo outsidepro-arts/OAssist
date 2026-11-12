@@ -73,6 +73,9 @@ interface TurnDao {
     @Insert
     suspend fun insert(turn: TurnEntity)
 
+    @Update
+    suspend fun update(turn: TurnEntity)
+
     @Query("DELETE FROM turns WHERE id IN (:ids)")
     suspend fun deleteByIds(ids: List<String>)
 

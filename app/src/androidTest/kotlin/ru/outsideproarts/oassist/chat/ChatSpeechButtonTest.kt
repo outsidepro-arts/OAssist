@@ -143,7 +143,7 @@ class ChatSpeechButtonTest {
                 MaterialTheme {
                     if (visible) {
                         ChatScreen(
-                            sendMessage = { _, _, _, _, _ -> error("Unexpected message") },
+                            sendMessage = { _, _, _, _, _, _ -> error("Unexpected message") },
                             stopSpeech = { events.add("stop speech"); speaking = false },
                             isSpeaking = speaking,
                             soundEnabled = false,

@@ -1,11 +1,10 @@
-package ru.outsideproarts.oassist.feature.chat
+package ru.outsideproarts.oassist.core.speech
 
 import kotlinx.coroutines.flow.MutableStateFlow
 import org.junit.Assert.*
 import org.junit.Test
-import ru.outsideproarts.oassist.core.speech.*
 
-class ChatToggleSttOwnerTest {
+class ToggleSttOwnerTest {
     private class FakeVoice : VoiceHandle {
         var current: SttListener? = null
         var failure: CaptureError? = null
@@ -48,7 +47,7 @@ class ChatToggleSttOwnerTest {
     @Test fun disposeInvalidatesCallbacksBeforeCancellingCapture() {
         val voice = FakeVoice()
         val results = Results()
-        val owner = ChatToggleSttOwner(voice)
+        val owner = ToggleSttOwner(voice)
         owner.start("en", results, null, false)
         val listener = voice.current!!
         voice.duringCancel = { listener.onFinal("during cancellation") }
@@ -65,11 +64,11 @@ class ChatToggleSttOwnerTest {
 
     @Test fun staleScreenCannotCancelNewOwnerAndReopenedScreenWorks() {
         val voice = FakeVoice()
-        val old = ChatToggleSttOwner(voice)
+        val old = ToggleSttOwner(voice)
         val oldResults = Results()
         old.start("en", oldResults, null, false)
         val stale = voice.current!!
-        val fresh = ChatToggleSttOwner(voice)
+        val fresh = ToggleSttOwner(voice)
         val freshResults = Results()
         fresh.start("en", freshResults, null, false)
         val current = voice.current!!
@@ -89,7 +88,7 @@ class ChatToggleSttOwnerTest {
         val foreign = Results()
         voice.current = foreign
         voice.failure = CaptureError.BUSY
-        val owner = ChatToggleSttOwner(voice)
+        val owner = ToggleSttOwner(voice)
         assertEquals(CaptureError.BUSY, owner.start("en", Results(), null, false))
         owner.dispose()
         assertSame(foreign, voice.current)
@@ -98,7 +97,7 @@ class ChatToggleSttOwnerTest {
 
     @Test fun resumeAllowsNewCaptureButDoesNotReviveOldCallbacks() {
         val voice = FakeVoice()
-        val owner = ChatToggleSttOwner(voice)
+        val owner = ToggleSttOwner(voice)
         val results = Results()
         owner.start("en", results, null, false)
         val old = voice.current!!
@@ -112,7 +111,7 @@ class ChatToggleSttOwnerTest {
     }
 
     @Test fun permissionResultBeforeResumeStartsOnlyOnceAndDisposeDiscardsPending() {
-        val owner = ChatToggleSttOwner(FakeVoice())
+        val owner = ToggleSttOwner(FakeVoice())
         var starts = 0
         owner.pause()
         owner.whenActive { starts++ }
@@ -128,7 +127,7 @@ class ChatToggleSttOwnerTest {
     }
 
     @Test fun leavingDestinationDiscardsPermissionResultBeforeResume() {
-        val owner = ChatToggleSttOwner(FakeVoice())
+        val owner = ToggleSttOwner(FakeVoice())
         var starts = 0
         owner.pause()
         owner.whenActive { starts++ }

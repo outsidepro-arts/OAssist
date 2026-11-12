@@ -13,14 +13,16 @@ const val MAX_IMAGE_MESSAGES = 4
 
 /**
  * Бюджет образов: остаются только последние [maxImages] сообщений с образами,
- * у старых образы снимаются с пометкой в тексте. Pure — тестируется на JVM.
+ * у старых образы снимаются с пометкой в тексте. Закреплённые сообщения
+ * ([ChatMessage.pin]) не усекаются и не занимают бюджет — их образы обязательны
+ * для контекста. Pure — тестируется на JVM.
  */
 fun enforceImageBudget(messages: List<ChatMessage>, maxImages: Int = MAX_IMAGE_MESSAGES): List<ChatMessage> {
     var remaining = maxImages
     val out = ArrayList<ChatMessage>(messages.size)
     for (i in messages.indices.reversed()) {
         val msg = messages[i]
-        if (msg.images.isEmpty()) {
+        if (msg.images.isEmpty() || msg.pin != null) {
             out.add(msg)
             continue
         }

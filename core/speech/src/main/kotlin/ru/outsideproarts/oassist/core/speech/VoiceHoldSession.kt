@@ -1,8 +1,11 @@
-package ru.outsideproarts.oassist.feature.chat
+package ru.outsideproarts.oassist.core.speech
 
-import ru.outsideproarts.oassist.core.speech.CaptureMode
-
-internal class ChatVoiceHoldSession(val mode: CaptureMode) {
+/**
+ * Сессия удержания микрофона (hold-to-talk): финальный текст реплики
+ * откладывается до поднятия пальца (release) — отправка только по завершении
+ * удержания. Отмена (cancel) сбрасывает распознанное.
+ */
+class VoiceHoldSession(val mode: CaptureMode) {
     var captureActive: Boolean = true
         private set
     private var released = false

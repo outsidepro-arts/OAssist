@@ -32,7 +32,7 @@ class ChatTogglePermissionTest {
         VoiceHandle.register(voice)
         try {
             compose.setContent {
-                MaterialTheme { ChatScreen(sendMessage = { _, _, _, _, _ -> error("Unexpected send") }) }
+                MaterialTheme { ChatScreen(sendMessage = { _, _, _, _, _, _ -> error("Unexpected send") }) }
             }
             compose.onNode(hasContentDescription(context.getString(ChatR.string.chat_mic), substring = true)).performClick()
             val deadline = System.currentTimeMillis() + 10_000

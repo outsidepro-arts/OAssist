@@ -257,9 +257,9 @@ class TerminalTranscriptPersistenceTest(private val mode: AssistMode, private va
                 MaterialTheme {
                     visible.value?.let { vm ->
                         androidx.compose.runtime.key(vm) {
-                            ChatScreen(viewModel = vm, soundEnabled = false, sendMessage = { requestedMode, text, history, _, callback ->
+                            ChatScreen(viewModel = vm, soundEnabled = false, sendMessage = { requestedMode, text, history, _, callback, pinCallback ->
                                 val agent = factory.agentFor(profile, requestedMode)
-                                AgentSession(agent.stream("alias", "system", history, text, onTurnMessages = callback), agent)
+                                AgentSession(agent.stream("alias", "system", history, text, onTurnMessages = callback, onPinChange = pinCallback), agent)
                             })
                         }
                     }

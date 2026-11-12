@@ -19,6 +19,7 @@ import ru.outsideproarts.oassist.core.model.AssistMode
 import ru.outsideproarts.oassist.core.model.ChatKind
 import ru.outsideproarts.oassist.core.model.ChatMessage
 import ru.outsideproarts.oassist.core.model.ChatSummary
+import ru.outsideproarts.oassist.core.model.MessagePin
 import ru.outsideproarts.oassist.core.model.StoredTurn
 import ru.outsideproarts.oassist.core.model.StoredTurnEntry
 
@@ -171,9 +172,29 @@ class ChatRepository(
         }
     }
 
+    /**
+     * Закрепить/открепить одно сообщение сохранённого хода (флаг в payload хода).
+     * Индекс — позиция в `modelMessages`: 0 — реплика пользователя, `k > 0` —
+     * транскрипт `k - 1`. Правка payload точечная ([TurnCodec.pinPayload]) —
+     * рефы отсутствующих медиафайлов не ампутируются. `false` — ход или сообщение
+     * не найдены (no-op). Успешная правка уходит в [onTurnPinned] — живое зеркало
+     * истории (оверлей ассистента) синхронизирует память с чужими закреплениями.
+     */
+    suspend fun setPin(chatId: String, turnId: String, messageIndex: Int, pinned: Boolean, note: String? = null): Boolean =
+        diagnosticOwnershipLock.withLock {
+            val entity = database.turnDao().listForChat(chatId).firstOrNull { it.id == turnId }
+                ?: return@withLock false
+            val updated = TurnCodec.pinPayload(entity.payload, messageIndex, MessagePin(note).takeIf { pinned })
+                ?: return@withLock false
+            database.turnDao().update(entity.copy(payload = updated))
+            onTurnPinned(chatId, turnId, messageIndex, pinned, note)
+            true
+        }
+
     suspend fun loadTurns(chatId: String): List<StoredTurn> = loadTurnEntries(chatId).map { it.turn }
 
-    /** История для модели: все ходы диалога (реплика пользователя + транскрипт). */
+    /** История для модели без адресов сообщений: для стрима с инструментами
+     *  закрепления используйте `loadTurnEntries(chatId).flatMap { it.modelMessages() }`. */
     suspend fun loadModelHistory(chatId: String): List<ChatMessage> =
         loadTurns(chatId).flatMap { it.modelMessages() }
 
@@ -279,6 +300,9 @@ class ChatRepository(
 
     /** Живое зеркало истории (оверлей ассистента) синхронизирует память со стёртыми ходами. */
     var onTurnsDeleted: (String, Set<String>) -> Unit = { _, _ -> }
+
+    /** Живое зеркало истории синхронизирует память с закреплениями из других экранов. */
+    var onTurnPinned: (String, String, Int, Boolean, String?) -> Unit = { _, _, _, _, _ -> }
 
     fun diagnosticGeneration(chatId: String): Long =
         diagnosticGenerations.computeIfAbsent(chatId) { AtomicLong() }.get()

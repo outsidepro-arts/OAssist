@@ -2,6 +2,9 @@ package ru.outsideproarts.oassist.core.data.chat
 
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonArray
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.encodeToJsonElement
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.contentOrNull
@@ -11,6 +14,7 @@ import ru.outsideproarts.oassist.core.model.ChatRole
 import ru.outsideproarts.oassist.core.model.ContextData
 import ru.outsideproarts.oassist.core.model.ContextSource
 import ru.outsideproarts.oassist.core.model.ImagePart
+import ru.outsideproarts.oassist.core.model.MessagePin
 import ru.outsideproarts.oassist.core.model.ModelUserInput
 import ru.outsideproarts.oassist.core.model.ProviderUsage
 import ru.outsideproarts.oassist.core.model.ReasoningBlock
@@ -25,6 +29,8 @@ internal data class TurnPayload(
     val modelUserInput: ModelUserInputJson? = null,
     val userAudio: MediaJson? = null,
     val userImages: List<MediaJson> = emptyList(),
+    /** Закрепление реплики пользователя; отсутствие поля у старых ходов — не закреплено. */
+    val userPin: MessagePin? = null,
     /** Новое полотно (мыслевые блоки + тулы в хронологии); null — legacy-ход. */
     val work: List<WorkEvent>? = null,
     /** Legacy (до WorkEvent): сплошной текст мыслей — мигрируется в [work]. */
@@ -47,6 +53,8 @@ internal data class MessageJson(
     /** Мысли ассистента (text/signature/replay) — legacy-ходы без поля читаются как null. */
     val reasoning: ReasoningBlock? = null,
     val contextData: List<ContextDataJson> = emptyList(),
+    /** Закрепление сообщения — legacy-ходы без поля читаются как null. */
+    val pin: MessagePin? = null,
 )
 
 @Serializable
@@ -102,6 +110,7 @@ object TurnCodec {
             userImages = turn.userImages.mapIndexedNotNull { index, image ->
                 media.writeImage(chatId, turnId, "u$index", image)?.toJson()
             },
+            userPin = turn.userPin,
             work = turn.work,
             answer = turn.answer,
             usage = turn.usage,
@@ -117,6 +126,7 @@ object TurnCodec {
                     },
                     reasoning = message.reasoning,
                     contextData = message.contextData.map { it.toJson() },
+                    pin = message.pin,
                 )
             },
         )
@@ -140,6 +150,7 @@ object TurnCodec {
             },
             userAudio = dto.userAudio?.toRef()?.let { media.readAudio(it) },
             userImages = dto.userImages.mapNotNull { it.toRef()?.let(media::readImage) },
+            userPin = dto.userPin,
             work = decodeWork(dto, media),
             answer = dto.answer,
             usage = dto.usage,
@@ -153,6 +164,7 @@ object TurnCodec {
                     images = message.images.mapNotNull { it.toRef()?.let(media::readImage) },
                     reasoning = message.reasoning?.takeUnless { it.isEmpty() },
                     contextData = message.contextData.map { it.toModel() },
+                    pin = message.pin,
                 )
             },
         )
@@ -175,6 +187,32 @@ object TurnCodec {
             )
         }
         return events
+    }
+
+    /**
+     * Обновить флаг закрепления в payload точечной правкой JSON, без
+     * декодирования с гидратацией медиа и обратного перекодирования: оно
+     * молча ампутировало бы рефы отсутствующих файлов. Индекс — позиция в
+     * `modelMessages`: 0 — реплика пользователя, `k > 0` — транскрипт `k - 1`.
+     * `null` — повреждённый payload или индекс вне хода.
+     */
+    fun pinPayload(payload: String, messageIndex: Int, pin: MessagePin?): String? {
+        val root = runCatching { json.parseToJsonElement(payload) }.getOrNull() as? JsonObject ?: return null
+        val patch: (JsonObject, String) -> JsonObject = { message, field ->
+            val fields = message.toMutableMap()
+            if (pin == null) fields.remove(field) else fields[field] = json.encodeToJsonElement(pin)
+            JsonObject(fields)
+        }
+        // Реплика пользователя хранится флагом userPin на корне payload,
+        // сообщения транскрипта — полем pin (как в TurnPayload/MessageJson;
+        // рассинхрон имён ловит тест pinPayload_matchesWithMessagePinSemantics).
+        if (messageIndex == 0) return patch(root, "userPin").toString()
+        val turns = root["turn"] as? JsonArray ?: return null
+        val index = messageIndex - 1
+        if (index !in turns.indices) return null
+        val target = turns[index] as? JsonObject ?: return null
+        val updated = turns.toMutableList().also { it[index] = patch(target, "pin") }
+        return JsonObject(root.toMutableMap().apply { put("turn", JsonArray(updated)) }).toString()
     }
 
     private fun ContextData.toJson(): ContextDataJson = ContextDataJson(source.name, text)

@@ -1,16 +1,15 @@
-package ru.outsideproarts.oassist.feature.chat
+package ru.outsideproarts.oassist.core.speech
 
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
-import ru.outsideproarts.oassist.core.speech.CaptureMode
 
-class ChatVoiceHoldSessionTest {
+class VoiceHoldSessionTest {
     @Test
     fun finalBeforeReleaseIsBufferedAndDeliveredOnce() {
-        val hold = ChatVoiceHoldSession(CaptureMode.STT)
+        val hold = VoiceHoldSession(CaptureMode.STT)
         assertNull(hold.onFinal("question"))
         assertFalse(hold.captureActive)
         assertEquals("question", hold.release())
@@ -20,7 +19,7 @@ class ChatVoiceHoldSessionTest {
 
     @Test
     fun releaseBeforeFinalAllowsTheLaterTranscript() {
-        val hold = ChatVoiceHoldSession(CaptureMode.STT)
+        val hold = VoiceHoldSession(CaptureMode.STT)
         assertNull(hold.release())
         assertTrue(hold.captureActive)
         assertEquals("question", hold.onFinal("question"))
@@ -29,7 +28,7 @@ class ChatVoiceHoldSessionTest {
 
     @Test
     fun cancellationDiscardsBufferedFinal() {
-        val hold = ChatVoiceHoldSession(CaptureMode.STT)
+        val hold = VoiceHoldSession(CaptureMode.STT)
         hold.onFinal("uncommitted speech")
         assertFalse(hold.cancel())
         assertNull(hold.release())
@@ -38,7 +37,7 @@ class ChatVoiceHoldSessionTest {
 
     @Test
     fun cancellationStopsPendingCaptureAndIgnoresLateFinal() {
-        val hold = ChatVoiceHoldSession(CaptureMode.STT)
+        val hold = VoiceHoldSession(CaptureMode.STT)
         assertTrue(hold.cancel())
         assertFalse(hold.cancel())
         assertNull(hold.onFinal("late result"))
@@ -47,7 +46,7 @@ class ChatVoiceHoldSessionTest {
 
     @Test
     fun errorEndsCaptureWithoutCommittingText() {
-        val hold = ChatVoiceHoldSession(CaptureMode.STT)
+        val hold = VoiceHoldSession(CaptureMode.STT)
         hold.onError()
         assertFalse(hold.captureActive)
         assertNull(hold.release())

@@ -43,7 +43,7 @@ class ChatToggleNavigationTest {
                     NavHost(navController = nav, startDestination = "chat") {
                         composable("chat") { entry ->
                             ChatScreen(
-                                sendMessage = { _, _, _, _, _ -> error("Unexpected send") },
+                                sendMessage = { _, _, _, _, _, _ -> error("Unexpected send") },
                                 registerDestinationExit = remember(nav, entry) {
                                     { onExit -> observeChatDestinationExit(nav, entry, onExit) }
                                 },
@@ -87,7 +87,7 @@ class ChatToggleNavigationTest {
                                 onDispose { outgoingComposed = false }
                             }
                             ChatScreen(
-                                sendMessage = { _, _, _, _, _ ->
+                                sendMessage = { _, _, _, _, _, _ ->
                                     sends.incrementAndGet()
                                     error("Outgoing chat must not send")
                                 },

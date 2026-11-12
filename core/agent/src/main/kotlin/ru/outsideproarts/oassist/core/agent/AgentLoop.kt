@@ -12,8 +12,12 @@ import kotlinx.serialization.json.jsonObject
 import ru.outsideproarts.oassist.core.model.ApprovalDecision
 import ru.outsideproarts.oassist.core.model.ApprovalRequest
 import ru.outsideproarts.oassist.core.model.ApprovalState
+import ru.outsideproarts.oassist.core.model.CURRENT_TURN_ID
+import ru.outsideproarts.oassist.core.model.MessagePin
+import ru.outsideproarts.oassist.core.model.PinChange
 import ru.outsideproarts.oassist.core.model.ProviderUsage
 import ru.outsideproarts.oassist.core.model.mergeUsage
+import ru.outsideproarts.oassist.core.model.parseMessageId
 import ru.outsideproarts.oassist.core.provider.ChatChunk
 import ru.outsideproarts.oassist.core.model.ChatMessage
 import ru.outsideproarts.oassist.core.model.ChatRole
@@ -82,6 +86,13 @@ class AgentLoop(
         onTurnMessages: ((List<ChatMessage>) -> Unit)? = null,
         promptContext: List<ContextData> = emptyList(),
         modelUserInput: ModelUserInput? = null,
+        /**
+         * Закрепления/открепления сообщений (эффект `message_pin`/`message_unpin`):
+         * вызывается после применения к живой истории; вызывающий слой сохраняет
+         * флаг вместе с ходом (адреса `current:<индекс>` — у текущего хода).
+         * Сбой колбэка не роняет ход — превращается в предупреждение модели.
+         */
+        onPinChange: (suspend (PinChange) -> Unit)? = null,
     ): Flow<ChatChunk> = flow {
         val diagnosticOperation = Diagnostics.newOperationId()
         val parentOperation = currentCoroutineContext()[DiagnosticContext]?.operationId
@@ -159,14 +170,18 @@ class AgentLoop(
                     )
                 }
             }
+            // Закреплённые образы истории — в текущее сообщение: свежая позиция
+            // гарантирует, что модель увидит референс (см. hoistPinnedImages).
+            val hoisted = hoistPinnedImages(budgetedMessages, currentUserIndex)
             val roundMessages = buildRuntimeMessages(
-                budgetedMessages,
+                hoisted.messages,
                 currentUserIndex,
                 systemPrompt,
                 promptContext,
-                currentInput.copy(requestText = budgetedMessages[currentUserIndex].content),
+                currentInput.copy(requestText = hoisted.messages[currentUserIndex].content),
                 liveSkillInstructions.toList(),
                 liveToolStatuses,
+                hoisted.sources,
             )
             diagnostics.emit(DiagnosticKind.AGENT_ROUND, diagnosticOperation,
                 attributes = mapOf("round" to rounds.toString(), "model" to modelId),
@@ -297,13 +312,18 @@ class AgentLoop(
                     ?: "${tc.name}: ${tc.argumentsJson}"
                 val narrationName = toolRegistry?.find(tc.name)?.narrationName ?: tc.name
                 if (!includesBuiltinBye) events?.onToolCall(narrationName, tc.argumentsJson, toolSummary)
-                val result = when {
-                    invalidByeBatch -> ToolResult(false, "bye должен быть единственным вызовом раунда; повторите запрос отдельно")
-                    invalidFarewell -> ToolResult(false, "Некорректные аргументы bye: farewell должен быть строкой")
-                    args == null -> ToolResult(false, "Некорректные аргументы инструмента: ожидается JSON-объект")
-                    terminalBye && farewell == null -> ToolResult(false, "Для bye не задан текст прощания")
-                    else -> executeOneTool(tc, args, diagnosticOperation, { startedCallId = tc.id }) { emit(it) }
-                }
+                val result = applyPinChange(
+                    when {
+                        invalidByeBatch -> ToolResult(false, "bye должен быть единственным вызовом раунда; повторите запрос отдельно")
+                        invalidFarewell -> ToolResult(false, "Некорректные аргументы bye: farewell должен быть строкой")
+                        args == null -> ToolResult(false, "Некорректные аргументы инструмента: ожидается JSON-объект")
+                        terminalBye && farewell == null -> ToolResult(false, "Для bye не задан текст прощания")
+                        else -> executeOneTool(tc, args, diagnosticOperation, { startedCallId = tc.id }) { emit(it) }
+                    },
+                    messages,
+                    currentUserIndex,
+                    onPinChange,
+                )
                 // Commit the observed result before diagnostics, callbacks or cancellable UI emission.
                 messages.add(ChatMessage(ChatRole.TOOL, result.output, toolCallId = tc.id, images = result.images))
                 liveToolStatuses[messages.lastIndex] = result.success
@@ -460,6 +480,57 @@ class AgentLoop(
             ApprovalState.DENY -> ToolResult(false, DENIED_MESSAGE)
             ApprovalState.ASK -> askAndExecute(toolRegistry, tc, args, tool, groupKey, diagnosticOperation, onDispatch, emitChunk)
         }
+    }
+
+    /**
+     * Применить закрепление из результата тула: сообщение помечается в живой
+     * истории (метки конвертов и бюджеты следующих раундов видят флаг сразу),
+     * затем эффект уходит вызывающему слою для сохранения. Неизвестный адрес —
+     * честная ошибка вместо ложного «закреплено»; снятие с незакреплённого —
+     * «не было закреплено». Сбой сохранения эффекта не роняет ход: модель
+     * получает предупреждение, закрепление остаётся в живой истории.
+     */
+    private suspend fun applyPinChange(
+        result: ToolResult,
+        messages: MutableList<ChatMessage>,
+        currentUserIndex: Int,
+        onPinChange: (suspend (PinChange) -> Unit)?,
+    ): ToolResult {
+        val change = result.pinChange ?: return result
+        val ref = parseMessageId(change.messageId)
+        val target = when {
+            ref == null -> -1
+            ref.turnId == CURRENT_TURN_ID ->
+                (currentUserIndex + ref.index).takeIf { it in messages.indices } ?: -1
+            else -> messages.indexOfFirst { it.id == change.messageId }
+        }
+        if (target < 0) {
+            return result.copy(
+                success = false,
+                pinChange = null,
+                output = "Сообщение с адресом «${change.messageId}» не найдено в истории — закрепление не применено.",
+            )
+        }
+        if (!change.pinned && messages[target].pin == null) {
+            return result.copy(
+                pinChange = null,
+                output = "Сообщение «${change.messageId}» не было закреплено — менять нечего.",
+            )
+        }
+        messages[target] = messages[target].copy(
+            pin = if (change.pinned) MessagePin(change.note) else null,
+        )
+        try {
+            onPinChange?.invoke(change)
+        } catch (cancel: kotlinx.coroutines.CancellationException) {
+            throw cancel
+        } catch (failure: Throwable) {
+            return result.copy(
+                output = result.output +
+                    "\nВнимание: закрепление действует в текущей сессии, но не сохранено в истории: ${failure.message}",
+            )
+        }
+        return result
     }
 
     /**

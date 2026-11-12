@@ -1,11 +1,11 @@
-package ru.outsideproarts.oassist.feature.chat
+package ru.outsideproarts.oassist.core.speech
 
-import ru.outsideproarts.oassist.core.speech.CaptureError
-import ru.outsideproarts.oassist.core.speech.SttError
-import ru.outsideproarts.oassist.core.speech.SttListener
-import ru.outsideproarts.oassist.core.speech.VoiceHandle
-
-internal class ChatToggleSttOwner(private val voice: VoiceHandle?) {
+/**
+ * Владелец toggle-STT (тап по микрофону): управляет жизненным циклом
+ * распознавания относительно экрана/назначения — пауза на сворачивание,
+ * отложенный старт после системного диалога разрешений.
+ */
+class ToggleSttOwner(private val voice: VoiceHandle?) {
     private val listeners = mutableSetOf<SttListener>()
     private var closed = false
     private var currentDestination = true

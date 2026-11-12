@@ -487,4 +487,28 @@ class ChatRepositoryInstrumentedTest {
             resume.countDown()
         }
     }
+
+    @Test fun setPinPersistsPinsAcrossRepinUnpinAndReopen() = runBlocking {
+        repository.createChat(AssistMode.CHAT, "chat", "chat")
+        repository.appendTurn("chat", turn("a"), turnId = "turn-a")
+        repository.appendTurn("chat", turn("b"), turnId = "turn-b")
+
+        assertTrue(repository.setPin("chat", "turn-a", 0, pinned = true, note = "референс"))
+        assertTrue(repository.setPin("chat", "turn-a", 2, pinned = true))
+
+        reopen()
+        val pinned = repository.loadTurnEntries("chat").first { it.id == "turn-a" }.turn
+        assertEquals(MessagePin("референс"), pinned.userPin)
+        assertNull(pinned.turn[0].pin)
+        assertEquals(MessagePin(), pinned.turn[1].pin)
+        assertNull(repository.loadTurnEntries("chat").first { it.id == "turn-b" }.turn.userPin)
+
+        // Снятие закрепления и валидация адресов.
+        assertTrue(repository.setPin("chat", "turn-a", 2, pinned = false))
+        assertFalse(repository.setPin("chat", "missing", 0, pinned = true))
+        assertFalse(repository.setPin("chat", "turn-a", 99, pinned = true))
+        val cleared = repository.loadTurnEntries("chat").first { it.id == "turn-a" }.turn
+        assertNull(cleared.turn[1].pin)
+        assertEquals(MessagePin("референс"), cleared.userPin)
+    }
 }

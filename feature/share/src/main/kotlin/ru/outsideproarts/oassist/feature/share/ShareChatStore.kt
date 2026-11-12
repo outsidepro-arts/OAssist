@@ -15,6 +15,8 @@ internal interface ShareChatStore {
     suspend fun deleteTurnsAfter(id: String, turnId: String)
     suspend fun deleteChat(id: String)
     suspend fun renameChat(id: String, title: String)
+    /** Закрепить/открепить сообщение сохранённого хода; false — ход/сообщение не найдены. */
+    suspend fun setPin(id: String, turnId: String, messageIndex: Int, pinned: Boolean, note: String?): Boolean
     fun diagnosticGeneration(id: String): Long
     suspend fun bindDiagnosticOperation(id: String, operation: String, generation: Long? = null)
 }
@@ -30,6 +32,8 @@ internal class RepositoryShareChatStore(private val repository: ChatRepository) 
     override suspend fun deleteTurnsAfter(id: String, turnId: String) = repository.deleteTurnsAfter(id, turnId)
     override suspend fun deleteChat(id: String) = repository.deleteChat(id)
     override suspend fun renameChat(id: String, title: String) = repository.renameChat(id, title)
+    override suspend fun setPin(id: String, turnId: String, messageIndex: Int, pinned: Boolean, note: String?): Boolean =
+        repository.setPin(id, turnId, messageIndex, pinned, note)
     override fun diagnosticGeneration(id: String) = repository.diagnosticGeneration(id)
     override suspend fun bindDiagnosticOperation(id: String, operation: String, generation: Long?) {
         if (generation == null) repository.bindDiagnosticOperation(id, operation)

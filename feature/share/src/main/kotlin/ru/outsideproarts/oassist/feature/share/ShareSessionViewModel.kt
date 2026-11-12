@@ -18,22 +18,29 @@ import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.launch
 import ru.outsideproarts.oassist.core.agent.AgentFactory
+import ru.outsideproarts.oassist.core.agent.AgentLoop
 import ru.outsideproarts.oassist.core.agent.AgentSession
 import ru.outsideproarts.oassist.core.agent.ChatTitler
 import ru.outsideproarts.oassist.core.agent.WorkTimelineBuilder
 import ru.outsideproarts.oassist.core.data.chat.ChatHandle
 import ru.outsideproarts.oassist.core.model.ApprovalDecision
+import ru.outsideproarts.oassist.core.model.ApprovalRequest
 import ru.outsideproarts.oassist.core.model.AssistMode
+import ru.outsideproarts.oassist.core.model.CURRENT_TURN_ID
 import ru.outsideproarts.oassist.core.model.ChatMessage
 import ru.outsideproarts.oassist.core.model.ChatRole
 import ru.outsideproarts.oassist.core.model.ChatSummary
+import ru.outsideproarts.oassist.core.model.ContextData
+import ru.outsideproarts.oassist.core.model.ContextSource
 import ru.outsideproarts.oassist.core.model.ImagePart
 import ru.outsideproarts.oassist.core.model.ModelUserInput
+import ru.outsideproarts.oassist.core.model.PinChange
 import ru.outsideproarts.oassist.core.model.ProviderUsage
 import ru.outsideproarts.oassist.core.model.StoredTurn
 import ru.outsideproarts.oassist.core.model.StoredTurnEntry
 import ru.outsideproarts.oassist.core.model.TtsConfig
 import ru.outsideproarts.oassist.core.model.WorkEvent
+import ru.outsideproarts.oassist.core.model.parseMessageId
 import ru.outsideproarts.oassist.core.model.diagnostics.DiagnosticContext
 import ru.outsideproarts.oassist.core.model.diagnostics.Diagnostics
 import ru.outsideproarts.oassist.core.model.diagnostics.launchDiagnostic
@@ -67,6 +74,8 @@ data class ShareAskRequest(
     val userMsg: String,
     val modelInput: ModelUserInput,
     val contentDesc: String,
+    /** Голосовое приложение (hold-to-talk RAW): ход без текста, только аудио. */
+    val audio: ru.outsideproarts.oassist.core.model.AudioPart? = null,
 )
 
 /**
@@ -110,7 +119,9 @@ class ShareSessionViewModel internal constructor(private val chatStore: ShareCha
     var saveFailed by mutableStateOf(false)
         private set
     private var isClosing = false
-    val canSend: Boolean get() = payloadReady && !isClosing && !isChangingConversation && !isSaving && !saveFailed && !isStreaming
+    // Отправка блокируется только идущим стримом или сменой разговора — как в Chat:
+    // идущая или сбойная запись не должна останавливать диалог (очередь дозапишет).
+    val canSend: Boolean get() = payloadReady && !isClosing && !isChangingConversation && !isStreaming
     private var payloadJob: Job? = null
     private var streamJob: Job? = null
     private var changeJob: Job? = null
@@ -146,6 +157,7 @@ class ShareSessionViewModel internal constructor(private val chatStore: ShareCha
         streamJob?.cancel()
         titleJob?.cancel()
         pendingRetry = null
+        pendingApproval = null
         isChangingConversation = true
         changeJob = scope.launch {
             try {
@@ -154,7 +166,12 @@ class ShareSessionViewModel internal constructor(private val chatStore: ShareCha
                 isStreaming = false
                 titleJob?.join()
                 lastWrite?.join()
-                if (saveFailed && !discard) return@launch
+                if (saveFailed && !discard) {
+                    // Незаписанные изменения не должны потеряться при смене
+                    // разговора: смена ждёт явного «Повторить» (не молча).
+                    _toasts.tryEmit(ShareToast.Res(ru.outsideproarts.oassist.feature.share.R.string.share_retry_first))
+                    return@launch
+                }
                 change()
             } catch (cancel: CancellationException) {
                 throw cancel
@@ -181,6 +198,8 @@ class ShareSessionViewModel internal constructor(private val chatStore: ShareCha
         response = ""
         turnUsage = null
         isStreaming = false
+        pendingApproval = null
+        failedRemoval = null
         question = TextFieldValue("")
         // Свежий разговор всегда открывается с конца ленты.
         scrollRequester.scrollToEnd()
@@ -195,8 +214,41 @@ class ShareSessionViewModel internal constructor(private val chatStore: ShareCha
     var providerNotice by mutableStateOf<ChatChunk.ProviderNotice.Kind?>(null)
         private set
 
+    /**
+     * Запрос подтверждения действия, ожидающий решения пользователя — как в Chat:
+     * Share показывает общий ApprovalDialog, а не отклоняет молча (иначе
+     * закрепления и записи памяти в Share принципиально невыполнимы).
+     */
+    var pendingApproval by mutableStateOf<Pair<ApprovalRequest, AgentLoop>?>(null)
+
+    /** Решение по запросу подтверждения (общий диалог ApprovalDialog). */
+    fun resolveApproval(decision: ApprovalDecision) {
+        val (request, agent) = pendingApproval ?: return
+        pendingApproval = null
+        if (decision == ApprovalDecision.DENY || decision == ApprovalDecision.ALWAYS_DENY) {
+            SoundHandle.get()?.playIfEnabled(AgentSound.PERMISSION_DENIED, lastSoundsOn)
+        }
+        agent.resolveApproval(request.callId, decision)
+    }
+
+    /** Стоп: отмена текущего хода и отложенного запроса — как в Chat. */
+    fun cancelTurn() {
+        pendingRetry = null
+        pendingApproval = null
+        val hadJob = streamJob != null
+        streamJob?.cancel()
+        SpeechHandle.get()?.stop()
+        if (!hadJob && isStreaming) {
+            // Отмена в ожидании сети: висящего стрима нет, состояние гасим сами.
+            isStreaming = false
+        }
+    }
+
     /** Запрос, отложенный до появления сети (пре-чек или ранний обрыв без сети). */
     private var pendingRetry by mutableStateOf<ShareAskRequest?>(null)
+
+    /** Флаг звука режима последнего хода: звук решений диалога вне стрима. */
+    private var lastSoundsOn = true
 
     /** Восстановление из saved state после смерти процесса уже выполнено. */
     private var saveRestored = false
@@ -224,15 +276,16 @@ class ShareSessionViewModel internal constructor(private val chatStore: ShareCha
                 AgentFactory.get().modeConfig(AssistMode.SHARE).effectiveAutoSaveChats()
             }.getOrDefault(true)
         }
-        // Сеть вернулась — автоматически повторяем отложенный ход.
+        // Сеть вернулась — автоматически повторяем отложенный ход (как в Chat:
+        // wasOnline = false при старте — повтор сработает и по текущему состоянию).
         scope.launch {
-            var wasOnline = NetworkHandle.get()?.isOnline?.value ?: true
+            var wasOnline = false
             NetworkHandle.get()?.isOnline?.collect { online ->
                 if (online && !wasOnline) {
                     val retry = pendingRetry
-                    if (retry != null && !isStreaming) {
+                    if (retry != null && streamJob == null && isStreaming) {
                         _toasts.tryEmit(ShareToast.Res(ru.outsideproarts.oassist.core.ui.R.string.net_repeating))
-                        ask(retry)
+                        retryAsk(retry)
                     }
                 }
                 wasOnline = online
@@ -243,6 +296,9 @@ class ShareSessionViewModel internal constructor(private val chatStore: ShareCha
     override fun onCleared() {
         isClosing = true
         pendingRetry = null
+        pendingApproval = null
+        // «Разрешено на сессию» SHARE не переживает закрытие — как в Chat.
+        runCatching { AgentFactory.get().clearSessionApprovals(AssistMode.SHARE) }
         payloadJob?.cancel()
         changeJob?.cancel()
         titleJob?.cancel()
@@ -316,6 +372,23 @@ class ShareSessionViewModel internal constructor(private val chatStore: ShareCha
         if (!isClosing && !isChangingConversation) saveTurns()
     }
 
+    /** Сбойное стирание, ожидающее повтора («Повторить»). */
+    private var failedRemoval: Pair<String, Boolean>? = null
+
+    /**
+     * «Повторить»: повтор сбойного стирания и сбойных дозаписей. Кнопка не
+     * должна маскировать потерю незаписанного хода — дозаписи повторяются
+     * всегда ([saveChat]), даже когда стирался другой ход.
+     */
+    fun retryWrites() {
+        val removal = failedRemoval
+        if (removal != null && !isClosing && !isChangingConversation) {
+            failedRemoval = null
+            removeTurns(removal.first, removal.second)
+        }
+        saveChat()
+    }
+
     /**
      * Удалить текущий диалог: удалённый разговор не должен остаться открытым —
      * состояние чистится до «Нового чата», панель полученного остаётся.
@@ -330,9 +403,24 @@ class ShareSessionViewModel internal constructor(private val chatStore: ShareCha
         }
     }
 
-    /** Ход ждёт сети: повтор запустится автоматически из наблюдателя сети. */
+    /**
+     * Ход ждёт сети: запрос сразу виден в ленте ожидания (как в Chat), звук
+     * отправки играет в момент отправки; повтор запустится автоматически из
+     * наблюдателя сети.
+     */
     fun deferAsk(request: ShareAskRequest) {
-        if (canSend) pendingRetry = request
+        if (!canSend) return
+        activeUserMsg = request.userMsg
+        isStreaming = true
+        pendingRetry = request
+        _toasts.tryEmit(ShareToast.Res(ru.outsideproarts.oassist.core.ui.R.string.net_offline_retry, long = true))
+        scope.launch {
+            val soundsOn = runCatching {
+                AgentFactory.get().modeConfig(AssistMode.SHARE).effectiveSoundEnabled()
+            }.getOrDefault(true)
+            lastSoundsOn = soundsOn
+            SoundHandle.get()?.playIfEnabled(AgentSound.MSG_SEND, soundsOn)
+        }
     }
 
     /**
@@ -364,9 +452,24 @@ class ShareSessionViewModel internal constructor(private val chatStore: ShareCha
         }
     }
 
-    fun ask(request: ShareAskRequest) {
+    fun ask(request: ShareAskRequest, announceSound: Boolean = true) {
         val query = request.query
-        if (query.isBlank() || !canSend) return
+        // Голосовой ход без текста допустим (как в Chat).
+        if ((query.isBlank() && request.audio == null) || !canSend) return
+        startAsk(request, announceSound)
+    }
+
+    /**
+     * Повтор отложенного хода: минует guard'ы [canSend] — ожидание уже «идёт»
+     * (как прямой запуск хода из Chat после фронта сети).
+     */
+    private fun retryAsk(request: ShareAskRequest) {
+        if (isClosing || isChangingConversation) return
+        startAsk(request, announceSound = false)
+    }
+
+    private fun startAsk(request: ShareAskRequest, announceSound: Boolean) {
+        val query = request.query
         val sentImages = images.toList()
         pendingRetry = null
         isStreaming = true
@@ -377,12 +480,15 @@ class ShareSessionViewModel internal constructor(private val chatStore: ShareCha
         activeUserMsg = userMsg
         // Свой вопрос всегда показываем снизу: ленту ждём в конце.
         scrollRequester.scrollToEnd()
-        val history = turns.flatMap { it.turn.modelMessages() }
+        val history = turns.flatMap { it.modelMessages() }
         val timeline = WorkTimelineBuilder()
         workEvents = emptyList()
         response = ""
         turnUsage = null
         var turnTranscript: List<ChatMessage> = emptyList()
+        // Закрепления текущего хода применяются к ходу при записи; закрепления
+        // прошлых ходов применяются к памяти и БД сразу (см. applyPinChange).
+        val turnPins = mutableListOf<PinChange>()
         providerNotice = null
         val diagnosticId = Diagnostics.newOperationId()
         diagnosticOperations.add(diagnosticId)
@@ -399,17 +505,19 @@ class ShareSessionViewModel internal constructor(private val chatStore: ShareCha
                 turn = StoredTurn(
                     diagnosticOperationId = diagnosticId,
                     userText = userMsg,
+                    userAudio = request.audio,
                     modelUserInput = modelInput,
                     userImages = sentImages,
                     work = timeline.work,
                     answer = timeline.answerText,
                     usage = timeline.usage,
                     turn = turnTranscript,
-                ),
+                ).withPinChanges(turnPins),
             )
             turns.add(stored)
             activeUserMsg = null
-            persistTurn(stored, nameSeed = query)
+            // Голосовой ход без текста называется по ответу — как в Chat.
+            persistTurn(stored, nameSeed = query.ifBlank { userMsg }.ifBlank { stored.turn.answer })
         }
         streamJob = scope.launchDiagnostic("SHARE", diagnosticId) launch@{
             try {
@@ -422,8 +530,10 @@ class ShareSessionViewModel internal constructor(private val chatStore: ShareCha
                 val soundsOn = runCatching {
                     AgentFactory.get().modeConfig(AssistMode.SHARE).effectiveSoundEnabled()
                 }.getOrDefault(true)
+                lastSoundsOn = soundsOn
                 val sounds = SoundHandle.get()
-                sounds?.playIfEnabled(AgentSound.MSG_SEND, soundsOn)
+                // Звук отправки — в момент отправки: авто-повтор хода не звучит (как в Chat).
+                if (announceSound) sounds?.playIfEnabled(AgentSound.MSG_SEND, soundsOn)
                 val speech = SpeechHandle.get()
                 speech?.applyTts(tts)
                 speech?.setNarrativeEnabled(tts.narrative)
@@ -450,12 +560,21 @@ class ShareSessionViewModel internal constructor(private val chatStore: ShareCha
                         chunks = agent.stream(
                             modelId = modelId,
                             systemPrompt = prompt.instructions,
-                            promptContext = prompt.context,
+                            // Общий контент — данными контекста, один раз на запрос:
+                            // дубль из {shared_content} шаблона дедуплицируется, а без
+                            // плейсхолдера доставка всё равно гарантирована.
+                            promptContext = (
+                                prompt.context + contentDesc.ifBlank { null }
+                                    ?.let { listOf(ContextData(ContextSource.SHARED_CONTENT, it)) }
+                                    .orEmpty()
+                                ).distinct(),
                             modelUserInput = modelInput,
                             history = history,
                             userMessage = userMsg,
+                            audio = request.audio,
                             images = sentImages.ifEmpty { null },
                             onTurnMessages = { turn -> turnTranscript = turn },
+                            onPinChange = { change -> applyPinChange(change, turnPins) },
                         ),
                         agent = agent,
                     )
@@ -501,10 +620,11 @@ class ShareSessionViewModel internal constructor(private val chatStore: ShareCha
                                 timeline.onChunk(chunk)
                                 workEvents = timeline.work
                             }
-                            // В Share нет диалога подтверждений: опасные действия отклоняем сразу.
+                            // Подтверждения — как в Chat: запрос пользователю,
+                            // а не авто-отказ (см. pendingApproval).
                             is ChatChunk.ApprovalNeeded -> {
-                                sounds?.playIfEnabled(AgentSound.PERMISSION_DENIED, soundsOn)
-                                session.agent.resolveApproval(chunk.request.callId, ApprovalDecision.DENY)
+                                sounds?.playIfEnabled(AgentSound.PERMISSION_REQUEST, soundsOn)
+                                pendingApproval = chunk.request to session.agent
                             }
                             is ChatChunk.Finish -> {
                                 timeline.onChunk(chunk)
@@ -536,8 +656,8 @@ class ShareSessionViewModel internal constructor(private val chatStore: ShareCha
                         timeline.isEmpty
                     ) {
                         // Упали до первого чанка без сети: ждём фронт online.
+                        // Вопрос остаётся видимым в ленте ожидания — как в Chat.
                         pendingRetry = request
-                        activeUserMsg = null
                         _toasts.tryEmit(
                             ShareToast.Res(ru.outsideproarts.oassist.core.ui.R.string.net_offline_retry, long = true),
                         )
@@ -552,7 +672,12 @@ class ShareSessionViewModel internal constructor(private val chatStore: ShareCha
                 activeUserMsg = null
                 _toasts.tryEmit(ShareToast.Error(ProviderError.from(error)))
             } finally {
-                isStreaming = false
+                // Ожидание сети после раннего обрыва держит состояние стрима
+                // (как восстановление «ждущего» пузыря в Chat); job сбрасывается,
+                // чтобы «Стоп» и авто-повтор видели завершённый ход.
+                streamJob = null
+                isStreaming = pendingRetry != null
+                pendingApproval = null
                 recordTurn()
             }
         }
@@ -566,12 +691,40 @@ class ShareSessionViewModel internal constructor(private val chatStore: ShareCha
     }
 
     /**
+     * Закрепление из `message_pin`/`message_unpin`: сообщения текущего хода
+     * применяются к ходу при записи ([StoredTurn.withPinChanges]), прошлых ходов —
+     * сразу к ленте (бюджеты следующего хода) и к БД в общей очереди записи.
+     */
+    private suspend fun applyPinChange(change: PinChange, currentPins: MutableList<PinChange>) {
+        val ref = parseMessageId(change.messageId) ?: return
+        if (ref.turnId == CURRENT_TURN_ID) {
+            currentPins.add(change)
+            return
+        }
+        val index = turns.indexOfFirst { it.id == ref.turnId }
+        if (index >= 0) {
+            turns[index] = turns[index].copy(
+                turn = turns[index].turn.withMessagePin(ref.index, change.pinned, change.note),
+            )
+        }
+        val id = chatId ?: return
+        enqueueWrite(reportFailure = false) {
+            chatStore?.setPin(id, ref.turnId, ref.index, change.pinned, change.note)
+        }
+    }
+
+    /**
      * Единая цепочка записи: дозаписи ходов и стирания идут строго по очереди —
      * стирание выполняется после незаписанных ходов и до новых, поэтому счётчик
-     * сохранённых ходов и БД не расходятся с лентой. [reportFailure] — для
-     * дозаписей (см. [saveFailed] и «Повторить»); стирания сообщают ошибку тостом.
+     * сохранённых ходов и БД не расходятся с лентой. [reportFailure] переводит
+     * запись в состояние «Повторить» (см. [saveFailed]); [onFailure] — для
+     * повторяемых операций (сбойное стирание, см. [retryWrites]).
      */
-    private fun enqueueWrite(reportFailure: Boolean = true, op: suspend () -> Unit) {
+    private fun enqueueWrite(
+        reportFailure: Boolean = true,
+        onFailure: (() -> Unit)? = null,
+        op: suspend () -> Unit,
+    ) {
         writesInFlight++
         isSaving = true
         val previous = lastWrite
@@ -583,6 +736,7 @@ class ShareSessionViewModel internal constructor(private val chatStore: ShareCha
                 throw cancel
             } catch (error: Exception) {
                 if (reportFailure) saveFailed = true
+                onFailure?.invoke()
                 _toasts.tryEmit(ShareToast.Error(ProviderError.from(error)))
             } finally {
                 writesInFlight--
@@ -626,7 +780,7 @@ class ShareSessionViewModel internal constructor(private val chatStore: ShareCha
 
     private fun removeTurns(turnId: String, afterOnly: Boolean) {
         if (isClosing || isChangingConversation) return
-        enqueueWrite(reportFailure = false) {
+        enqueueWrite(reportFailure = true, onFailure = { failedRemoval = turnId to afterOnly }) {
             val index = turns.indexOfFirst { it.id == turnId }
             if (index < 0) return@enqueueWrite
             val from = if (afterOnly) index + 1 else index
@@ -656,7 +810,13 @@ class ShareSessionViewModel internal constructor(private val chatStore: ShareCha
             if (saveFailed) return@launch
             if (titleLocked || turns.firstOrNull() !== expectedFirstTurn) return@launch
             val generated = runCatching {
-                ChatTitler.generateTitle(AssistMode.SHARE, nameSeed, AgentFactory.get())
+                ChatTitler.generateTitle(
+                    AssistMode.SHARE,
+                    nameSeed,
+                    AgentFactory.get(),
+                    // Аудио-ход без текста называется по ответу — как в Chat.
+                    firstAnswer = expectedFirstTurn.turn.answer,
+                )
             }.getOrNull() ?: return@launch
             if (!titleLocked && turns.firstOrNull() === expectedFirstTurn) {
                 chatTitle = generated

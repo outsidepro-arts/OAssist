@@ -6,6 +6,7 @@ import org.junit.Test
 import ru.outsideproarts.oassist.core.model.AudioPart
 import ru.outsideproarts.oassist.core.model.ChatMessage
 import ru.outsideproarts.oassist.core.model.ChatRole
+import ru.outsideproarts.oassist.core.model.MessagePin
 
 class HistoryBudgetTest {
 
@@ -48,5 +49,17 @@ class HistoryBudgetTest {
             ChatMessage(ChatRole.ASSISTANT, "б"),
         )
         assertEquals(messages, trimHistoryAudio(messages))
+    }
+
+    @Test
+    fun pinnedVoice_keepsAudioEvenWhenNotLast() {
+        val pinnedVoice = voice("закреплённое").copy(pin = MessagePin("референс"))
+        val trimmed = trimHistoryAudio(
+            listOf(pinnedVoice, ChatMessage(ChatRole.ASSISTANT, "ок"), voice("финал")),
+        )
+
+        assertEquals("QUJDRA==", trimmed[0].audio?.wavBase64)
+        assertEquals(MessagePin("референс"), trimmed[0].pin)
+        assertEquals("QUJDRA==", trimmed[2].audio?.wavBase64)
     }
 }

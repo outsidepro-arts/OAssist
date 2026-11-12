@@ -7,6 +7,7 @@ import org.junit.Test
 import ru.outsideproarts.oassist.core.model.ChatMessage
 import ru.outsideproarts.oassist.core.model.ChatRole
 import ru.outsideproarts.oassist.core.model.ImagePart
+import ru.outsideproarts.oassist.core.model.MessagePin
 import ru.outsideproarts.oassist.core.model.ToolCallRef
 
 class AssistSessionTest {
@@ -163,5 +164,56 @@ class AssistSessionTest {
             listOf("первый вопрос", "первый ответ", "третий вопрос", "третий ответ"),
             history.map { it.content },
         )
+    }
+
+    @Test
+    fun appendTurn_assignsMessageAddressesByPosition() {
+        AssistSessionStore.clear()
+        val session = AssistSessionStore.getOrCreate()
+        session.appendTurn(
+            user = ChatMessage(ChatRole.USER, "вопрос"),
+            turn = listOf(ChatMessage(ChatRole.ASSISTANT, "ответ")),
+            turnId = "turn-1",
+        )
+        session.appendTurn(
+            user = ChatMessage(ChatRole.USER, "второй"),
+            turn = listOf(ChatMessage(ChatRole.ASSISTANT, "готово")),
+            turnId = "turn-2",
+        )
+
+        assertEquals(listOf("turn-1:0", "turn-1:1", "turn-2:0", "turn-2:1"), session.history.map { it.id })
+    }
+
+    @Test
+    fun pinMessage_marksOnlyAddressedMessage() {
+        AssistSessionStore.clear()
+        val session = AssistSessionStore.getOrCreate()
+        session.appendTurn(
+            user = ChatMessage(ChatRole.USER, "вопрос"),
+            turn = listOf(ChatMessage(ChatRole.ASSISTANT, "ответ")),
+            turnId = "turn-1",
+        )
+
+        session.pinMessage("turn-1:0", MessagePin("референс"))
+        session.pinMessage("неизвестный:0", MessagePin())
+
+        assertEquals(MessagePin("референс"), session.history[0].pin)
+        assertNull(session.history[1].pin)
+    }
+
+    @Test
+    fun pinMessage_clearsPinOnUnpin() {
+        AssistSessionStore.clear()
+        val session = AssistSessionStore.getOrCreate()
+        session.appendTurn(
+            user = ChatMessage(ChatRole.USER, "вопрос"),
+            turn = listOf(ChatMessage(ChatRole.ASSISTANT, "ответ")),
+            turnId = "turn-1",
+        )
+
+        session.pinMessage("turn-1:1", MessagePin("было"))
+        session.pinMessage("turn-1:1", null)
+
+        assertNull(session.history[1].pin)
     }
 }

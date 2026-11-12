@@ -30,7 +30,7 @@ import org.junit.Assert.assertTrue
 import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
-import ru.outsideproarts.oassist.feature.chat.ChatInputButton
+import ru.outsideproarts.oassist.core.ui.components.ChatInputButton
 
 @OptIn(ExperimentalTestApi::class)
 @RunWith(AndroidJUnit4::class)

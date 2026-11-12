@@ -493,10 +493,10 @@ class ChatPersistenceScreenTest {
                     ChatScreen(
                         viewModel = vm,
                         soundEnabled = false,
-                        sendMessage = { _, text, history, _, callback ->
+                        sendMessage = { _, text, history, _, callback, pinCallback ->
                             requests.add(history)
                             val agent = AgentLoop(client, diagnostics = ru.outsideproarts.oassist.core.model.diagnostics.Diagnostics)
-                            AgentSession(agent.stream("fixture", null, history, text, onTurnMessages = callback), agent)
+                            AgentSession(agent.stream("fixture", null, history, text, onTurnMessages = callback, onPinChange = pinCallback), agent)
                         },
                     )
                     }

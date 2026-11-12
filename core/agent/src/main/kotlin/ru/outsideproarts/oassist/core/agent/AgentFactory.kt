@@ -23,6 +23,12 @@ interface AgentFactory {
     /** Учёт вспомогательных запросов без событий нарратива агента. */
     suspend fun recordModelUsage(usage: ProviderUsage) {}
 
+    /**
+     * Модель режима из локального каталога (флаги возможностей, например
+     * AUDIO_IN); null — модель/каталог неизвестны.
+     */
+    suspend fun modelInfo(mode: AssistMode): ru.outsideproarts.oassist.core.model.ModelInfo? = null
+
     /** Suspend: читает снапшот настроек инструментов из DataStore. */
     suspend fun agentFor(profile: ProviderProfile, mode: AssistMode): AgentLoop
 
