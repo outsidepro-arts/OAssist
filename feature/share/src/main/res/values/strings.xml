@@ -12,6 +12,7 @@
     <string name="share_ask_label">Вопрос агенту</string>
     <string name="share_send">Отправить</string>
     <string name="share_stop">Остановить</string>
+    <string name="share_regenerate_skipped">Повтор не запущен: идёт другая генерация</string>
     <string name="share_stop_speech">Остановить речь</string>
     <string name="share_retry_first">Сначала повторите запись изменений</string>
     <string name="share_speak_answer">Озвучить ответ</string>

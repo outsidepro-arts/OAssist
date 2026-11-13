@@ -378,6 +378,166 @@ class ShareSessionViewModelTest {
         assertEquals(listOf("one"), storage.rows.getValue("A").map { it.turn.userText })
     }
 
+    @Test fun regenerateRemovesTurnAndFollowingAndRunsTheAskAgain() = runTest(dispatcher) {
+        val vm = vm()
+        storage.rows["A"] = listOf("one", "two", "three")
+            .map { StoredTurnEntry("id-$it", StoredTurn(userText = it)) }
+            .toMutableList()
+        ready(vm, "A")
+        val asksBefore = requests.size
+        reply = { flowOf(ChatChunk.Content("ответ два"), ChatChunk.Finish("stop")) }
+
+        vm.regenerateTurn("id-two", request("two"))
+        runCurrent()
+
+        // Ход и все последующие стёрты; запрос ушёл заново с вводом выбранного
+        // хода и записан новым ходом вместо удалённого.
+        assertEquals(asksBefore + 1, requests.size)
+        assertTrue(requests.last().last().content.contains("\"request\":\"two\""))
+        assertFalse(requests.last().any { it.content.contains("three") })
+        assertEquals(listOf("one", "two"), storage.rows.getValue("A").map { it.turn.userText })
+        assertEquals("ответ два", storage.rows.getValue("A").last().turn.answer)
+    }
+
+    @Test fun regenerateActiveResendsTheAskWithoutRecordedTurn() = runTest(dispatcher) {
+        val vm = vm()
+        ready(vm, "A")
+        reply = { flow { awaitCancellation() } }
+        vm.ask(request("первый"))
+        runCurrent()
+        vm.cancelTurn()
+        runCurrent()
+        // Вопрос осиротел: ход не записан, реплика осталась в ленте.
+        assertEquals("первый", vm.activeUserMsg)
+        assertTrue(vm.turns.isEmpty())
+
+        reply = { flowOf(ChatChunk.Content("ответ"), ChatChunk.Finish("stop")) }
+        vm.regenerateActive()
+        runCurrent()
+
+        assertEquals(2, requests.size)
+        assertTrue(requests.last().last().content.contains("\"request\":\"первый\""))
+        assertEquals("ответ", vm.turns.single().turn.answer)
+        assertNull(vm.activeUserMsg)
+    }
+
+    @Test fun failedRegenerateRemovalCompletesBothStepsAfterRetryWrites() = runTest(dispatcher) {
+        val vm = vm()
+        storage.rows["A"] = listOf("one", "two")
+            .map { StoredTurnEntry("id-$it", StoredTurn(userText = it)) }
+            .toMutableList()
+        ready(vm, "A")
+        val asksBefore = requests.size
+        storage.beforeDeleteTurn = { error("disk failure") }
+
+        vm.regenerateTurn("id-two", request("two"))
+        runCurrent()
+
+        // Сбойное стирание: ничего не удалено и не перезапущено —
+        // состояние «Повторить».
+        assertEquals(asksBefore, requests.size)
+        assertTrue(vm.saveFailed)
+        assertEquals(listOf("one", "two"), vm.turns.map { it.turn.userText })
+
+        // «Повторить запись» завершает подтверждённое действие целиком:
+        // стирание и перезапуск генерации.
+        storage.beforeDeleteTurn = {}
+        reply = { flowOf(ChatChunk.Content("ответ два"), ChatChunk.Finish("stop")) }
+        vm.retryWrites()
+        runCurrent()
+
+        assertEquals(asksBefore + 1, requests.size)
+        assertEquals(listOf("one", "two"), vm.turns.map { it.turn.userText })
+        assertEquals("ответ два", vm.turns.last().turn.answer)
+    }
+
+    @Test fun stopDuringRegenerateRemovesTurnButDoesNotRestartGeneration() = runTest(dispatcher) {
+        val vm = vm()
+        storage.rows["A"] = listOf("one", "two")
+            .map { StoredTurnEntry("id-$it", StoredTurn(userText = it)) }
+            .toMutableList()
+        ready(vm, "A")
+        val asksBefore = requests.size
+        val deleteGate = CompletableDeferred<Unit>()
+        storage.beforeDeleteTurn = { deleteGate.await() }
+
+        vm.regenerateTurn("id-two", request("two"))
+        runCurrent()
+        vm.cancelTurn()
+        deleteGate.complete(Unit)
+        runCurrent()
+
+        // Стоп отменяет генерацию; подтверждённое стирание доводится до конца.
+        assertEquals(asksBefore, requests.size)
+        assertFalse(vm.isStreaming)
+        assertTrue(vm.canSend)
+        assertEquals(listOf("one"), vm.turns.map { it.turn.userText })
+        assertEquals(listOf("one"), storage.rows.getValue("A").map { it.turn.userText })
+    }
+
+    @Test fun retryWritesWhileStreamingSkipsPendingRegenerateWithNotice() = runTest(dispatcher) {
+        val vm = vm()
+        storage.rows["A"] = listOf("one", "two")
+            .map { StoredTurnEntry("id-$it", StoredTurn(userText = it)) }
+            .toMutableList()
+        ready(vm, "A")
+        storage.beforeDeleteTurn = { error("disk failure") }
+        vm.regenerateTurn("id-two", request("two"))
+        runCurrent()
+        storage.beforeDeleteTurn = {}
+        // Пока идёт другая генерация, «Повторить запись» доводит стирание,
+        // но перезапуск пропускается с уведомлением и не затирает чужой стрим.
+        reply = { flow { awaitCancellation() } }
+        vm.ask(request("новый"))
+        runCurrent()
+        val toasts = mutableListOf<ShareToast>()
+        val collectJob = launch { vm.toasts.collect { toasts.add(it) } }
+        runCurrent()
+
+        vm.retryWrites()
+        runCurrent()
+        collectJob.cancel()
+
+        assertEquals(1, requests.size)
+        assertTrue(vm.isStreaming)
+        assertEquals(listOf("one"), vm.turns.map { it.turn.userText })
+        assertTrue(
+            toasts.any {
+                it is ShareToast.Res &&
+                    it.resId == ru.outsideproarts.oassist.feature.share.R.string.share_regenerate_skipped
+            },
+        )
+    }
+
+    @Test fun retryWritesAfterRegenerateFailureKeepsTurnsRecordedLater() = runTest(dispatcher) {
+        val vm = vm()
+        storage.rows["A"] = listOf("one", "two")
+            .map { StoredTurnEntry("id-$it", StoredTurn(userText = it)) }
+            .toMutableList()
+        ready(vm, "A")
+        storage.beforeDeleteTurn = { error("disk failure") }
+        vm.regenerateTurn("id-two", request("two"))
+        runCurrent()
+        storage.beforeDeleteTurn = {}
+        // Пока стирание сбойное, записывается более новый ход: подтверждённое
+        // стирание не должно его коснуться.
+        reply = { flowOf(ChatChunk.Content("ответ три"), ChatChunk.Finish("stop")) }
+        vm.ask(request("three"))
+        runCurrent()
+        assertEquals(listOf("one", "two", "three"), vm.turns.map { it.turn.userText })
+        // Успешная дозапись не прячет «Повторить запись»: подтверждённое
+        // стирание ещё не исполнено.
+        assertTrue(vm.saveFailed)
+
+        reply = { flowOf(ChatChunk.Content("ответ два"), ChatChunk.Finish("stop")) }
+        vm.retryWrites()
+        runCurrent()
+
+        // Повтор стёр только подтверждённый ход и перезапустил его генерацию.
+        assertEquals(listOf("one", "three", "two"), vm.turns.map { it.turn.userText })
+        assertEquals(listOf("one", "three", "two"), storage.rows.getValue("A").map { it.turn.userText })
+    }
+
     @Test fun deferAskShowsWaitingStateLikeChat() = runTest(dispatcher) {
         val vm = vm()
         ready(vm, "A")

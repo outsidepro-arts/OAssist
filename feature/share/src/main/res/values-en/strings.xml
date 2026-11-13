@@ -12,6 +12,7 @@
     <string name="share_ask_label">Ask the agent</string>
     <string name="share_send">Send</string>
     <string name="share_stop">Stop</string>
+    <string name="share_regenerate_skipped">Regenerate skipped: another generation is running</string>
     <string name="share_stop_speech">Stop speech</string>
     <string name="share_retry_first">Retry saving changes first</string>
     <string name="share_speak_answer">Speak answer</string>

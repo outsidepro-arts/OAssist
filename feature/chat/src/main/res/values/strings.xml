@@ -5,6 +5,7 @@
     <string name="chat_input_hint">Сообщение агенту</string>
     <string name="chat_send">Отправить</string>
     <string name="chat_stop">Остановить</string>
+    <string name="chat_regenerate_skipped">Повтор не запущен: идёт другая генерация</string>
     <string name="chat_stop_speech">Остановить речь</string>
     <string name="chat_speaking">Озвучивается ответ</string>
     <string name="chat_speak_answer">Озвучить ответ</string>

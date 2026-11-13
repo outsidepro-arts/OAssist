@@ -25,7 +25,7 @@ sealed interface AssistVoiceEffect {
  *
  * play/pause — переключатель голосового ввода: умная остановка (partial уходит агенту,
  * если непустой) с подавлением авто-диалога до следующего play/pause; в Busy — barge-in.
- * assist-жест — полный сброс в ON.
+ * assist-жест — полный сброс в ON. Стоп действий — отмена хода без завершения сессии.
  */
 class AssistVoiceFlow {
 
@@ -139,6 +139,17 @@ class AssistVoiceFlow {
             }
             is AssistVoiceState.Ended -> emptyList()
         }
+    }
+
+    /**
+     * Остановка действий агента (кнопка «Стоп» на месте отправки): ход отменяется,
+     * сессия и голосовой цикл не завершаются — новые задачи можно отправлять сразу.
+     */
+    fun onStopActions(): List<AssistVoiceEffect> {
+        if (_state.value !is AssistVoiceState.Busy) return emptyList()
+        lastPartial = ""
+        _state.value = AssistVoiceState.Idle
+        return listOf(AssistVoiceEffect.CancelTurn)
     }
 
     /** Старт STT не удался (нет разрешения/распознавателя) — откат в Idle. */

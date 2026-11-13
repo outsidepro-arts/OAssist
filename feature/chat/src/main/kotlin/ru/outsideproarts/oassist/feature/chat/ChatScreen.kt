@@ -52,6 +52,7 @@ import androidx.compose.ui.text.input.TextFieldValue
 import androidx.lifecycle.Lifecycle
 import androidx.compose.ui.semantics.semantics
 import android.widget.Toast
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
 import ru.outsideproarts.oassist.core.a11y.oassistHeading
 import ru.outsideproarts.oassist.core.a11y.oassistTouchTarget
@@ -98,7 +99,7 @@ import ru.outsideproarts.oassist.core.ui.components.rememberVoiceInputController
  * [work] — полотно «Ход работы» (мыслевые блоки и тулы в хронологии),
  * [answer] — основной ответ. У пользователя [answer] — текст, [work] пусто.
  * [turnId] — id хода ([ru.outsideproarts.oassist.core.model.StoredTurnEntry]):
- * ручка для действий «удалить/откатиться»; null у реплики без записанного хода.
+ * ручка для действий «удалить/откатиться/повторить»; null у реплики без записанного хода.
  */
 data class ChatItem(
     val role: ChatRole,
@@ -114,6 +115,13 @@ data class ChatItem(
 
 /** Ключ памяти позиций прокрутки для несохранённого черновика основного окна. */
 private const val ChatDraftScrollKey = "draft:chat"
+
+/** Область стирания ходов: один ход, всё после хода, ход вместе со всеми последующими. */
+private enum class TurnRemoval {
+    ONE,
+    AFTER,
+    FROM,
+}
 
 /** Проекция пузыря ленты в историю модели: только основной ответ ассистента —
  * мысль и тулы уже связаны tool-протоколом и не должны дублироваться текстом. */
@@ -213,6 +221,7 @@ fun ChatScreen(
     val emptyBody = stringResource(R.string.chat_empty_body)
     val sendLabel = stringResource(R.string.chat_send)
     val stopLabel = stringResource(R.string.chat_stop)
+    val regenerateSkippedText = stringResource(R.string.chat_regenerate_skipped)
     val stopSpeechLabel = stringResource(R.string.chat_stop_speech)
     val speakingLabel = stringResource(R.string.chat_speaking)
     val inputLabel = stringResource(R.string.chat_input_hint)
@@ -369,14 +378,10 @@ fun ChatScreen(
         // Закрепления текущего хода применяются к ходу при записи; закрепления
         // прошлых ходов применяются сразу (см. applyPinChange).
         val turnPins = mutableListOf<ru.outsideproarts.oassist.core.model.PinChange>()
-        val assistantIndex: Int
         val waiting = messages.lastOrNull()
-        if (waiting != null && waiting.role == ChatRole.ASSISTANT && waiting.isStreaming &&
+        val reusesWaiting = waiting != null && waiting.role == ChatRole.ASSISTANT && waiting.isStreaming &&
             waiting.work.isEmpty() && waiting.answer.isEmpty()
-        ) {
-            assistantIndex = messages.size - 1
-        } else {
-            assistantIndex = messages.size
+        if (!reusesWaiting) {
             messages.add(ChatItem(ChatRole.ASSISTANT, isStreaming = true, turnId = turnId))
         }
         val diagnosticId = ru.outsideproarts.oassist.core.model.diagnostics.Diagnostics.newOperationId()
@@ -399,7 +404,12 @@ fun ChatScreen(
                 speakToolCalls = true,
             )
             fun publish(streaming: Boolean) {
-                messages[assistantIndex] = ChatItem(
+                // Пузырь адресуется по turnId, а не позицией: стирание других
+                // ходов (например, повтор сбойного задания записи) сдвигает ленту,
+                // и устаревший индекс писал бы не в тот элемент или падал.
+                val index = messages.indexOfLast { it.turnId == turnId && it.role == ChatRole.ASSISTANT }
+                if (index < 0) return
+                messages[index] = ChatItem(
                     role = ChatRole.ASSISTANT,
                     work = timeline.work,
                     answer = timeline.answerText,
@@ -497,7 +507,7 @@ fun ChatScreen(
                 pendingApproval = null
                 streamJob = null
                 if (timeline.isEmpty && turnTranscript.isEmpty() && (error != null || cancelled)) {
-                    messages.removeAt(assistantIndex)
+                    messages.removeAll { it.turnId == turnId && it.role == ChatRole.ASSISTANT }
                 } else {
                     publish(false)
                     // AgentLoop delivers the terminal transcript even when collection fails or is cancelled.
@@ -773,35 +783,52 @@ fun ChatScreen(
      * в очередь записи: незаписанные ходы успевают доехать до БД и только потом
      * стираются, а ожидание сохранения при открытии чата ждёт и стирание.
      * Несохранённый черновик живёт только в памяти.
+     * Диапазон стирания фиксируется в момент действия (по сообщениям ленты —
+     * осиротевшая реплика без хода тоже входит): повтор сбойного задания записи
+     * не трогает ходы, появившиеся позже, включая идущий стрим.
+     * Возвращает задание очереди записи (по нему можно дождаться стирания)
+     * или null, если стирание коснулось только памяти. [onFinished] зовётся после
+     * успешного стирания — в том числе при повторе сбойного задания записи.
      */
-    fun removeTurns(turnId: String, afterOnly: Boolean) {
+    fun removeTurns(turnId: String, removal: TurnRemoval, onFinished: (() -> Unit)? = null): Job? {
+        val doomedIds: Set<String> = when (removal) {
+            TurnRemoval.ONE -> setOf(turnId)
+            TurnRemoval.AFTER -> run {
+                val lastItem = messages.indexOfLast { it.turnId == turnId }
+                if (lastItem >= 0) messages.drop(lastItem + 1).mapNotNull { it.turnId }.toSet() else emptySet()
+            }
+            TurnRemoval.FROM -> run {
+                val firstItem = messages.indexOfFirst { it.turnId == turnId }
+                if (firstItem >= 0) messages.drop(firstItem).mapNotNull { it.turnId }.toSet() else setOf(turnId)
+            }
+        }
         val trim: () -> Unit = {
-            val index = turnStore.indexOfFirst { it.id == turnId }
-            if (index >= 0) {
-                if (afterOnly) {
-                    while (turnStore.size > index + 1) turnStore.removeAt(turnStore.size - 1)
-                } else {
-                    turnStore.removeAt(index)
-                }
-            }
-            val lastItem = messages.indexOfLast { it.turnId == turnId }
-            if (afterOnly) {
-                if (lastItem >= 0) while (messages.size > lastItem + 1) messages.removeAt(messages.size - 1)
-            } else {
-                messages.removeAll { it.turnId == turnId }
-            }
+            turnStore.removeAll { it.id in doomedIds }
+            messages.removeAll { it.turnId != null && it.turnId in doomedIds }
         }
         val repo = ChatHandle.get()
         val knownId = chatId
         val saver = if (knownId != null) viewModel.turnSavers.forChat(knownId) else viewModel.turnSavers.current
         if (repo == null || (knownId == null && !saver.hasSaveRequest)) {
             trim()
-            return
+            onFinished?.invoke()
+            return null
         }
         knownId?.let { viewModel.turnSavers.register(it, saver) }
-        saver.save(currentId = knownId, create = { knownId ?: error("Removal of an unpersisted chat") }) { id ->
-            if (afterOnly) repo.deleteTurnsAfter(id, turnId) else repo.deleteTurn(id, turnId)
+        return saver.save(currentId = knownId, create = { knownId ?: error("Removal of an unpersisted chat") }) { id ->
+            val anchorIndex = turnStore.indexOfFirst { it.id == turnId }
+            val followingNow = if (anchorIndex >= 0) turnStore.drop(anchorIndex + 1) else emptyList()
+            if (removal != TurnRemoval.ONE && anchorIndex >= 0 && followingNow.all { it.id in doomedIds }) {
+                // Хвост после якоря не изменился — стирание одной операцией якоря.
+                repo.deleteTurnsAfter(id, turnId)
+                if (removal != TurnRemoval.AFTER) repo.deleteTurn(id, turnId)
+            } else {
+                // Появились более новые ходы (или хода нет в истории): стираем
+                // только подтверждённый набор — как в момент действия.
+                doomedIds.forEach { repo.deleteTurn(id, it) }
+            }
             trim()
+            onFinished?.invoke()
         }
     }
 
@@ -809,13 +836,86 @@ fun ChatScreen(
      * Удалить сообщение (ход целиком, с полотном «Ход работы»). Реплика без
      * записанного хода (отменённый пустой ход) удаляется только из ленты.
      */
-    fun deleteTurnMessage(turnId: String) = removeTurns(turnId, afterOnly = false)
+    fun deleteTurnMessage(turnId: String) {
+        removeTurns(turnId, TurnRemoval.ONE)
+    }
 
     /**
      * Откатиться к сообщению: выбранный ход остаётся последним, все следующие
      * стираются безвозвратно. История для модели продолжается с выбранного хода.
      */
-    fun rollbackToTurn(turnId: String) = removeTurns(turnId, afterOnly = true)
+    fun rollbackToTurn(turnId: String) {
+        removeTurns(turnId, TurnRemoval.AFTER)
+    }
+
+    /**
+     * Повторить генерацию по сообщению: выбранный ход и все последующие удаляются,
+     * генерация запускается заново с вводом выбранного сообщения. Реплика без
+     * записанного хода (ошибка генерации) перезапускается так же. Повтор стартует
+     * после успешного стирания — сразу или после «Повторить запись», если сначала
+     * сбой записи: история следующего запроса не должна содержать стёртый ход.
+     * Стоп и смена диалога отменяют и генерацию; подтверждённое стирание к тому
+     * моменту уже не отменяется (повтор задания доводит его диапазон до конца —
+     * как «Откатиться»). Если к моменту завершения стирания идёт другая генерация,
+     * повтор не запускается — чужой стрим не затирается.
+     */
+    fun regenerateTurn(turnId: String) {
+        if (isStreaming || viewModel.isLoadingHistory) return
+        val entry = turnStore.firstOrNull { it.id == turnId }
+        val userItem = messages.firstOrNull { it.turnId == turnId && it.role == ChatRole.USER }
+        val userMsg = entry?.turn?.userText ?: userItem?.answer ?: return
+        val audio = entry?.turn?.userAudio ?: userItem?.audio
+        if (userMsg.isEmpty() && audio == null) return
+        // Контекст диалога на момент повтора: запоздавшее стирание не должно
+        // отправить генерацию в другой диалог (см. проверку в onFinished).
+        val contextChatId = chatId
+        val contextGeneration = viewModel.historyGeneration
+        var wrapper: Job? = null
+        var continued = false
+        var cancelled = false
+        // До завершения стирания ход считается идущим: send() заблокирован (гонка
+        // за историю), действия сообщений скрыты, кнопка стопа отменяет повтор.
+        isStreaming = true
+        // LAZY + start: streamJob получает Job до запуска тела — иначе
+        // синхронно отработавший повтор затёр бы его своим Job (Main.immediate).
+        val job = scope.launch(start = kotlinx.coroutines.CoroutineStart.LAZY) {
+            try {
+                removeTurns(turnId, TurnRemoval.FROM, onFinished = {
+                    // Повтор сбойного задания приходит позже, когда ход может быть
+                    // занят другим стримом: чужой стрим не трогаем и не затираем.
+                    val wrapperAlive = wrapper?.isActive == true
+                    val busy = !wrapperAlive &&
+                        (isStreaming || streamJob?.isActive == true || viewModel.isLoadingHistory)
+                    val stale = cancelled ||
+                        chatId != contextChatId ||
+                        viewModel.historyGeneration != contextGeneration
+                    if (!stale && !busy) {
+                        continued = true
+                        isStreaming = false
+                        send(userMsg, audio)
+                    } else if (!stale && busy && !cancelled) {
+                        // Повтор пропущен: ход занят другой генерацией — не молча.
+                        Toast.makeText(context, regenerateSkippedText, Toast.LENGTH_LONG).show()
+                    }
+                })?.join()
+                if (!continued) {
+                    isStreaming = false
+                    streamJob = null
+                }
+            } catch (cancel: kotlinx.coroutines.CancellationException) {
+                cancelled = true
+                // Продолжение уже успело запустить стрим — его флаги не трогаем.
+                if (!continued) {
+                    isStreaming = false
+                    streamJob = null
+                }
+                throw cancel
+            }
+        }
+        wrapper = job
+        streamJob = job
+        job.start()
+    }
     // Проверяем текущее состояние при входе и дальнейшие переходы offline→online.
     // Позиция — после launchTurn/send/cancelTurn: эффект их вызывает,
     // локальные fun видны только ниже объявления.
@@ -1006,6 +1106,10 @@ fun ChatScreen(
                                 onRollback = managedTurnId
                                     ?.takeIf { id -> turnStore.indexOfFirst { it.id == id } in 0 until turnStore.size - 1 }
                                     ?.let { id -> ({ rollbackToTurn(id) }) },
+                                onRegenerate = managedTurnId?.let { id -> ({ regenerateTurn(id) }) },
+                                // Подтверждение нужно, только когда повтор унесёт
+                                // последующие сообщения (выбранное — не последнее).
+                                needsRegenerateConfirm = messages.indexOfLast { it.turnId == item.turnId } < messages.size - 1,
                             )
                         }
                     }
@@ -1189,7 +1293,7 @@ fun ChatScreen(
 /**
  * Реплика ленты: общий пузырь [ChatMessageBubble] (полотно «Ход работы»,
  * голосовой плейсхолдер, действие «Озвучить ответ», действия «Удалить
- * сообщение»/«Откатиться к этому сообщению» с подтверждением).
+ * сообщение»/«Откатиться к этому сообщению»/«Повторить» с подтверждением).
  */
 @Composable
 private fun MessageBubble(
@@ -1198,6 +1302,8 @@ private fun MessageBubble(
     speakLabel: String,
     onDelete: (() -> Unit)? = null,
     onRollback: (() -> Unit)? = null,
+    onRegenerate: (() -> Unit)? = null,
+    needsRegenerateConfirm: Boolean = true,
 ) {
     ChatMessageBubble(
         isUser = item.role == ChatRole.USER,
@@ -1210,5 +1316,7 @@ private fun MessageBubble(
         isStreaming = item.isStreaming,
         onDelete = onDelete,
         onRollback = onRollback,
+        onRegenerate = onRegenerate,
+        needsRegenerateConfirm = needsRegenerateConfirm,
     )
 }

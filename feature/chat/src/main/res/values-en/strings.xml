@@ -5,6 +5,7 @@
     <string name="chat_input_hint">Message to the agent</string>
     <string name="chat_send">Send</string>
     <string name="chat_stop">Stop</string>
+    <string name="chat_regenerate_skipped">Regenerate skipped: another generation is running</string>
     <string name="chat_stop_speech">Stop speech</string>
     <string name="chat_speaking">Speaking answer</string>
     <string name="chat_speak_answer">Speak answer</string>

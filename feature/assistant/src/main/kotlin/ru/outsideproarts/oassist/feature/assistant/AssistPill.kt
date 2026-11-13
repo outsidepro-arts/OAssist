@@ -74,6 +74,7 @@ fun AssistPill(
     announcer: FlowAnnouncer?,
     onExpandedChange: (Boolean) -> Unit,
     onSend: (String) -> Unit,
+    onStop: () -> Unit,
     onMicToggle: () -> Unit,
     onClose: () -> Unit,
     onSpeakAnswer: () -> Unit,
@@ -83,6 +84,7 @@ fun AssistPill(
 ) {
     val title = stringResource(R.string.assistant_title)
     val askLabel = stringResource(R.string.assistant_ask)
+    val stopLabel = stringResource(R.string.assistant_stop)
     val closeLabel = stringResource(R.string.assistant_close)
     val micLabel = stringResource(R.string.assistant_mic)
     val micStateOn = stringResource(R.string.assistant_mic_state_on)
@@ -216,20 +218,30 @@ fun AssistPill(
                         contentDescription = micLabel,
                     )
                 }
+                // Кнопка отправки во время работы агента становится кнопкой остановки
+                // действий (как Send → Stop в Chat): сессия при этом не завершается.
                 IconButton(
                     onClick = {
-                        if (question.text.isNotBlank() && !isStreaming) {
+                        if (isStreaming) {
+                            onStop()
+                            return@IconButton
+                        }
+                        if (question.text.isNotBlank()) {
                             onSend(question.text.trim())
                             question = TextFieldValue("")
                             focusManager.clearFocus()
                         }
                     },
-                    enabled = question.text.isNotBlank() && !isStreaming,
+                    enabled = isStreaming || question.text.isNotBlank(),
                     modifier = Modifier.oassistTouchTarget(),
                 ) {
                     Icon(
-                        imageVector = Icons.AutoMirrored.Filled.Send,
-                        contentDescription = askLabel,
+                        imageVector = if (isStreaming) {
+                            Icons.Default.Stop
+                        } else {
+                            Icons.AutoMirrored.Filled.Send
+                        },
+                        contentDescription = if (isStreaming) stopLabel else askLabel,
                     )
                 }
             }

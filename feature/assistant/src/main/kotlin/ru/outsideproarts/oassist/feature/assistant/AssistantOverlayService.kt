@@ -139,7 +139,7 @@ private val sessionTurnsLock = Any()
     private var attachScreenshot = false
     private var pendingBye = false
     /** Ход, отложенный до появления сети (пре-чек или ранний обрыв без сети). */
-    private var pendingRetryText: String? = null
+    private var pendingRetryText by mutableStateOf<String?>(null)
     private var foregroundType: Int? = null
     private val notificationUpdates = SessionNotificationUpdates(
         scope = serviceScope,
@@ -333,6 +333,10 @@ private val sessionTurnsLock = Any()
                 if (!replyText.isNullOrBlank()) execute(voiceFlow.onUserSubmit(replyText))
                 return
             }
+            CMD_STOP -> {
+                stopActions()
+                return
+            }
         }
         val session = capturedSession ?: AssistSessionStore.getOrCreate()
         ownedSession = session
@@ -498,6 +502,18 @@ private val sessionTurnsLock = Any()
                 .setLabel(getString(R.string.assistant_reply_hint))
                 .build(),
         ).setAllowGeneratedReplies(true).build()
+        // Кнопка отправки во время работы агента становится кнопкой остановки
+        // (как Send → Stop в Chat) — без завершения сессии. Отложенное ожидание
+        // сети тоже останавливаемо, как в Chat.
+        val sendAction = if (isStreaming || pendingRetryText != null) {
+            Notification.Action.Builder(
+                android.R.drawable.ic_menu_close_clear_cancel,
+                getString(R.string.assistant_stop),
+                commandIntent(CMD_STOP),
+            ).build()
+        } else {
+            replyAction
+        }
         val closeAction = Notification.Action.Builder(
             android.R.drawable.ic_menu_close_clear_cancel,
             getString(R.string.assistant_close),
@@ -510,7 +526,7 @@ private val sessionTurnsLock = Any()
             .setSmallIcon(android.R.drawable.stat_sys_download)
             .setOngoing(true)
             .addAction(micAction)
-            .addAction(replyAction)
+            .addAction(sendAction)
             .addAction(closeAction)
         if (pendingPerm != null) {
             builder.addAction(
@@ -583,8 +599,32 @@ private val sessionTurnsLock = Any()
                     speech?.stop()
                     turnJob?.cancel()
                     isStreaming = false
+                    // Пауза подтверждения и отложенный ход снимаются, как в Chat.cancelTurn.
+                    pendingApproval = null
+                    if (pendingRetryText != null) {
+                        pendingRetryText = null
+                        // Подсказка «повторим при подключении» после отмены уже неверна.
+                        hintText = null
+                    }
+                    refreshOverlayFocusable()
+                    refreshSessionNotification()
                 }
             }
+        }
+    }
+
+    /**
+     * Стоп действий: отмена идущего хода без завершения сессии. Отложенное
+     * ожидание сети снимается и вне Busy: после раннего обрыва машина уже вышла
+     * из хода, а «повторим при подключении» осталось — пилюля в этом состоянии
+     * показывает «Стоп», и он обязан работать (как в Chat).
+     */
+    private fun stopActions() {
+        val effects = voiceFlow.onStopActions()
+        if (effects.isEmpty() && pendingRetryText != null) {
+            execute(listOf(AssistVoiceEffect.CancelTurn))
+        } else {
+            execute(effects)
         }
     }
 
@@ -1106,11 +1146,13 @@ private val sessionTurnsLock = Any()
                             statusHint = hintText,
                             listening = voiceState is AssistVoiceState.Listening && listening,
                             sttPreview = sttPreview,
-                            isStreaming = isStreaming,
+                            // Стоп доступен и для отложенного ожидания сети (как в Chat).
+                            isStreaming = isStreaming || pendingRetryText != null,
                             expanded = expanded,
                             announcer = speech?.announcer,
                             onExpandedChange = { expanded = it },
                             onSend = { execute(voiceFlow.onUserSubmit(it)) },
+                            onStop = { stopActions() },
                             onMicToggle = { execute(voiceFlow.onPlayPause()) },
                             onClose = { stopSelf() },
                             onSpeakAnswer = ::onSpeakAnswer,
@@ -1185,5 +1227,6 @@ private val sessionTurnsLock = Any()
         const val CMD_MIC = "mic"
         const val CMD_CLOSE = "close"
         const val CMD_REPLY = "reply"
+        const val CMD_STOP = "stop"
     }
 }

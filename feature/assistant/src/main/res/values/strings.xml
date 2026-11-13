@@ -7,6 +7,7 @@
     <string name="assistant_empty_title">Ассистент пока не настроен</string>
     <string name="assistant_empty_body">Сделайте OAssist ассистентом по умолчанию и выберите модель в Настройках.</string>
     <string name="assistant_ask">Вопрос агенту</string>
+    <string name="assistant_stop">Остановить действия</string>
     <string name="assistant_response">Ответ агента</string>
     <string name="assistant_close">Закрыть</string>
     <string name="assistant_context">Контекст экрана</string>

@@ -166,6 +166,44 @@ class AssistVoiceFlowTest {
     }
 
     @Test
+    fun stopActions_whileBusy_cancelsTurnAndGoesIdle() {
+        flow.onActivate()
+        flow.onSttFinal("вопрос")
+
+        val effects = flow.onStopActions()
+
+        assertEquals(listOf(AssistVoiceEffect.CancelTurn), effects)
+        assertEquals(AssistVoiceState.Idle, flow.state.value)
+    }
+
+    @Test
+    fun stopActions_whileNotBusy_ignored() {
+        flow.onActivate()
+        assertTrue(flow.onStopActions().isEmpty())
+        assertEquals(AssistVoiceState.Listening, flow.state.value)
+
+        flow.onSttFinal("   ")
+        assertTrue(flow.onStopActions().isEmpty())
+        assertEquals(AssistVoiceState.Idle, flow.state.value)
+
+        flow.onClose()
+        assertTrue(flow.onStopActions().isEmpty())
+        assertEquals(AssistVoiceState.Ended, flow.state.value)
+    }
+
+    @Test
+    fun userSubmit_afterStop_startsNewTurn() {
+        flow.onActivate()
+        flow.onSttFinal("первый")
+        flow.onStopActions()
+
+        val effects = flow.onUserSubmit("второй")
+
+        assertEquals(listOf(AssistVoiceEffect.SendText("второй")), effects)
+        assertEquals(AssistVoiceState.Busy, flow.state.value)
+    }
+
+    @Test
     fun sttStartFailed_fallsBackToIdle() {
         flow.onActivate()
 

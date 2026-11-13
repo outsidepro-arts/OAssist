@@ -228,6 +228,23 @@ private fun buildShareAsk(
 }
 
 /**
+ * Восстановление запроса по записанному ходу для повтора генерации: ввод
+ * (текст/аудио/модельный ввод) берётся из хода, общий контент — из того же
+ * payload сессии, что и при исходной отправке.
+ */
+private fun shareAskOf(
+    payload: SharePayload,
+    templates: SharePromptTemplates,
+    turn: ru.outsideproarts.oassist.core.model.StoredTurn,
+): ShareAskRequest = ShareAskRequest(
+    query = turn.userText,
+    userMsg = turn.userText,
+    modelInput = turn.modelUserInput ?: ModelUserInput(turn.userText),
+    contentDesc = buildShareAsk(payload, "", templates).contentDesc,
+    audio = turn.userAudio,
+)
+
+/**
  * Шаринг в два экрана: список диалогов («Новый чат» + сохранённые, без записи
  * ассистента) → выбранный диалог с полной историей, прикреплённым файлом и
  * полем промпта. Каждый ход пишется в выбранный диалог (или создаёт новый).
@@ -377,6 +394,12 @@ private fun ShareFlow(payload: SharePayload) {
             canManageTurns = !vm.isStreaming && !vm.isChangingConversation && !vm.isSaving,
             onDeleteTurn = vm::deleteTurnMessage,
             onRollbackToTurn = vm::rollbackToTurn,
+            onRegenerateTurn = { turnId ->
+                vm.turns.firstOrNull { it.id == turnId }?.turn?.let { turn ->
+                    vm.regenerateTurn(turnId, shareAskOf(payload, templates, turn))
+                }
+            },
+            onRegenerateActive = vm::regenerateActive,
             activeUserMsg = vm.activeUserMsg,
             workEvents = vm.workEvents,
             response = vm.response,
@@ -525,6 +548,8 @@ private fun ShareConversation(
     canManageTurns: Boolean,
     onDeleteTurn: (String) -> Unit,
     onRollbackToTurn: (String) -> Unit,
+    onRegenerateTurn: (String) -> Unit,
+    onRegenerateActive: () -> Unit,
     activeUserMsg: String?,
     workEvents: List<ru.outsideproarts.oassist.core.model.WorkEvent>,
     response: String,
@@ -631,6 +656,10 @@ private fun ShareConversation(
                     val onRollback: (() -> Unit)? = managedId
                         ?.takeIf { id -> turns.lastOrNull()?.id != id }
                         ?.let { id -> ({ onRollbackToTurn(id) }) }
+                    val onRegenerate: (() -> Unit)? = managedId?.let { id -> ({ onRegenerateTurn(id) }) }
+                    // Подтверждение нужно, когда повтор унесёт последующие сообщения:
+                    // это и хвост ленты, и осиротевшее активное сообщение после хода.
+                    val needsRegenerateConfirm = turns.lastOrNull()?.id != entry.id || activeUserMsg != null
                     ChatMessageBubble(
                         isUser = true,
                         answer = turn.userText,
@@ -638,6 +667,8 @@ private fun ShareConversation(
                         speakLabel = speakLabel,
                         onDelete = onDelete,
                         onRollback = onRollback,
+                        onRegenerate = onRegenerate,
+                        needsRegenerateConfirm = needsRegenerateConfirm,
                     )
                     val speakTurn: (() -> Unit)? = if (turn.answer.isNotBlank()) {
                         {
@@ -657,11 +688,21 @@ private fun ShareConversation(
                         speakLabel = speakLabel,
                         onDelete = onDelete,
                         onRollback = onRollback,
+                        onRegenerate = onRegenerate,
+                        needsRegenerateConfirm = needsRegenerateConfirm,
                     )
                 }
                 if (activeUserMsg != null) {
                     item {
-                        ChatMessageBubble(isUser = true, answer = activeUserMsg.orEmpty(), speakLabel = speakLabel)
+                        ChatMessageBubble(
+                            isUser = true,
+                            answer = activeUserMsg.orEmpty(),
+                            speakLabel = speakLabel,
+                            // Реплика без записанного хода (ошибка/стоп): повтор
+                            // доступен и на ней, стирать нечего — без подтверждения.
+                            onRegenerate = if (canManageTurns) ({ onRegenerateActive() }) else null,
+                            needsRegenerateConfirm = false,
+                        )
                     }
                     // Пузырь ассистента — только с содержимым или в процессе стрима:
                     // отменённый пустой ход не оставляет пустой ответ (как в Chat).

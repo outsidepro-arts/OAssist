@@ -8,6 +8,7 @@ import androidx.compose.ui.text.input.TextFieldValue
 import androidx.lifecycle.ViewModel
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.Job
@@ -77,6 +78,13 @@ data class ShareAskRequest(
     /** Голосовое приложение (hold-to-talk RAW): ход без текста, только аудио. */
     val audio: ru.outsideproarts.oassist.core.model.AudioPart? = null,
 )
+
+/** Область стирания ходов: один ход, всё после хода, ход вместе со всеми последующими. */
+internal enum class TurnRemoval {
+    ONE,
+    AFTER,
+    FROM,
+}
 
 /**
  * Сессионное состояние шаринга, переживающее пересоздание Activity (поворот,
@@ -158,6 +166,9 @@ class ShareSessionViewModel internal constructor(private val chatStore: ShareCha
         titleJob?.cancel()
         pendingRetry = null
         pendingApproval = null
+        // Смена разговора отменяет и отложенные повторы генерации: запоздавшее
+        // стирание не должно запускать ход в другом разговоре.
+        pendingRegenerates.clear()
         isChangingConversation = true
         changeJob = scope.launch {
             try {
@@ -194,12 +205,14 @@ class ShareSessionViewModel internal constructor(private val chatStore: ShareCha
         savedTurnCount = 0
         saveFailed = false
         activeUserMsg = null
+        lastAskRequest = null
         workEvents = emptyList()
         response = ""
         turnUsage = null
         isStreaming = false
         pendingApproval = null
         failedRemoval = null
+        pendingRegenerates.clear()
         question = TextFieldValue("")
         // Свежий разговор всегда открывается с конца ленты.
         scrollRequester.scrollToEnd()
@@ -246,6 +259,12 @@ class ShareSessionViewModel internal constructor(private val chatStore: ShareCha
 
     /** Запрос, отложенный до появления сети (пре-чек или ранний обрыв без сети). */
     private var pendingRetry by mutableStateOf<ShareAskRequest?>(null)
+
+    /**
+     * Запрос последнего хода (идущего или не записанного после ошибки/стопа) —
+     * ручка «Повторить» на активном сообщении без записанного хода.
+     */
+    private var lastAskRequest: ShareAskRequest? = null
 
     /** Флаг звука режима последнего хода: звук решений диалога вне стрима. */
     private var lastSoundsOn = true
@@ -373,7 +392,25 @@ class ShareSessionViewModel internal constructor(private val chatStore: ShareCha
     }
 
     /** Сбойное стирание, ожидающее повтора («Повторить»). */
-    private var failedRemoval: Pair<String, Boolean>? = null
+    private var failedRemoval: RemovalPlan? = null
+
+    /**
+     * Подтверждённый диапазон стирания: фиксируется в момент действия, повтор
+     * сбойного задания исполняет тот же снимок и не трогает более новые ходы.
+     */
+    private class RemovalPlan(
+        val turnId: String,
+        val removal: TurnRemoval,
+        val doomedIds: Set<String>,
+        val killTarget: Boolean,
+    )
+
+    /**
+     * Повторы генерации, отложенные сбойным стиранием по id хода: завершатся
+     * после успешного «Повторить запись» — подтверждённое действие не должно
+     * выполняться наполовину.
+     */
+    private val pendingRegenerates = mutableMapOf<String, ShareAskRequest>()
 
     /**
      * «Повторить»: повтор сбойного стирания и сбойных дозаписей. Кнопка не
@@ -384,9 +421,31 @@ class ShareSessionViewModel internal constructor(private val chatStore: ShareCha
         val removal = failedRemoval
         if (removal != null && !isClosing && !isChangingConversation) {
             failedRemoval = null
-            removeTurns(removal.first, removal.second)
+            // Повтор исполняет снимок диапазона момента действия — более новые
+            // ходы, появившиеся после подтверждения, не затрагиваются.
+            removeTurns(removal, onFinished = { continuePendingRegenerate(removal.turnId) })
         }
         saveChat()
+    }
+
+    /**
+     * Генерация, отложенная сбойным стиранием, стартует после успешного повтора.
+     * Если к этому моменту идёт другая генерация, повтор не запускается —
+     * пользователь видит тост, действие не теряется молча.
+     */
+    private fun continuePendingRegenerate(removalTurnId: String) {
+        val request = pendingRegenerates.remove(removalTurnId) ?: return
+        if (isClosing || isChangingConversation) return
+        if (isStreaming) {
+            _toasts.tryEmit(
+                ShareToast.Res(
+                    ru.outsideproarts.oassist.feature.share.R.string.share_regenerate_skipped,
+                    long = true,
+                ),
+            )
+            return
+        }
+        retryAsk(request)
     }
 
     /**
@@ -411,6 +470,7 @@ class ShareSessionViewModel internal constructor(private val chatStore: ShareCha
     fun deferAsk(request: ShareAskRequest) {
         if (!canSend) return
         activeUserMsg = request.userMsg
+        lastAskRequest = request
         isStreaming = true
         pendingRetry = request
         _toasts.tryEmit(ShareToast.Res(ru.outsideproarts.oassist.core.ui.R.string.net_offline_retry, long = true))
@@ -472,6 +532,7 @@ class ShareSessionViewModel internal constructor(private val chatStore: ShareCha
         val query = request.query
         val sentImages = images.toList()
         pendingRetry = null
+        lastAskRequest = request
         isStreaming = true
         SpeechHandle.get()?.stop()
         val userMsg = request.userMsg
@@ -724,11 +785,11 @@ class ShareSessionViewModel internal constructor(private val chatStore: ShareCha
         reportFailure: Boolean = true,
         onFailure: (() -> Unit)? = null,
         op: suspend () -> Unit,
-    ) {
+    ): Job {
         writesInFlight++
         isSaving = true
         val previous = lastWrite
-        lastWrite = scope.launch {
+        val job = scope.launch {
             previous?.join()
             try {
                 op()
@@ -743,13 +804,17 @@ class ShareSessionViewModel internal constructor(private val chatStore: ShareCha
                 if (writesInFlight == 0) isSaving = false
             }
         }
+        lastWrite = job
+        return job
     }
 
     /** Navigation waits for this writer; successful prefixes are never appended twice on retry. */
     private fun saveTurns() {
         if (turns.isEmpty()) return
         val repo = chatStore ?: return
-        saveFailed = false
+        // Сбойное стирание продолжает требовать «Повторить запись»: успешная
+        // дозапись другого хода не должна прятать подтверждённое действие.
+        if (failedRemoval == null) saveFailed = false
         enqueueWrite {
             if (turns.isEmpty()) return@enqueueWrite
             val id = chatId ?: repo.createChat(
@@ -769,33 +834,114 @@ class ShareSessionViewModel internal constructor(private val chatStore: ShareCha
      * Удалить сообщение (ход целиком, с полотном «Ход работы»): лента и БД —
      * в общей цепочке записи, память меняется после успешного стирания.
      */
-    fun deleteTurnMessage(turnId: String) = removeTurns(turnId, afterOnly = false)
+    fun deleteTurnMessage(turnId: String) {
+        removeTurns(turnId, TurnRemoval.ONE)
+    }
 
     /**
      * Откатиться к сообщению: выбранный ход остаётся последним, все следующие
      * стираются безвозвратно (лента и БД). История для модели продолжается
      * с выбранного хода.
      */
-    fun rollbackToTurn(turnId: String) = removeTurns(turnId, afterOnly = true)
+    fun rollbackToTurn(turnId: String) {
+        removeTurns(turnId, TurnRemoval.AFTER)
+    }
 
-    private fun removeTurns(turnId: String, afterOnly: Boolean) {
-        if (isClosing || isChangingConversation) return
-        enqueueWrite(reportFailure = true, onFailure = { failedRemoval = turnId to afterOnly }) {
-            val index = turns.indexOfFirst { it.id == turnId }
-            if (index < 0) return@enqueueWrite
-            val from = if (afterOnly) index + 1 else index
-            val until = if (afterOnly) turns.size else index + 1
-            if (from >= until) return@enqueueWrite
-            // Сотрутся только сохранённые ходы: незаписанные исчезнут и так.
-            val savedDoomed = (from until until).count { it < savedTurnCount }
-            if (savedDoomed > 0) {
-                chatId?.let { id ->
-                    if (afterOnly) chatStore?.deleteTurnsAfter(id, turnId)
-                    else chatStore?.deleteTurn(id, turnId)
+    /**
+     * Повторить генерацию по сообщению: выбранный ход и все последующие удаляются
+     * (лента и БД), затем запрос уходит заново с вводом выбранного сообщения.
+     * Ход без записанного ответа (ошибка/стоп) перезапускается тем же способом.
+     * Повтор стартует после успешного стирания — сразу или после «Повторить
+     * запись», если сначала сбой записи: история следующего запроса не должна
+     * содержать стёртый ход. Стоп и смена разговора отменяют и генерацию;
+     * подтверждённое стирание к тому моменту уже не отменяется.
+     */
+    fun regenerateTurn(turnId: String, request: ShareAskRequest) {
+        if (isClosing || isChangingConversation || isStreaming) return
+        if (request.query.isBlank() && request.audio == null) return
+        pendingRetry = null
+        pendingRegenerates[turnId] = request
+        // До завершения стирания ход считается идущим: отправка заблокирована
+        // (гонка за историю), действия сообщений скрыты, «Стоп» отменяет повтор.
+        isStreaming = true
+        // LAZY + start: streamJob получает Job до запуска тела — иначе
+        // синхронно отработавший повтор затёр бы его своим Job (Main.immediate).
+        val job = scope.launch(start = CoroutineStart.LAZY) {
+            try {
+                var removed = false
+                removeTurns(turnId, TurnRemoval.FROM, onFinished = { removed = true })?.join()
+                isStreaming = false
+                streamJob = null
+                if (removed) {
+                    pendingRegenerates.remove(turnId)
+                    retryAsk(request)
                 }
+            } catch (cancel: CancellationException) {
+                pendingRegenerates.remove(turnId)
+                isStreaming = false
+                streamJob = null
+                throw cancel
             }
-            for (i in until - 1 downTo from) turns.removeAt(i)
-            savedTurnCount -= savedDoomed
+        }
+        streamJob = job
+        job.start()
+    }
+
+    /**
+     * Повторить генерацию по активному сообщению (записанного хода нет: ошибка
+     * генерации или стоп) — тот же запрос уходит заново без стирания.
+     */
+    fun regenerateActive() {
+        if (isClosing || isChangingConversation || isStreaming) return
+        val request = lastAskRequest ?: return
+        retryAsk(request)
+    }
+
+    private fun removeTurns(turnId: String, removal: TurnRemoval, onFinished: (() -> Unit)? = null): Job? {
+        // Подтверждённый диапазон фиксируется в момент действия: повтор сбойного
+        // задания записи не трогает ходы, появившиеся позже, включая идущий стрим.
+        val anchorIndex = turns.indexOfFirst { it.id == turnId }
+        val following = when {
+            removal == TurnRemoval.ONE -> emptySet()
+            anchorIndex < 0 -> emptySet()
+            else -> turns.drop(anchorIndex + 1).map { it.id }.toSet()
+        }
+        val killTarget = removal != TurnRemoval.AFTER
+        return removeTurns(
+            RemovalPlan(turnId, removal, if (killTarget) following + turnId else following, killTarget),
+            onFinished,
+        )
+    }
+
+    private fun removeTurns(plan: RemovalPlan, onFinished: (() -> Unit)? = null): Job? {
+        if (isClosing || isChangingConversation) return null
+        val turnId = plan.turnId
+        val removal = plan.removal
+        val killTarget = plan.killTarget
+        val doomedIds = plan.doomedIds
+        return enqueueWrite(reportFailure = true, onFailure = { failedRemoval = plan }) {
+            val doomedNow = turns.filter { it.id in doomedIds }
+            if (doomedNow.isNotEmpty()) {
+                // Сотрутся только сохранённые ходы: незаписанные исчезнут и так.
+                val savedDoomed = doomedNow.count { entry -> turns.indexOfFirst { it === entry } < savedTurnCount }
+                if (savedDoomed > 0) {
+                    chatId?.let { id ->
+                        val indexNow = turns.indexOfFirst { it.id == turnId }
+                        val followingNow = if (indexNow >= 0) turns.drop(indexNow + 1) else emptyList()
+                        if (removal != TurnRemoval.ONE && indexNow >= 0 && followingNow.all { it.id in doomedIds }) {
+                            // Хвост после якоря не изменился — стирание одной операцией.
+                            chatStore?.deleteTurnsAfter(id, turnId)
+                            if (killTarget) chatStore?.deleteTurn(id, turnId)
+                        } else {
+                            // Появились более новые ходы: стираем только подтверждённый набор.
+                            doomedNow.forEach { chatStore?.deleteTurn(id, it.id) }
+                        }
+                    }
+                }
+                turns.removeAll { it.id in doomedIds }
+                savedTurnCount -= savedDoomed
+            }
+            onFinished?.invoke()
         }
     }
 

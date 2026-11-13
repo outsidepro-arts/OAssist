@@ -51,8 +51,9 @@ private const val MAX_TOOL_OUTPUT_CHARS = 500
  * длительностью, байты не показываются. Видимый текст не live region —
  * озвучка идёт каналом речи, повтор действием «Озвучить ответ».
  *
- * Действия с сообщением (удалить, откатиться) — через меню «⋮» и
- * CustomAccessibilityAction; оба требуют подтверждения диалогом.
+ * Действия с сообщением (удалить, откатиться, повторить генерацию) — через меню
+ * «⋮» и CustomAccessibilityAction; удаление и откат требуют подтверждения
+ * диалогом, повтор — только когда будут удалены последующие сообщения.
  * Null у действия — оно недоступно (идущий ход, реплика без записанного хода).
  */
 @Composable
@@ -70,6 +71,14 @@ fun ChatMessageBubble(
     onDelete: (() -> Unit)? = null,
     /** Откатиться к этому сообщению — вызывается после подтверждения. */
     onRollback: (() -> Unit)? = null,
+    /**
+     * Повторить генерацию по сообщению: выбранный ход и все последующие удаляются,
+     * генерация запускается заново с вводом выбранного сообщения. Вызывается после
+     * подтверждения, если [needsRegenerateConfirm].
+     */
+    onRegenerate: (() -> Unit)? = null,
+    /** Есть последующие сообщения — повтор потребует подтверждения с предупреждением. */
+    needsRegenerateConfirm: Boolean = true,
     modifier: Modifier = Modifier,
 ) {
     val roleLabel = if (isUser) {
@@ -81,15 +90,25 @@ fun ChatMessageBubble(
         ?: answer.ifEmpty { "…" }
     val deleteLabel = stringResource(R.string.msg_action_delete)
     val rollbackLabel = stringResource(R.string.msg_action_rollback)
+    val regenerateLabel = stringResource(R.string.msg_action_regenerate)
 
     var menuExpanded by remember { mutableStateOf(false) }
     var confirmDelete by remember { mutableStateOf(false) }
     var confirmRollback by remember { mutableStateOf(false) }
+    var confirmRegenerate by remember { mutableStateOf(false) }
 
     val bodyActions = buildList {
         onSpeak?.let { speak -> add(CustomAccessibilityAction(speakLabel) { speak(); true }) }
         onDelete?.let { delete -> add(CustomAccessibilityAction(deleteLabel) { confirmDelete = true; true }) }
         onRollback?.let { rollback -> add(CustomAccessibilityAction(rollbackLabel) { confirmRollback = true; true }) }
+        onRegenerate?.let { regenerate ->
+            add(
+                CustomAccessibilityAction(regenerateLabel) {
+                    if (needsRegenerateConfirm) confirmRegenerate = true else regenerate()
+                    true
+                },
+            )
+        }
     }
     val bodyModifier = if (bodyActions.isEmpty()) {
         Modifier
@@ -109,7 +128,7 @@ fun ChatMessageBubble(
                 style = MaterialTheme.typography.labelSmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
-            if (onDelete != null || onRollback != null) {
+            if (onDelete != null || onRollback != null || onRegenerate != null) {
                 IconButton(
                     onClick = { menuExpanded = true },
                     modifier = Modifier.oassistTouchTarget(),
@@ -135,6 +154,19 @@ fun ChatMessageBubble(
                             onClick = {
                                 menuExpanded = false
                                 confirmRollback = true
+                            },
+                        )
+                    }
+                    if (onRegenerate != null) {
+                        DropdownMenuItem(
+                            text = { Text(regenerateLabel) },
+                            onClick = {
+                                menuExpanded = false
+                                if (needsRegenerateConfirm) {
+                                    confirmRegenerate = true
+                                } else {
+                                    onRegenerate.invoke()
+                                }
                             },
                         )
                     }
@@ -206,6 +238,32 @@ fun ChatMessageBubble(
             dismissButton = {
                 TextButton(
                     onClick = { confirmRollback = false },
+                    modifier = Modifier.oassistTouchTarget(),
+                ) {
+                    Text(stringResource(R.string.chats_cancel))
+                }
+            },
+        )
+    }
+    if (confirmRegenerate) {
+        AlertDialog(
+            onDismissRequest = { confirmRegenerate = false },
+            title = { Text(stringResource(R.string.msg_regenerate_title)) },
+            text = { Text(stringResource(R.string.msg_regenerate_message)) },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        confirmRegenerate = false
+                        onRegenerate?.invoke()
+                    },
+                    modifier = Modifier.oassistTouchTarget(),
+                ) {
+                    Text(stringResource(R.string.msg_regenerate_confirm))
+                }
+            },
+            dismissButton = {
+                TextButton(
+                    onClick = { confirmRegenerate = false },
                     modifier = Modifier.oassistTouchTarget(),
                 ) {
                     Text(stringResource(R.string.chats_cancel))

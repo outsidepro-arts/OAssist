@@ -107,12 +107,16 @@
     <string name="msg_actions_menu">Message actions</string>
     <string name="msg_action_delete">Delete message</string>
     <string name="msg_action_rollback">Roll back to this message</string>
+    <string name="msg_action_regenerate">Regenerate</string>
     <string name="msg_delete_title">Delete message?</string>
     <string name="msg_delete_message">The message together with the assistant reply and its work trace will be permanently deleted, including model history.</string>
     <string name="msg_delete_confirm">Delete</string>
     <string name="msg_rollback_title">Roll back to this message?</string>
     <string name="msg_rollback_message">All messages after the selected one will be permanently deleted. Model history will continue from the selected message.</string>
     <string name="msg_rollback_confirm">Roll back</string>
+    <string name="msg_regenerate_title">Regenerate from this message?</string>
+    <string name="msg_regenerate_message">All messages after the selected one will be permanently deleted. Generation will be restarted with the input of the selected message.</string>
+    <string name="msg_regenerate_confirm">Regenerate</string>
     <string name="chats_unsaved_title">Unsaved chat</string>
     <string name="chats_unsaved_message">The current chat is not saved. What should happen to it before continuing?</string>
     <string name="chats_unsaved_save">Save and continue</string>

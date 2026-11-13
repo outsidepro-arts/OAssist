@@ -7,6 +7,7 @@
     <string name="assistant_empty_title">Assistant is not set up yet</string>
     <string name="assistant_empty_body">Make OAssist the default assistant and pick a model in Settings.</string>
     <string name="assistant_ask">Ask the agent</string>
+    <string name="assistant_stop">Stop actions</string>
     <string name="assistant_response">Agent response</string>
     <string name="assistant_close">Close</string>
     <string name="assistant_context">Screen context</string>
