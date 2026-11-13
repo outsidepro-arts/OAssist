@@ -210,7 +210,13 @@ class AppGraph private constructor(context: Context) {
      * (запрос `su -c id` может показывать диалог Superuser — не дёргаем каждый раз).
      */
     suspend fun privilegeExecutor(): ru.outsideproarts.oassist.core.device.PrivExecutor {
-        if (shizukuExecutor.isBinderAlive() && shizukuExecutor.isPermissionGranted()) {
+        // Shizuku-пробы — синхронные binder-транзакции: на главном потоке они
+        // подвисают вместе с замороженной MIUI удалённой стороной (см. также
+        // MainActivity, где тот же вызов уже уводится на IO).
+        val shizukuReady = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+            shizukuExecutor.isBinderAlive() && shizukuExecutor.isPermissionGranted()
+        }
+        if (shizukuReady) {
             return ru.outsideproarts.oassist.core.device.DiagnosticPrivExecutor(shizukuExecutor)
         }
         val root = cachedRootAvailable ?: rootExecutor.isAvailable().also { cachedRootAvailable = it }
@@ -317,11 +323,13 @@ class AppGraph private constructor(context: Context) {
         override suspend fun agentFor(profile: ProviderProfile, mode: ru.outsideproarts.oassist.core.model.AssistMode): ru.outsideproarts.oassist.core.agent.AgentLoop {
             val diagnosticId = kotlin.coroutines.coroutineContext[ru.outsideproarts.oassist.core.model.diagnostics.DiagnosticContext]?.operationId
                 ?: ru.outsideproarts.oassist.core.model.diagnostics.Diagnostics.newOperationId()
-            ru.outsideproarts.oassist.core.model.diagnostics.Diagnostics.record(
-                ru.outsideproarts.oassist.core.model.diagnostics.DiagnosticKind.LIFECYCLE,
-                operationId = diagnosticId,
-                attributes = mapOf("action" to "prepare_agent", "mode" to mode.name),
-            )
+            kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+                ru.outsideproarts.oassist.core.model.diagnostics.Diagnostics.record(
+                    ru.outsideproarts.oassist.core.model.diagnostics.DiagnosticKind.LIFECYCLE,
+                    operationId = diagnosticId,
+                    attributes = mapOf("action" to "prepare_agent", "mode" to mode.name),
+                )
+            }
             val client = modelClientFor(profile)
             val prefs = data.toolConfigs.snapshot()
             val tools = ru.outsideproarts.oassist.core.agent.ToolCatalog.createRegistry(
@@ -360,6 +368,13 @@ class AppGraph private constructor(context: Context) {
                 sessionScope = mode.name,
                 permissionRequester = permissionRequester,
                 screenLocked = { keyguardLockState.isLocked() },
+                // Стрим строится на IO: wire-диагностика санитайзит и хеширует
+                // тела запросов, а собирается стрим на главном потоке (оверлей
+                // ассистента, экраны) — там такие паузы выглядят фризом до ответа.
+                streamContext = kotlinx.coroutines.Dispatchers.IO,
+                // Колбэки слоёв возвращаются на Main: их очереди записи
+                // (ChatTurnSaver, enqueueWrite) однонитные.
+                callbackContext = kotlinx.coroutines.Dispatchers.Main,
                 fallbackFarewell = appContext.createConfigurationContext(
                     android.content.res.Configuration(appContext.resources.configuration).apply {
                         setLocale(java.util.Locale.forLanguageTag(promptLanguage()))
@@ -414,10 +429,23 @@ class AppGraph private constructor(context: Context) {
                 time = promptTime(),
                 device = promptDevice(),
                 memory = if (template.contains("{memory}")) {
-                    runCatching { data.memory.read() }.getOrElse { "" }
+                    // Файловое чтение памяти/навыков — синхронный I/O (память ещё и под
+                    // общим локом с записью инструментов): не на главном потоке.
+                    // Отмена не глотается: runCatching ловит и CancellationException.
+                    runCatching {
+                        kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) { data.memory.read() }
+                    }.getOrElse { error ->
+                        if (error is kotlin.coroutines.cancellation.CancellationException) throw error
+                        ""
+                    }
                 } else "",
                 skills = if (template.contains("{skills}")) {
-                    runCatching { data.skills.list() }.getOrElse { emptyList() }
+                    runCatching {
+                        kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) { data.skills.list() }
+                    }.getOrElse { error ->
+                        if (error is kotlin.coroutines.cancellation.CancellationException) throw error
+                        emptyList()
+                    }
                 } else emptyList(),
                 screenContext = screenContext,
                 sharedContent = sharedContent,

@@ -188,6 +188,9 @@ class DiagnosticStore private constructor(
     private val lock = Any()
     // Never hold this lock during archive I/O or while acquiring lock.
     private val admissionLock = Any()
+    // Доступность хранилища (binder-проба UserManager) кэшируется после первого
+    // успеха: probe зовётся на горячем пути record, в том числе с главного потока.
+    private val available = AvailabilityLatch(isAvailable)
     // Кэш метаданных архива. Расшифровка каждого файла — binder-вызов в Android
     // Keystore; полный проход по архиву на каждом обращении надолго блокировал
     // вызывающего (старт хода ассистента). Кэш строится фоновым сканом при
@@ -218,8 +221,8 @@ class DiagnosticStore private constructor(
         } catch (_: RejectedExecutionException) {
         }
     }
-    @Volatile private var enabled = if (isAvailable()) loadEnabled() else false
-    @Volatile private var settingsLoaded = isAvailable()
+    @Volatile private var enabled = if (available()) loadEnabled() else false
+    @Volatile private var settingsLoaded = available()
     @Volatile private var failure: String? = null
     private val removedOperations = ConcurrentHashMap.newKeySet<String>()
     private val durablyRemovedOperations = mutableSetOf<String>()
@@ -234,7 +237,7 @@ class DiagnosticStore private constructor(
     private var startupMaintenanceDone = false
 
     private fun ensureStartupMaintenance() {
-        if (startupMaintenanceDone || !isAvailable()) return
+        if (startupMaintenanceDone || !available()) return
         loadDeletionMarkers()
         var cleaned = true
         val existing = files()
@@ -309,7 +312,7 @@ class DiagnosticStore private constructor(
             pendingRoots[rootId] = (pendingRoots[rootId] ?: 0) + 1
             rootId to generation.get()
         }
-        if (!isAvailable()) {
+        if (!available()) {
             dropped.incrementAndGet()
             failure = "credential_storage_locked"
             finishPending(event, liveRoot)
@@ -443,7 +446,7 @@ class DiagnosticStore private constructor(
         } catch (_: Exception) {
             return@synchronized DiagnosticHealth(false, enabled, dropped.get(), files().sumOf { it.length() }, failure ?: "storage_unavailable")
         }
-        if (!isAvailable()) DiagnosticHealth(false, false, dropped.get(), 0, "credential_storage_locked")
+        if (!available()) DiagnosticHealth(false, false, dropped.get(), 0, "credential_storage_locked")
         else DiagnosticHealth(failure == null, enabled, dropped.get(), files().sumOf { it.length() }, failure)
     }
 
@@ -500,7 +503,7 @@ class DiagnosticStore private constructor(
         if (operationId in removedOperations) return@synchronized
         var pending: File? = null
         try {
-            check(isAvailable()) { "storage_unavailable" }
+            check(available()) { "storage_unavailable" }
             if (!root.exists() && !root.mkdirs()) error("storage_unavailable")
             if (eventsIndexed) {
                 ensureStartupMaintenance()
@@ -585,7 +588,7 @@ class DiagnosticStore private constructor(
     private fun removeOwnedOperations(chatId: String?, operationIds: Set<String>) {
         flush()
         synchronized(lock) {
-        check(isAvailable()) { "storage_unavailable" }
+        check(available()) { "storage_unavailable" }
         check(root.isDirectory || (!root.exists() && root.mkdirs())) { "storage_unavailable" }
         loadDeletionMarkers()
         val events = eventIndex()
@@ -773,7 +776,7 @@ class DiagnosticStore private constructor(
      */
     private fun buildIndex() {
         synchronized(lock) { if (eventsIndexed) return }
-        if (!isAvailable()) return
+        if (!available()) return
         val listing = root.listFiles() ?: return
         val scannedEvents = mutableListOf<Pair<File, EventIndex>>()
         val unreadable = mutableSetOf<String>()

@@ -1,5 +1,6 @@
 package ru.outsideproarts.oassist.core.agent
 
+import kotlinx.coroutines.asCoroutineDispatcher
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.flow.toList
@@ -47,6 +48,98 @@ class AgentLoopTest {
         assertEquals(2, chunks.size)
         assertEquals(ChatChunk.Content("Привет!"), chunks[0])
         assertEquals(ChatChunk.Finish("stop"), chunks[1])
+    }
+
+    @Test
+    fun stream_buildsUpstreamOnStreamContext() = runTest {
+        val recordThreads = java.util.concurrent.CopyOnWriteArrayList<String>()
+        val callbackThreads = java.util.concurrent.CopyOnWriteArrayList<String>()
+        val recorder = object : ru.outsideproarts.oassist.core.model.diagnostics.DiagnosticRecorder {
+            override fun record(
+                event: ru.outsideproarts.oassist.core.model.diagnostics.DiagnosticEvent,
+                secrets: Collection<String>,
+            ) {
+                recordThreads += Thread.currentThread().name
+            }
+
+            override fun health() = ru.outsideproarts.oassist.core.model.diagnostics.DiagnosticHealth(
+                available = true, contentEnabled = true, droppedEvents = 0, storedBytes = 0,
+            )
+        }
+        val events = object : AgentEvents {
+            override suspend fun onToolCall(toolName: String, argumentsJson: String, summary: String) {
+                callbackThreads += Thread.currentThread().name
+            }
+
+            override suspend fun onTurnUsage(usage: ru.outsideproarts.oassist.core.model.ProviderUsage) {
+                callbackThreads += Thread.currentThread().name
+            }
+        }
+        val previous = ru.outsideproarts.oassist.core.model.diagnostics.Diagnostics.swapForTest(recorder)
+        val executor = java.util.concurrent.Executors.newSingleThreadExecutor { Thread(it, "agent-stream-context") }
+        val callbackExecutor = java.util.concurrent.Executors.newSingleThreadExecutor { Thread(it, "agent-callback-context") }
+        try {
+            val agent = AgentLoop(
+                FakeModelClient("Привет!"),
+                events = events,
+                streamContext = executor.asCoroutineDispatcher(),
+                callbackContext = callbackExecutor.asCoroutineDispatcher(),
+            )
+            agent.stream(
+                modelId = "test-model",
+                systemPrompt = null,
+                history = emptyList(),
+                userMessage = "q",
+                onTurnMessages = { callbackThreads += Thread.currentThread().name },
+            ).toList()
+            // Весь upstream стрима (запрос, диагностика, тулы) строится в streamContext,
+            // а не на потоке коллектора — иначе сборка агента фризит UI.
+            assertTrue("диагностика стрима пишется не из streamContext: $recordThreads", recordThreads.isNotEmpty())
+            assertTrue("диагностика стрима пишется не из streamContext: $recordThreads", recordThreads.all { it.startsWith("agent-stream-context") })
+            // Колбэки слоёв возвращаются в callbackContext: их очереди записи
+            // однонитные и рассчитывают на поток коллектора.
+            assertTrue("колбэки слоёв вызваны не из callbackContext: $callbackThreads", callbackThreads.isNotEmpty())
+            assertTrue("колбэки слоёв вызваны не из callbackContext: $callbackThreads", callbackThreads.all { it.startsWith("agent-callback-context") })
+        } finally {
+            executor.shutdown()
+            callbackExecutor.shutdown()
+            ru.outsideproarts.oassist.core.model.diagnostics.Diagnostics.swapForTest(previous)
+        }
+    }
+
+    @Test
+    fun stream_defaultContextKeepsCallbacksOnCollectorThread() = runTest {
+        val collectorThread = Thread.currentThread().name
+        val seenThreads = java.util.concurrent.CopyOnWriteArrayList<String>()
+        val recorder = object : ru.outsideproarts.oassist.core.model.diagnostics.DiagnosticRecorder {
+            override fun record(
+                event: ru.outsideproarts.oassist.core.model.diagnostics.DiagnosticEvent,
+                secrets: Collection<String>,
+            ) {
+                seenThreads += Thread.currentThread().name
+            }
+
+            override fun health() = ru.outsideproarts.oassist.core.model.diagnostics.DiagnosticHealth(
+                available = true, contentEnabled = true, droppedEvents = 0, storedBytes = 0,
+            )
+        }
+        val previous = ru.outsideproarts.oassist.core.model.diagnostics.Diagnostics.swapForTest(recorder)
+        try {
+            val agent = AgentLoop(FakeModelClient("Привет!"))
+            agent.stream(
+                modelId = "test-model",
+                systemPrompt = null,
+                history = emptyList(),
+                userMessage = "q",
+                onTurnMessages = { seenThreads += Thread.currentThread().name },
+            ).toList()
+            // Дефолтные контексты — прежнее поведение: диагностика и колбэки
+            // идут на потоке коллектора.
+            assertTrue("дефолтный контекст сместил побочные эффекты: $seenThreads", seenThreads.isNotEmpty())
+            assertTrue("дефолтный контекст сместил побочные эффекты: $seenThreads", seenThreads.all { it == collectorThread })
+        } finally {
+            ru.outsideproarts.oassist.core.model.diagnostics.Diagnostics.swapForTest(previous)
+        }
     }
 
     @Test

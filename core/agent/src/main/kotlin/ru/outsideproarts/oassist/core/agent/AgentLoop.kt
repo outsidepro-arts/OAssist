@@ -3,6 +3,7 @@ package ru.outsideproarts.oassist.core.agent
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.flowOn
+import kotlin.coroutines.CoroutineContext
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.Json
@@ -65,9 +66,31 @@ class AgentLoop(
     private val screenLocked: () -> Boolean = { false },
     private val fallbackFarewell: String? = null,
     private val diagnostics: DiagnosticRecorder,
+    /**
+     * Контекст построения стрима (upstream): сериализация запросов,
+     * диагностика wire-трафика, санитайз контента событий, исполнение тулов.
+     * По умолчанию — поток коллектора (прежнее поведение); фабрика приложения
+     * передаёт `Dispatchers.IO`, чтобы тяжёлая работа не шла на UI-потоке
+     * (оверлей ассистента собирает стрим на главном). Инструменты сами
+     * переходят на Main там, где он нужен (WebRender, UiActions, DeviceActions).
+     */
+    private val streamContext: CoroutineContext = kotlin.coroutines.EmptyCoroutineContext,
+    /**
+     * Контекст вызова колбэков слоёв (`onTurnMessages`, `onPinChange`,
+     * `AgentEvents`): слои Chat/Share исторически рассчитывают на поток
+     * коллектора (их очереди записи однонитные), поэтому колбэки возвращаются
+     * из upstream в [callbackContext] (фабрика передаёт `Dispatchers.Main`).
+     * `NonCancellable` — терминальный transcript и эффекты не теряются при
+     * отмене хода. Дефолт — без переключения (прежнее поведение).
+     */
+    private val callbackContext: CoroutineContext = kotlin.coroutines.EmptyCoroutineContext,
 ) {
     private fun diagnosticSecrets(): Collection<String> =
         modelClient.diagnosticSecrets() + toolRegistry?.diagnosticSecrets().orEmpty()
+
+    /** Колбэк слоя в его контексте; NonCancellable — событие не теряется при отмене. */
+    private suspend fun <T> inCallbackContext(block: suspend () -> T): T =
+        withContext(kotlinx.coroutines.NonCancellable + callbackContext) { block() }
 
     /** Ответить на запрос подтверждения; `false` — такого ожидания нет. */
     fun resolveApproval(callId: String, decision: ApprovalDecision): Boolean =
@@ -117,10 +140,10 @@ class AgentLoop(
         val turnStart = messages.size
         var turnDelivered = false
         var startedCallId: String? = null
-        fun deliverTurn() {
+        suspend fun deliverTurn() {
             if (turnDelivered) return
             turnDelivered = true
-            onTurnMessages?.invoke(messages.drop(turnStart).toList())
+            inCallbackContext { onTurnMessages?.invoke(messages.drop(turnStart).toList()) }
         }
         try {
         val liveSkillInstructions = linkedSetOf<String>()
@@ -253,7 +276,7 @@ class AgentLoop(
                 if (contentSb.isNotEmpty()) emit(ChatChunk.Content(contentSb.toString()))
                 val finalUsage = turnUsageWithRequests()
                 emit(ChatChunk.Finish(reason = "stop", abrupt = streamAbrupt, usage = finalUsage))
-                finalUsage?.let { events?.onTurnUsage(it) }
+                finalUsage?.let { usage -> inCallbackContext { events?.onTurnUsage(usage) } }
                 diagnostics.emit(DiagnosticKind.OPERATION_END, diagnosticOperation,
                     attributes = mapOf("reason" to "stop", "abrupt" to streamAbrupt.toString()), secrets = diagnosticSecrets())
                 return@flow
@@ -311,7 +334,7 @@ class AgentLoop(
                 val toolSummary = args?.let { toolRegistry?.find(tc.name)?.describeForConfirmation(it) }
                     ?: "${tc.name}: ${tc.argumentsJson}"
                 val narrationName = toolRegistry?.find(tc.name)?.narrationName ?: tc.name
-                if (!includesBuiltinBye) events?.onToolCall(narrationName, tc.argumentsJson, toolSummary)
+                if (!includesBuiltinBye) inCallbackContext { events?.onToolCall(narrationName, tc.argumentsJson, toolSummary) }
                 val result = applyPinChange(
                     when {
                         invalidByeBatch -> ToolResult(false, "bye должен быть единственным вызовом раунда; повторите запрос отдельно")
@@ -336,7 +359,7 @@ class AgentLoop(
                 if (result.success && toolRegistry?.find(tc.name) is SkillGetTool) {
                     result.ownerInstructions?.takeIf { it.isNotBlank() }?.let(liveSkillInstructions::add)
                 }
-                if (!includesBuiltinBye) events?.onToolResult(narrationName, result.output, result.success)
+                if (!includesBuiltinBye) inCallbackContext { events?.onToolResult(narrationName, result.output, result.success) }
                 // Результат — отдельной сущностью ToolResult (в полотно «Ход работы»,
                 // не в основной ответ; в синтез не идёт). Текстовый маркер
                 // `[name: output]` больше не эмитим — модель получает результат
@@ -359,7 +382,7 @@ class AgentLoop(
                     deliverTurn()
                     val finalUsage = turnUsageWithRequests()
                     emit(ChatChunk.Finish(reason = "stop", abrupt = streamAbrupt, usage = finalUsage, closeSession = true))
-                    finalUsage?.let { events?.onTurnUsage(it) }
+                    finalUsage?.let { usage -> inCallbackContext { events?.onTurnUsage(usage) } }
                     diagnostics.emit(DiagnosticKind.OPERATION_END, diagnosticOperation,
                         attributes = mapOf("reason" to "bye"), secrets = diagnosticSecrets())
                     return@flow
@@ -371,7 +394,7 @@ class AgentLoop(
         deliverTurn()
         val finalUsage = turnUsageWithRequests()
         emit(ChatChunk.Finish(reason = "max_tool_rounds", usage = finalUsage))
-        finalUsage?.let { events?.onTurnUsage(it) }
+        finalUsage?.let { usage -> inCallbackContext { events?.onTurnUsage(usage) } }
         diagnostics.emit(DiagnosticKind.OPERATION_END, diagnosticOperation,
             attributes = mapOf("reason" to "max_tool_rounds"), secrets = diagnosticSecrets())
         } finally {
@@ -399,7 +422,7 @@ class AgentLoop(
                 attributes = mapOf("error" to e.javaClass.simpleName), secrets = diagnosticSecrets())
             throw e
         }
-    }
+    }.flowOn(streamContext)
 
     suspend fun complete(
         modelId: String,
@@ -521,7 +544,7 @@ class AgentLoop(
             pin = if (change.pinned) MessagePin(change.note) else null,
         )
         try {
-            onPinChange?.invoke(change)
+            inCallbackContext { onPinChange?.invoke(change) }
         } catch (cancel: kotlinx.coroutines.CancellationException) {
             throw cancel
         } catch (failure: Throwable) {

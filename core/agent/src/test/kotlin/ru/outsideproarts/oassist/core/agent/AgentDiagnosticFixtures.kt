@@ -17,10 +17,12 @@ internal fun AgentLoop(
     permissionRequester: PermissionRequester? = null,
     screenLocked: () -> Boolean = { false },
     fallbackFarewell: String? = null,
+    streamContext: kotlin.coroutines.CoroutineContext = kotlin.coroutines.EmptyCoroutineContext,
+    callbackContext: kotlin.coroutines.CoroutineContext = kotlin.coroutines.EmptyCoroutineContext,
 ): AgentLoop = AgentLoop(
     modelClient, toolRegistry, approvalController, approvalPolicy, events, visionEnabled,
     reasoningEnabled, maxToolRounds, sessionScope, permissionRequester, screenLocked,
-    fallbackFarewell, Diagnostics,
+    fallbackFarewell, Diagnostics, streamContext, callbackContext,
 )
 
 internal fun ToolRegistry(tools: List<Tool>, disabled: Set<String> = emptySet()): ToolRegistry =
