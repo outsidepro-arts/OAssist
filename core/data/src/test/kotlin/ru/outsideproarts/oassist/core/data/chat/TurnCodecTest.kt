@@ -208,6 +208,42 @@ class TurnCodecTest {
     }
 
     @Test
+    fun encode_externalizesWorkImagesToFiles() {
+        val payload = TurnCodec.encode(fullTurn(), chatId = "c1", turnId = "t1", media = media)
+
+        // Картинки work-событий — файлами (ref), а не инлайн-base64: payload хода
+        // с сотнями скриншотов иначе превышает лимит CursorWindow (~2 МБ).
+        assertFalse(payload.contains("imageBase64"))
+        assertTrue(payload.contains("c1/t1_w1_0.jpg"))
+        assertTrue(File(root, "c1/t1_w1_0.jpg").isFile)
+    }
+
+    @Test
+    fun decode_legacyInlineWorkImages_stillHydrate() {
+        // Payload до выноса work-картинок в файлы — инлайн-base64 читается без миграции.
+        val legacy = """{"userText":"q","work":[{"type":"thought","text":"смотрю"},""" +
+            """{"type":"tool","name":"screenshot","output":"ok","isError":false,""" +
+            """"images":[{"imageBase64":"${base64("SHOT")}","mimeType":"image/jpeg","width":5,"height":6}]}]}"""
+
+        val restored = TurnCodec.decode(legacy, media)!!
+        val tool = restored.work[1] as WorkEvent.Tool
+        assertEquals(base64("SHOT"), tool.images.single().imageBase64)
+        assertEquals(5, tool.images.single().width)
+        assertEquals(6, tool.images.single().height)
+    }
+
+    @Test
+    fun decode_missingWorkImageFile_dropsOnlyImages() {
+        val payload = TurnCodec.encode(fullTurn(), chatId = "c1", turnId = "t1", media = media)
+        File(root, "c1/t1_w1_0.jpg").delete()
+
+        val restored = TurnCodec.decode(payload, media)!!
+        val tool = restored.work[1] as WorkEvent.Tool
+        assertEquals("device_state", tool.name)
+        assertTrue(tool.images.isEmpty())
+    }
+
+    @Test
     fun decode_missingMediaFile_dropsOnlyMedia() {
         val payload = TurnCodec.encode(fullTurn(), chatId = "c1", turnId = "t1", media = media)
         File(root, "c1/t1_a.wav").delete()

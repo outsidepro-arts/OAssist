@@ -437,6 +437,8 @@ class ChatRepositoryInstrumentedTest {
         reopen()
         assertEquals(listOf(turn("a"), turn("b")), repository.loadTurns("chat"))
         allowWrites()
+        // reopen() пересоздаёт репозиторий — наблюдатель диагностики навешивается заново.
+        repository.onDiagnosticDiscard = { discarded.add(it) }
         repository.deleteTurn("chat", rows[1].id)
         assertEquals(listOf("operation-b", "operation-b"), discarded)
         reopen()
@@ -510,5 +512,62 @@ class ChatRepositoryInstrumentedTest {
         val cleared = repository.loadTurnEntries("chat").first { it.id == "turn-a" }.turn
         assertNull(cleared.turn[1].pin)
         assertEquals(MessagePin("референс"), cleared.userPin)
+    }
+
+    /**
+     * Payload больше лимита CursorWindow (~2 МБ): строка переживает загрузку,
+     * закрепление и удаление. Регрессия «Row too big to fit into CursorWindow»:
+     * полное чтение колонки payload на таких строках падало — диалог ассистента
+     * переставал открываться и сохранять новые ходы.
+     */
+    @Test fun oversizedPayloadSurvivesLoadPinDeleteAcrossReopen() = runBlocking {
+        repository.createChat(AssistMode.CHAT, "chat", "chat")
+        val big = turn("big").copy(answer = "A".repeat(3 * 1024 * 1024))
+        repository.appendTurn("chat", big, turnId = "turn-big")
+
+        reopen()
+        assertEquals(listOf(big), repository.loadTurns("chat"))
+
+        assertTrue(repository.setPin("chat", "turn-big", 0, pinned = true, note = "крупный"))
+        reopen()
+        assertEquals(MessagePin("крупный"), repository.loadTurnEntries("chat").single().turn.userPin)
+
+        val discarded = mutableListOf<String>()
+        repository.onDiagnosticDiscard = { discarded += it }
+        repository.deleteTurn("chat", "turn-big")
+        assertTrue(database.turnDao().listMetaForChat("chat").isEmpty())
+        assertEquals(listOf("operation-big"), discarded)
+        assertTrue(files().isEmpty())
+    }
+
+    /** Перезапись снимка ассистента с крупной строкой в БД: чтение старых id
+     *  не должно проходить через полные payload (Row too big). */
+    @Test fun oversizedAssistantSnapshotRewritesAndLoadsIntact() = runBlocking {
+        val big = turn("big").copy(answer = "B".repeat(3 * 1024 * 1024))
+        repository.replaceAssistantTurns { listOf(StoredTurnEntry("turn-big", big)) }
+
+        // Вторая перезапись читает уже лежащую в БД крупную строку ради сохранения id.
+        repository.replaceAssistantTurns {
+            listOf(StoredTurnEntry("turn-big", big), StoredTurnEntry("turn-second", turn("second")))
+        }
+
+        reopen()
+        assertEquals(listOf("turn-big", "turn-second"), repository.loadTurnEntries(ChatRepository.ASSISTANT_CHAT_ID).map { it.id })
+        assertEquals(listOf(big, turn("second")), repository.loadTurns(ChatRepository.ASSISTANT_CHAT_ID))
+    }
+
+    /** Удаление чата с крупными строками: корни диагностики читаются без полных
+     *  payload (Row too big) и стираются до транзакции, как у остальных удалений. */
+    @Test fun oversizedChatDeleteClearsRowsMediaAndDiagnostics() = runBlocking {
+        val big = turn("big").copy(answer = "C".repeat(3 * 1024 * 1024))
+        repository.replaceAssistantTurns { listOf(StoredTurnEntry("turn-big", big)) }
+
+        val deleted = mutableListOf<Pair<String, Set<String>>>()
+        repository.onDiagnosticDelete = { chatId, roots -> deleted += chatId to roots }
+        repository.deleteChat(ChatRepository.ASSISTANT_CHAT_ID)
+
+        assertEquals(listOf(ChatRepository.ASSISTANT_CHAT_ID to setOf("operation-big")), deleted)
+        assertTrue(database.turnDao().listMetaForChat(ChatRepository.ASSISTANT_CHAT_ID).isEmpty())
+        assertTrue(files().isEmpty())
     }
 }

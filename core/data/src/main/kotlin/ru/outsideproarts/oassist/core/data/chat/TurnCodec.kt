@@ -1,5 +1,7 @@
 package ru.outsideproarts.oassist.core.data.chat
 
+import kotlinx.serialization.EncodeDefault
+import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
@@ -32,7 +34,7 @@ internal data class TurnPayload(
     /** Закрепление реплики пользователя; отсутствие поля у старых ходов — не закреплено. */
     val userPin: MessagePin? = null,
     /** Новое полотно (мыслевые блоки + тулы в хронологии); null — legacy-ход. */
-    val work: List<WorkEvent>? = null,
+    val work: List<WorkEventJson>? = null,
     /** Legacy (до WorkEvent): сплошной текст мыслей — мигрируется в [work]. */
     val thought: String = "",
     /** Legacy (до WorkEvent): плоский список тулов — мигрируется в [work]. */
@@ -77,6 +79,44 @@ internal data class ToolJson(
     val images: List<MediaJson> = emptyList(),
 )
 
+/**
+ * DTO полотна «Ход работы» для payload: как [WorkEvent], но картинки тул-событий
+ * хранятся ref'ами файлов ([WorkImageJson]), а не инлайн-base64 — payload хода
+ * с сотнями скриншотов иначе разрастается до мегабайт и ломает чтение строк
+ * через CursorWindow (лимит ~2 МБ на строку). Discriminator совпадает с
+ * [WorkEvent] ("thought"/"tool") — старые payload читаются без миграции.
+ */
+@Serializable
+internal sealed interface WorkEventJson {
+    @Serializable
+    @SerialName("thought")
+    data class Thought(val text: String) : WorkEventJson
+
+    @Serializable
+    @SerialName("tool")
+    data class Tool(
+        val name: String,
+        val output: String? = null,
+        val isError: Boolean = false,
+        val images: List<WorkImageJson> = emptyList(),
+    ) : WorkEventJson
+}
+
+/**
+ * Картинка тул-события: ref файла ([path]) либо legacy-инлайн [imageBase64]
+ * (payload до выноса work-картинок в файлы) — читаются обе формы.
+ */
+@Serializable
+internal data class WorkImageJson(
+    val path: String = "",
+    val mimeType: String = "",
+    val width: Int = 0,
+    val height: Int = 0,
+    /** Legacy-инлайн: в новых payload поле опускается ([EncodeDefault.Mode.NEVER]). */
+    @EncodeDefault(EncodeDefault.Mode.NEVER)
+    val imageBase64: String? = null,
+)
+
 @Serializable
 internal data class MediaJson(
     val path: String = "",
@@ -111,7 +151,7 @@ object TurnCodec {
                 media.writeImage(chatId, turnId, "u$index", image)?.toJson()
             },
             userPin = turn.userPin,
-            work = turn.work,
+            work = turn.work.mapIndexed { index, event -> event.toJson(chatId, turnId, index, media) },
             answer = turn.answer,
             usage = turn.usage,
             turn = turn.turn.mapIndexed { index, message ->
@@ -171,11 +211,12 @@ object TurnCodec {
     }
 
     /**
-     * Полотно: новый формат `work` как есть; legacy (thought+tools без work) —
+     * Полотно: новый формат `work` (картинки тул-событий гидратируются из
+     * файлов, legacy-инлайн читается как есть); legacy (thought+tools без work) —
      * миграция «мыслевой блок → тулы по порядку» (порядок тогда не сохранялся).
      */
     private fun decodeWork(dto: TurnPayload, media: ChatMediaStore): List<WorkEvent> {
-        dto.work?.let { return it }
+        dto.work?.let { return it.map { event -> event.toModel(media) } }
         val events = mutableListOf<WorkEvent>()
         if (dto.thought.isNotBlank()) events += WorkEvent.Thought(dto.thought)
         dto.tools.forEach { tool ->
@@ -188,6 +229,35 @@ object TurnCodec {
         }
         return events
     }
+
+    private fun WorkEvent.toJson(chatId: String, turnId: String, index: Int, media: ChatMediaStore): WorkEventJson =
+        when (this) {
+            is WorkEvent.Thought -> WorkEventJson.Thought(text)
+            is WorkEvent.Tool -> WorkEventJson.Tool(
+                name = name,
+                output = output,
+                isError = isError,
+                images = images.mapIndexedNotNull { imageIndex, image ->
+                    media.writeImage(chatId, turnId, "w${index}_$imageIndex", image)?.toWorkJson()
+                },
+            )
+        }
+
+    private fun WorkEventJson.toModel(media: ChatMediaStore): WorkEvent = when (this) {
+        is WorkEventJson.Thought -> WorkEvent.Thought(text)
+        is WorkEventJson.Tool -> WorkEvent.Tool(
+            name = name,
+            output = output,
+            isError = isError,
+            images = images.mapNotNull { it.toImage(media) },
+        )
+    }
+
+    private fun WorkImageJson.toImage(media: ChatMediaStore): ImagePart? =
+        imageBase64?.let { ImagePart(it, mimeType, width, height) }
+            ?: MediaRef(path, mimeType, width, height).takeIf { it.path.isNotEmpty() }?.let(media::readImage)
+
+    private fun MediaRef.toWorkJson(): WorkImageJson = WorkImageJson(path, mimeType, width, height)
 
     /**
      * Обновить флаг закрепления в payload точечной правкой JSON, без

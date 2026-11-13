@@ -15,6 +15,7 @@ import kotlinx.coroutines.withContext
 import ru.outsideproarts.oassist.core.data.db.ChatEntity
 import ru.outsideproarts.oassist.core.data.db.OAssistDatabase
 import ru.outsideproarts.oassist.core.data.db.TurnEntity
+import ru.outsideproarts.oassist.core.data.db.TurnMeta
 import ru.outsideproarts.oassist.core.model.AssistMode
 import ru.outsideproarts.oassist.core.model.ChatKind
 import ru.outsideproarts.oassist.core.model.ChatMessage
@@ -64,8 +65,8 @@ class ChatRepository(
     suspend fun deleteChat(id: String) {
         diagnosticOwnershipLock.withLock {
             withContext(NonCancellable) {
-                val diagnosticRoots = database.turnDao().listForChat(id)
-                    .mapNotNull { TurnCodec.diagnosticOperationId(it.payload) }.toSet()
+                val diagnosticRoots = database.turnDao().listMetaForChat(id)
+                    .mapNotNull { TurnCodec.diagnosticOperationId(readPayload(it)) }.toSet()
                 kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
                     onDiagnosticDelete(id, diagnosticRoots)
                 }
@@ -139,12 +140,12 @@ class ChatRepository(
      * [deleteChat]): сбой стирания оставляет ходы и медиа на месте, повтор допустим.
      * Медиа — только после коммита, чтобы сбой БД не оставил живой ход без файлов.
      */
-    private suspend fun deleteTurnsWhere(chatId: String, select: (List<TurnEntity>) -> List<TurnEntity>) {
+    private suspend fun deleteTurnsWhere(chatId: String, select: (List<TurnMeta>) -> List<TurnMeta>) {
         diagnosticOwnershipLock.withLock {
             withContext(NonCancellable) {
-                val turns = select(database.turnDao().listForChat(chatId))
+                val turns = select(database.turnDao().listMetaForChat(chatId))
                 if (turns.isEmpty()) return@withContext
-                val roots = turns.mapNotNull { TurnCodec.diagnosticOperationId(it.payload) }.toSet()
+                val roots = turns.mapNotNull { TurnCodec.diagnosticOperationId(readPayload(it)) }.toSet()
                 if (roots.isNotEmpty()) {
                     kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
                         roots.forEach { onDiagnosticDiscard(it) }
@@ -167,9 +168,30 @@ class ChatRepository(
 
     /** Ходы с идентификаторами строк (ручки удаления/отката); битые payload пропускаются. */
     suspend fun loadTurnEntries(chatId: String): List<StoredTurnEntry> = diagnosticOwnershipLock.withLock {
-        database.turnDao().listForChat(chatId).mapNotNull { entity ->
-            TurnCodec.decode(entity.payload, media)?.let { StoredTurnEntry(entity.id, it) }
+        database.turnDao().listMetaForChat(chatId).mapNotNull { meta ->
+            TurnCodec.decode(readPayload(meta), media)?.let { StoredTurnEntry(meta.id, it) }
         }
+    }
+
+    /**
+     * Payload хода целиком, дочитывая кусками ([TurnDao.payloadSlice]):
+     * строки бывают больше лимита CursorWindow, прямое чтение колонки на них
+     * падает с `Row too big to fit into CursorWindow`.
+     */
+    private suspend fun readPayload(meta: TurnMeta): String {
+        if (meta.payloadChars <= 0) return ""
+        val builder = StringBuilder(meta.payloadChars)
+        var offset = 1
+        while (true) {
+            val chunk = database.turnDao().payloadSlice(meta.id, offset, PAYLOAD_CHUNK_CHARS) ?: break
+            if (chunk.isEmpty()) break
+            builder.append(chunk)
+            // substr/length SQLite считают Unicode-код-пойнты — и offset двигаем в
+            // них же (chunk.length — UTF-16 юниты: на суррогатных парах чтение
+            // расползлось бы и начало дублировать куски).
+            offset += chunk.codePointCount(0, chunk.length)
+        }
+        return builder.toString()
     }
 
     /**
@@ -182,11 +204,11 @@ class ChatRepository(
      */
     suspend fun setPin(chatId: String, turnId: String, messageIndex: Int, pinned: Boolean, note: String? = null): Boolean =
         diagnosticOwnershipLock.withLock {
-            val entity = database.turnDao().listForChat(chatId).firstOrNull { it.id == turnId }
+            val meta = database.turnDao().listMetaForChat(chatId).firstOrNull { it.id == turnId }
                 ?: return@withLock false
-            val updated = TurnCodec.pinPayload(entity.payload, messageIndex, MessagePin(note).takeIf { pinned })
+            val updated = TurnCodec.pinPayload(readPayload(meta), messageIndex, MessagePin(note).takeIf { pinned })
                 ?: return@withLock false
-            database.turnDao().update(entity.copy(payload = updated))
+            database.turnDao().updatePayload(turnId, updated)
             onTurnPinned(chatId, turnId, messageIndex, pinned, note)
             true
         }
@@ -220,7 +242,8 @@ class ChatRepository(
      */
     suspend fun replaceAssistantTurns(owner: Long? = null, turns: () -> List<StoredTurnEntry>) = diagnosticOwnershipLock.withLock {
         if (owner != null && owner != assistantOwner) return@withLock
-        val oldTurns = database.turnDao().listForChat(ASSISTANT_CHAT_ID)
+        // Только метаданные: payload строк бывают больше лимита CursorWindow.
+        val oldTurns = database.turnDao().listMetaForChat(ASSISTANT_CHAT_ID)
         val oldIds = oldTurns.map { it.id }.toSet()
         val newTurnIds = mutableListOf<String>()
         var committed = false
@@ -331,5 +354,12 @@ class ChatRepository(
     companion object {
         /** Фиксированный id закреплённого диалога последней сессии ассистента. */
         const val ASSISTANT_CHAT_ID = "assistant_last"
+
+        /**
+         * Размер куска дочитывания payload в символах. Ряд куска всегда должен
+         * помещаться в CursorWindow (~2 МБ) с запасом на UTF-8: 4 байта на
+         * символ — худший случай куска ~1 МБ.
+         */
+        private const val PAYLOAD_CHUNK_CHARS = 256 * 1024
     }
 }

@@ -59,6 +59,19 @@ interface ChatDao {
     suspend fun deleteAll()
 }
 
+/**
+ * Метаданные хода без payload: строки с payload бывают больше лимита
+ * CursorWindow (~2 МБ), полное чтение через `SELECT *` на них падает
+ * (`Row too big to fit into CursorWindow`). [payloadChars] — длина payload
+ * в символах SQLite, для дочитывания кусками через [TurnDao.payloadSlice].
+ */
+data class TurnMeta(
+    val id: String,
+    val seq: Int,
+    @ColumnInfo(name = "payload_chars") val payloadChars: Int,
+    @ColumnInfo(name = "created_at") val createdAt: Long,
+)
+
 @Dao
 interface TurnDao {
     @Query("SELECT * FROM turns WHERE chat_id = :chatId ORDER BY seq ASC")
@@ -66,6 +79,23 @@ interface TurnDao {
 
     @Query("SELECT * FROM turns WHERE chat_id = :chatId ORDER BY seq ASC")
     suspend fun listForChat(chatId: String): List<TurnEntity>
+
+    @Query(
+        "SELECT id, seq, length(payload) AS payload_chars, created_at " +
+            "FROM turns WHERE chat_id = :chatId ORDER BY seq ASC",
+    )
+    suspend fun listMetaForChat(chatId: String): List<TurnMeta>
+
+    /**
+     * Кусок payload хода, начиная с позиции [offset] (1-based, в символах
+     * SQLite), не длиннее [limit] символов. Ряд всегда меньше лимита
+     * CursorWindow — так читаются строки любого размера. Null — хода нет.
+     */
+    @Query("SELECT substr(payload, :offset, :limit) FROM turns WHERE id = :id")
+    suspend fun payloadSlice(id: String, offset: Int, limit: Int): String?
+
+    @Query("UPDATE turns SET payload = :payload WHERE id = :id")
+    suspend fun updatePayload(id: String, payload: String)
 
     @Query("SELECT COALESCE(MAX(seq), -1) FROM turns WHERE chat_id = :chatId")
     suspend fun maxSeq(chatId: String): Int
