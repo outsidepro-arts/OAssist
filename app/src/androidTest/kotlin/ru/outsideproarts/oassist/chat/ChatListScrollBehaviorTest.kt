@@ -19,7 +19,7 @@ import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performTouchInput
-import androidx.compose.ui.test.swipeUp
+import androidx.compose.ui.test.swipeDown
 import androidx.compose.ui.unit.dp
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
@@ -98,8 +98,9 @@ class ChatListScrollBehaviorTest {
                 state.layoutInfo.totalItemsCount == items.size && state.isChatEnd()
             }
 
-            // Пользователь прокрутил вверх: рост ленты не должен дёргать экран.
-            compose.onNode(hasScrollAction()).performTouchInput { swipeUp() }
+            // Пользователь прокрутил вверх (жест к низу экрана — к началу ленты):
+            // рост ленты не должен дёргать экран.
+            compose.onNode(hasScrollAction()).performTouchInput { swipeDown() }
             compose.waitForIdle()
             compose.runOnIdle { assertFalse(state.isChatEnd()) }
             val before = compose.runOnIdle {
