@@ -7,6 +7,7 @@ import androidx.compose.ui.test.ExperimentalTestApi
 import androidx.compose.ui.test.hasSetTextAction
 import androidx.compose.ui.test.isFocused
 import androidx.compose.ui.test.junit4.ComposeContentTestRule
+import androidx.compose.ui.test.onAllNodesWithContentDescription
 import androidx.compose.ui.test.onRoot
 import androidx.compose.ui.test.performKeyInput
 import androidx.compose.ui.test.pressKey
@@ -18,6 +19,19 @@ internal fun ActivityScenario<ShareActivity>.getString(@StringRes resId: Int): S
     lateinit var text: String
     onActivity { text = it.getString(resId) }
     return text
+}
+
+/**
+ * Имя кнопки действия в composer: единая кнопка (Mic / Send) объявляет текущее
+ * состояние — при пустом поле это подсказка диктовки, при тексте — «Отправить».
+ * Геометрические проверки измеряют одну и ту же кнопку в её текущем состоянии.
+ */
+internal fun ComposeContentTestRule.composeActionLabel(scenario: ActivityScenario<ShareActivity>): String {
+    val send = scenario.getString(ru.outsideproarts.oassist.feature.share.R.string.share_send)
+    if (onAllNodesWithContentDescription(send).fetchSemanticsNodes().isNotEmpty()) return send
+    val mic = scenario.getString(ru.outsideproarts.oassist.feature.share.R.string.share_mic)
+    val hold = scenario.getString(ru.outsideproarts.oassist.feature.share.R.string.share_hold_hint)
+    return "$mic. $hold"
 }
 
 @OptIn(ExperimentalTestApi::class)

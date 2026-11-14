@@ -118,7 +118,6 @@ class ShareInsetsGeometryTest {
                 compose.onNodeWithText(newChat).performClick()
                 val back = scenario.getString(ShareR.string.share_back)
                 val question = scenario.getString(ShareR.string.share_ask_label)
-                val send = scenario.getString(ShareR.string.share_send)
                 compose.waitUntil(10_000) { compose.onAllNodesWithContentDescription(back).fetchSemanticsNodes().isNotEmpty() }
                 compose.dismissShareKeyboard(scenario)
                 checkBounds("conversation back", rect(back, true))
@@ -129,7 +128,8 @@ class ShareInsetsGeometryTest {
                     val expected = it.windowManager.currentWindowMetrics.bounds.bottom - safe.bottom - 16 * it.resources.displayMetrics.density
                     assertTrue("question bottom gap: $initialQuestion expected=$expected", kotlin.math.abs(initialQuestion.bottom - expected) <= 3f)
                 }
-                val initialSend = rect(send, true)
+                // Кнопка действия меняет имя по состоянию (Mic/Send) — измеряем её текущее имя.
+                val initialSend = rect(compose.composeActionLabel(scenario), true)
                 checkBounds("conversation send", initialSend)
                 compose.onNodeWithText(question).performClick().performTextInput("geometry question")
                 compose.waitUntil(10_000) {
@@ -144,7 +144,7 @@ class ShareInsetsGeometryTest {
                 }
                 checkBounds("IME back", rect(back, true), true)
                 val imeQuestion = rect(question)
-                val imeSend = rect(send, true)
+                val imeSend = rect(compose.composeActionLabel(scenario), true)
                 checkBounds("IME question", imeQuestion, true)
                 checkBounds("IME send", imeSend, true)
                 assertTrue("IME clipped question: $imeQuestion vs $initialQuestion", imeQuestion.height >= initialQuestion.height - 1)
@@ -206,7 +206,7 @@ class ShareInsetsGeometryTest {
                     val expected = it.windowManager.currentWindowMetrics.bounds.bottom - safe.bottom - 16 * it.resources.displayMetrics.density
                     assertTrue("empty question bottom gap: $questionBounds expected=$expected", kotlin.math.abs(questionBounds.bottom - expected) <= 3f)
                 }
-                checkEmpty(scenario.getString(ShareR.string.share_send), true)
+                checkEmpty(compose.composeActionLabel(scenario), true)
             }
         } finally {
             try {

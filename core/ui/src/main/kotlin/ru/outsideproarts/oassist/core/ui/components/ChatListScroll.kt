@@ -124,7 +124,11 @@ suspend fun LazyListState.scrollChatToEnd(animate: Boolean = false) {
     val last = info.visibleItemsInfo.lastOrNull { it.index == lastIndex } ?: return
     val delta = (last.offset + last.size) - info.viewportEndOffset
     if (delta > 0) {
-        if (animate) animateScrollToItem(lastIndex, delta) else scrollToItem(lastIndex, delta)
+        // Цель задаётся сдвигом первого видимого элемента, поэтому считается от
+        // размера последнего элемента: текущий сдвиг элемента уже входит в этот
+        // сдвиг и при суммировании с delta недокручивает ленту до низа.
+        val target = (last.size - info.viewportEndOffset).coerceAtLeast(0)
+        if (animate) animateScrollToItem(lastIndex, target) else scrollToItem(lastIndex, target)
     }
 }
 
