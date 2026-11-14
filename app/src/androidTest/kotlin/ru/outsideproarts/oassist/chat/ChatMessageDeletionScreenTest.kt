@@ -2,9 +2,11 @@ package ru.outsideproarts.oassist.chat
 
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.ui.semantics.SemanticsActions
 import androidx.compose.ui.semantics.SemanticsProperties
 import androidx.compose.ui.semantics.getOrNull
 import androidx.compose.ui.test.SemanticsMatcher
+import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.test.assertCountEquals
 import androidx.compose.ui.test.hasText
 import androidx.compose.ui.test.junit4.createComposeRule
@@ -13,7 +15,7 @@ import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
-import androidx.compose.ui.test.performTextInput
+import androidx.compose.ui.test.performSemanticsAction
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
 import java.util.concurrent.CountDownLatch
@@ -175,11 +177,24 @@ class ChatMessageDeletionScreenTest {
         }
     }
 
-    /** Дождаться отрисовки пузырей ленты: меню индексируются по дереву, а не по состоянию VM. */
+    /**
+     * Дождаться отрисовки пузырей ленты: меню индексируются по дереву, а не по состоянию VM.
+     * При таймауте падение описывает фактическое состояние ленты — без него флаки
+     * на медленных устройствах не диагностируется.
+     */
     private fun awaitActionMenus(count: Int) {
-        compose.waitUntil(10_000) {
-            compose.onAllNodesWithContentDescription(context.getString(UiR.string.msg_actions_menu))
-                .fetchSemanticsNodes().size == count
+        var seen = 0
+        try {
+            compose.waitUntil(10_000) {
+                seen = compose.onAllNodesWithContentDescription(context.getString(UiR.string.msg_actions_menu))
+                    .fetchSemanticsNodes().size
+                seen == count
+            }
+        } catch (timeout: Throwable) {
+            val state = "menus=$seen/$count isStreaming=${activeVm.isStreaming} isLoadingHistory=${activeVm.isLoadingHistory} " +
+                "turns=${activeVm.turnStore.map { it.turn.userText }} " +
+                "rows=${activeVm.messages.map { "${it.role}:${it.turnId?.take(4)}:${it.answer.take(12)}" }}"
+            throw AssertionError("Action menus never reached $count ($state)", timeout)
         }
     }
 
@@ -193,7 +208,11 @@ class ChatMessageDeletionScreenTest {
     }
 
     private fun send(text: String) {
-        compose.onNodeWithText(context.getString(ChatR.string.chat_input_hint)).performTextInput(text)
+        // Текст задаётся семантическим действием, без IME: открытая клавиатура
+        // сжимает вьюпорт ленты, и на узком экране (CI-эмулятор 320x640) нижние
+        // пузыри выезжают из составленного дерева — действия над ними недоступны.
+        compose.onNodeWithText(context.getString(ChatR.string.chat_input_hint))
+            .performSemanticsAction(SemanticsActions.SetText) { it(AnnotatedString(text)) }
         compose.onNodeWithContentDescription(context.getString(ChatR.string.chat_send)).performClick()
         compose.waitForIdle()
         compose.waitUntil(10_000) { !activeVm.isStreaming }
