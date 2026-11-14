@@ -65,6 +65,7 @@ class ChatMessageDeletionScreenTest {
                 open("Source")
                 compose.waitUntil(10_000) { vm.turnStore.size == 2 }
                 // Пузыри ленты: [вы 1, ответ 1, вы 2, ответ 2] — удаляем второй ход.
+                awaitActionMenus(4)
                 compose.onAllNodesWithContentDescription(context.getString(UiR.string.msg_actions_menu))[2]
                     .performClick()
                 compose.onNodeWithText(context.getString(UiR.string.msg_action_delete)).performClick()
@@ -92,6 +93,7 @@ class ChatMessageDeletionScreenTest {
             withScreen(fixture, null, "Draft") { vm, requests ->
                 open("Source")
                 compose.waitUntil(10_000) { vm.turnStore.size == 2 }
+                awaitActionMenus(4)
                 compose.onAllNodesWithContentDescription(context.getString(UiR.string.msg_actions_menu))[0]
                     .performClick()
                 compose.onNodeWithText(context.getString(UiR.string.msg_action_rollback)).performClick()
@@ -104,6 +106,8 @@ class ChatMessageDeletionScreenTest {
                 compose.waitUntil(10_000) { requests.size == 1 }
                 assertEquals(listOf("first", "answer first"), requests.single().map { it.content })
                 // На последнем ходе откат скрыт: после него стирать нечего.
+                // Пузыри ленты: [вы 1, ответ 1, вы 3, ответ 3].
+                awaitActionMenus(4)
                 compose.onAllNodesWithContentDescription(context.getString(UiR.string.msg_actions_menu))[3]
                     .performClick()
                 compose.onAllNodesWithText(context.getString(UiR.string.msg_action_rollback)).assertCountEquals(0)
@@ -121,6 +125,7 @@ class ChatMessageDeletionScreenTest {
                     assertTrue(pending.entered.await(10, TimeUnit.SECONDS))
                     // Ход ещё записывается: стирание встаёт в очередь после записи,
                     // лента усекается только после успешного стирания БД.
+                    awaitActionMenus(2)
                     compose.onAllNodesWithContentDescription(context.getString(UiR.string.msg_actions_menu))[0]
                         .performClick()
                     compose.onNodeWithText(context.getString(UiR.string.msg_action_delete)).performClick()
@@ -147,6 +152,7 @@ class ChatMessageDeletionScreenTest {
                 fixture.database.openHelper.writableDatabase.execSQL(
                     "CREATE TRIGGER fail_delete BEFORE DELETE ON turns BEGIN SELECT RAISE(ABORT, 'test abort'); END",
                 )
+                awaitActionMenus(2)
                 compose.onAllNodesWithContentDescription(context.getString(UiR.string.msg_actions_menu))[0]
                     .performClick()
                 compose.onNodeWithText(context.getString(UiR.string.msg_action_delete)).performClick()
@@ -166,6 +172,14 @@ class ChatMessageDeletionScreenTest {
                     vm.turnStore.isEmpty() && runBlocking { fixture.repository.loadTurns(id) }.isEmpty()
                 }
             }
+        }
+    }
+
+    /** Дождаться отрисовки пузырей ленты: меню индексируются по дереву, а не по состоянию VM. */
+    private fun awaitActionMenus(count: Int) {
+        compose.waitUntil(10_000) {
+            compose.onAllNodesWithContentDescription(context.getString(UiR.string.msg_actions_menu))
+                .fetchSemanticsNodes().size == count
         }
     }
 
