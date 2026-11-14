@@ -50,6 +50,7 @@ fun ChatInputButton(
     onHoldRelease: () -> Unit,
     onHoldCancel: (tooShort: Boolean) -> Unit,
     modifier: Modifier = Modifier,
+    enabled: Boolean = true,
     holdEnabled: Boolean = true,
     voiceActionLabel: String? = null,
     voiceStateLabel: String? = null,
@@ -99,8 +100,10 @@ fun ChatInputButton(
         }
     }
 
-    val voiceSemantics = voiceActionLabel?.let { action ->
-        Modifier.oassistCustomAction(action) { onVoiceAction(); true }
+    val voiceSemantics = if (enabled) {
+        voiceActionLabel?.let { action -> Modifier.oassistCustomAction(action) { onVoiceAction(); true } }
+    } else {
+        null
     } ?: Modifier
     val stateSemantics = voiceStateLabel?.let { Modifier.oassistStateDescription(it) } ?: Modifier
     Box(
@@ -110,7 +113,7 @@ fun ChatInputButton(
             .clip(CircleShape)
             .semantics {
                 contentDescription = label
-                if (holdEnabled) {
+                if (enabled && holdEnabled) {
                     // Semantic activation cannot represent a physical hold and release.
                     onLongClick(label = voiceActionLabel ?: label) { onVoiceAction(); true }
                 }
@@ -118,10 +121,11 @@ fun ChatInputButton(
             .combinedClickable(
                 interactionSource = interactions,
                 indication = ripple(),
+                enabled = enabled,
                 role = Role.Button,
                 onClick = onClick,
                 onLongClickLabel = if (canStartHold) holdLabel else label,
-                onLongClick = if (holdEnabled) {
+                onLongClick = if (enabled && holdEnabled) {
                     {
                         val currentPress = press
                         if (!pointerPressed || currentPress == null || !canStartHold) {

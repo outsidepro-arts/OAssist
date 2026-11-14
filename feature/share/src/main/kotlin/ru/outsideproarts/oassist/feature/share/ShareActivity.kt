@@ -802,6 +802,10 @@ private fun ShareConversation(
                     actionContent
                 },
                 holdLabel = holdActionLabel,
+                // Кнопка активна, когда доступно её текущее действие: стоп — всегда,
+                // диктовка — при пустом поле, отправка — только когда canSend
+                // (недоступная отправка должна объявляться disabled, а не игнорироваться).
+                enabled = isStreaming || voiceInput.capturing || isSpeaking || question.text.isBlank() || canSend,
                 canStartHold = (question.text.isBlank() || isSpeaking) && !isStreaming && !voiceInput.capturing && canSend,
                 holdEnabled = !isStreaming && canSend &&
                     (question.text.isBlank() || voiceInput.capturing || isSpeaking || voiceInput.holdActive),
