@@ -713,7 +713,11 @@ fun ChatScreen(
         val id = chatId ?: return
         // Перекрывающееся событие возврата во время загрузки отбрасывается:
         // идущее перечитывание само увидит свежие данные своей выборкой.
-        if (isStreaming || streamJob != null || viewModel.isLoadingHistory) return
+        // streamJob — по isActive: завершённая job может остаться в streamJob
+        // (присвоение после синхронно отработавшего тела, см. regenerateTurn)
+        // и не должна навсегда блокировать перечитывание. isActive покрывает и
+        // хвост стрима после isStreaming=false (дозапись хода).
+        if (isStreaming || streamJob?.isActive == true || viewModel.isLoadingHistory) return
         val repo = ChatHandle.get() ?: return
         val saver = viewModel.turnSavers.forChat(id)
         viewModel.historyJob?.cancel()

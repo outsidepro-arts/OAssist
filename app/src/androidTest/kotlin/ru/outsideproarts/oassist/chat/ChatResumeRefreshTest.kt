@@ -278,7 +278,18 @@ class ChatResumeRefreshTest {
             action(vm)
         } finally {
             compose.runOnIdle { vm.streamJob?.cancel() }
-            compose.waitUntil(10_000) { vm.streamJob == null }
+            try {
+                // Завершённая job может остаться в streamJob (гонка присвоения в
+                // launchTurn) — ждём завершения, а не обнуления ссылки.
+                compose.waitUntil(10_000) { vm.streamJob.let { it == null || it.isCompleted } }
+            } catch (error: Throwable) {
+                throw AssertionError(
+                    "streamJob=${vm.streamJob} isActive=${vm.streamJob?.isActive} " +
+                        "isCompleted=${vm.streamJob?.isCompleted} isCancelled=${vm.streamJob?.isCancelled} " +
+                        "isStreaming=${vm.isStreaming} turns=${vm.turnStore.size}",
+                    error,
+                )
+            }
             compose.runOnIdle { visible.value = false; vm.scope.cancel() }
             compose.waitForIdle()
             ChatHandle.register(previousRepository)
