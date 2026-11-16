@@ -35,6 +35,7 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.rememberDrawerState
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
@@ -50,6 +51,8 @@ import androidx.compose.ui.text.input.KeyboardCapitalization
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.TextFieldValue
 import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
+import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.compose.ui.semantics.semantics
 import android.widget.Toast
 import kotlinx.coroutines.Job
@@ -251,13 +254,16 @@ fun ChatScreen(
 
     /** Фоновое имя диалога от модели; до ответа остаётся плейсхолдер. */
     fun generateTitle(userMsg: String, expectedFirstTurn: StoredTurnEntry) {
-        if (titleLocked || turnStore.firstOrNull() !== expectedFirstTurn) return
+        // Сравнение по id, а не по ссылке: перечитывание открытого диалога
+        // пересобирает ходы новыми объектами с теми же id строк.
+        fun firstTurnUnchanged() = turnStore.firstOrNull()?.id == expectedFirstTurn.id
+        if (titleLocked || !firstTurnUnchanged()) return
         scope.launch(ru.outsideproarts.oassist.core.model.diagnostics.DiagnosticContext(expectedFirstTurn.turn.diagnosticOperationId ?: ru.outsideproarts.oassist.core.model.diagnostics.Diagnostics.newOperationId())) {
-            if (titleLocked || turnStore.firstOrNull() !== expectedFirstTurn) return@launch
+            if (titleLocked || !firstTurnUnchanged()) return@launch
             val generated = runCatching {
                 ChatTitler.generateTitle(sendMode(), userMsg, AgentFactory.get(), firstAnswer = expectedFirstTurn.turn.answer)
             }.getOrNull() ?: return@launch
-            if (!titleLocked && turnStore.firstOrNull() === expectedFirstTurn) {
+            if (!titleLocked && firstTurnUnchanged()) {
                 chatTitle = generated
                 val id = chatId
                 if (id != null) ChatHandle.get()?.renameChat(id, generated)
@@ -693,6 +699,63 @@ fun ChatScreen(
         uiScope.launch { drawerState.close() }
     }
 
+    /**
+     * Перечитать историю и состояние открытого сохранённого диалога (возврат
+     * приложения/вкладки после фоновых изменений: запись Share, снимок ассистента).
+     * Как переоткрытие, но без побочных эффектов [openChat]: идущий стрим не
+     * гасится (перечитывание пропускается), позиция ленты не трогается (за концом
+     * следит политика rememberChatListScroll), черновик без чата не перечитывается.
+     * Незаписанные ходы в памяти не затираются: при сбое записи перечитывание
+     * не выполняется. Удалённый в фоне диалог сбрасывается в пустой новый —
+     * как в [deleteChatFromList].
+     */
+    fun refreshOpenChat() {
+        val id = chatId ?: return
+        // Перекрывающееся событие возврата во время загрузки отбрасывается:
+        // идущее перечитывание само увидит свежие данные своей выборкой.
+        if (isStreaming || streamJob != null || viewModel.isLoadingHistory) return
+        val repo = ChatHandle.get() ?: return
+        val saver = viewModel.turnSavers.forChat(id)
+        viewModel.historyJob?.cancel()
+        val generation = ++viewModel.historyGeneration
+        viewModel.historyChatId = id
+        viewModel.isLoadingHistory = true
+        viewModel.historyJob = scope.launch {
+            try {
+                if (!saver.awaitSaved()) return@launch
+                if (viewModel.historyGeneration != generation) return@launch
+                val summary = repo.getChat(id)
+                if (summary == null) {
+                    // Диалог удалён в фоне: удалённый не должен остаться на экране.
+                    // Очередь записи сбрасывается вместе с диалогом, как в
+                    // deleteChatFromList: её цель больше не существует.
+                    viewModel.turnSavers.discard(id)
+                    resetChat()
+                    return@launch
+                }
+                val turns = repo.loadTurnEntries(id)
+                if (viewModel.historyGeneration != generation) return@launch
+                viewModel.diagnosticOperations = mutableListOf()
+                chatKind = summary.kind
+                chatTitle = summary.title
+                turnStore.clear()
+                turnStore.addAll(turns)
+                loadTurnsIntoUi(turns)
+            } catch (cancel: kotlinx.coroutines.CancellationException) {
+                throw cancel
+            } catch (_: Exception) {
+                if (viewModel.historyGeneration == generation) {
+                    Toast.makeText(context, R.string.chat_history_load_failed, Toast.LENGTH_LONG).show()
+                }
+            } finally {
+                if (viewModel.historyGeneration == generation) {
+                    viewModel.isLoadingHistory = false
+                    viewModel.historyChatId = null
+                }
+            }
+        }
+    }
+
     /** Сохранить текущий несохранённый диалог в список (со всеми ходами). */
     fun saveCurrentChat() {
         val repo = ChatHandle.get() ?: return
@@ -934,6 +997,21 @@ fun ChatScreen(
             }
             wasOnline = online
         }
+    }
+    // Перечитывание открытого диалога при возврате экрана чата в активное состояние:
+    // ON_RESUME после фона (в т.ч. после записи Share или снимка ассистента) и
+    // появление экрана при возврате на вкладку — у нового владельца не бывает
+    // своего ON_RESUME, но addObserver при RESUMED диспатчит ON_RESUME сразу
+    // («появление»). Старт перечитывания синхронен: isLoadingHistory выставлен
+    // до возврата из эффекта, как и в openChat. Позиция — после refreshOpenChat:
+    // эффект его вызывает, локальные fun видны только ниже объявления.
+    val lifecycleOwner = LocalLifecycleOwner.current
+    DisposableEffect(lifecycleOwner) {
+        val observer = LifecycleEventObserver { _, event ->
+            if (event == Lifecycle.Event.ON_RESUME) refreshOpenChat()
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
     }
     // Голосовой ввод: toggle-STT по тапу, hold-to-talk (STT/RAW), preview и
     // разрешения — общий контроллер (ядро поведения Chat и Share).

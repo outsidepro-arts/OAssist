@@ -193,6 +193,8 @@ class TerminalTranscriptPersistenceTest(private val mode: AssistMode, private va
             stores[this] = ViewModelStore().also { it.put("chat", this) }
         }
         fun sendChat(text: String) {
+            // Экран перечитывает открытый диалог при появлении — дождаться готовности.
+            compose.waitUntil(10_000) { visible.value?.isLoadingHistory != true }
             compose.onNodeWithText(context.getString(ru.outsideproarts.oassist.feature.chat.R.string.chat_input_hint)).performTextInput(text)
             compose.onNodeWithContentDescription(context.getString(ru.outsideproarts.oassist.feature.chat.R.string.chat_send)).performClick()
         }

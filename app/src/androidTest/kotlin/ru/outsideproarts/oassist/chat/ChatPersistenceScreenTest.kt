@@ -503,6 +503,8 @@ class ChatPersistenceScreenTest {
                 }
             }
             compose.waitForIdle()
+            // Экран перечитывает открытый диалог при появлении — дождаться готовности.
+            compose.waitUntil(10_000) { !vm.isLoadingHistory }
             action(vm, requests)
         } finally {
             releasePending()
