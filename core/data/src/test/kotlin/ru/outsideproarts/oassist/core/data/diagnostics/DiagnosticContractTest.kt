@@ -326,6 +326,218 @@ class DiagnosticContractTest {
         assertEquals(1, dir.listFiles()!!.count { it.extension == "media" })
     }
 
+    @Test fun `health does not decrypt the archive`() {
+        val decryptions = java.util.concurrent.atomic.AtomicInteger()
+        val counting = object : DiagnosticCipher {
+            override fun encrypt(data: ByteArray) = cipher.encrypt(data)
+            override fun decrypt(data: ByteArray): ByteArray {
+                decryptions.incrementAndGet()
+                return cipher.decrypt(data)
+            }
+        }
+        val store = DiagnosticStore(Files.createTempDirectory("oassist-health-fast").toFile(), counting)
+        repeat(10) { index -> store.record(DiagnosticEvent(DiagnosticKind.TOOL_RESULT, "run", content = "content-$index")) }
+        decryptions.set(0)
+        assertTrue(store.health().available)
+        assertEquals("health must not rescan the archive", 0, decryptions.get())
+        store.close()
+    }
+
+    @Test fun `health reports the recording setting while storage is unavailable`() {
+        val store = DiagnosticStore(Files.createTempDirectory("oassist-health-unavailable").toFile(), cipher, deleteFile = { true }, isAvailable = { false })
+        try {
+            val before = store.health()
+            assertFalse(before.available)
+            assertFalse(before.contentEnabled)
+            assertEquals("credential_storage_locked", before.lastError)
+            store.setContentEnabled(true)
+            val after = store.health()
+            assertFalse(after.available)
+            assertTrue("contentEnabled must reflect the setting regardless of availability", after.contentEnabled)
+            assertTrue(store.contentEnabled())
+        } finally {
+            store.close()
+        }
+    }
+
+    @Test fun `clear drops the archive without decrypting it`() {
+        val decryptions = java.util.concurrent.atomic.AtomicInteger()
+        val counting = object : DiagnosticCipher {
+            override fun encrypt(data: ByteArray) = cipher.encrypt(data)
+            override fun decrypt(data: ByteArray): ByteArray {
+                decryptions.incrementAndGet()
+                return cipher.decrypt(data)
+            }
+        }
+        val dir = Files.createTempDirectory("oassist-clear-fast").toFile()
+        val store = DiagnosticStore(dir, counting)
+        repeat(10) { index -> store.record(DiagnosticEvent(DiagnosticKind.TOOL_RESULT, "run", content = "content-$index")) }
+        decryptions.set(0)
+        store.clear()
+        assertEquals("clear must not rescan the archive", 0, decryptions.get())
+        assertTrue(dir.listFiles()!!.none { it.extension == "event" || it.extension == "binding" || it.extension == "media" })
+        store.close()
+    }
+
+    @Test fun `list operations reads the metadata cache without re-decoding`() {
+        val decryptions = java.util.concurrent.atomic.AtomicInteger()
+        val counting = object : DiagnosticCipher {
+            override fun encrypt(data: ByteArray) = cipher.encrypt(data)
+            override fun decrypt(data: ByteArray): ByteArray {
+                decryptions.incrementAndGet()
+                return cipher.decrypt(data)
+            }
+        }
+        val store = DiagnosticStore(Files.createTempDirectory("oassist-list-cached").toFile(), counting)
+        store.record(DiagnosticEvent(DiagnosticKind.OPERATION_START, "op", attributes = mapOf("mode" to "CHAT", "chatId" to "chat")))
+        store.record(DiagnosticEvent(DiagnosticKind.OPERATION_END, "op"))
+        val first = store.listOperations(0)
+        decryptions.set(0)
+        val second = store.listOperations(0)
+        assertEquals("listOperations must reuse the metadata cache", 0, decryptions.get())
+        assertEquals(listOf("op"), second.map { it.operationId })
+        assertEquals("CHAT", second.single().mode)
+        assertEquals("chat", second.single().chatId)
+        assertEquals(first.map { it.timestampMillis }, second.map { it.timestampMillis })
+        store.close()
+    }
+
+    @Test fun `steady state recording does not list the archive directory per event`() {
+        val dir = Files.createTempDirectory("oassist-record-listing").toFile()
+        val root = object : File(dir.path) {
+            val listings = java.util.concurrent.atomic.AtomicInteger()
+            override fun listFiles(): Array<File>? {
+                listings.incrementAndGet()
+                return super.listFiles()
+            }
+        }
+        val store = DiagnosticStore(root, cipher)
+        try {
+            repeat(5) { index -> store.record(DiagnosticEvent(DiagnosticKind.TOOL_RESULT, "warm", content = "warm-$index")) }
+            // Прогрев: индекс, счётчики и срезы обслуживания построены.
+            store.export(ByteArrayOutputStream(), 0)
+            root.listings.set(0)
+            repeat(20) { index -> store.record(DiagnosticEvent(DiagnosticKind.TOOL_RESULT, "steady", content = "steady-$index")) }
+            store.listOperations(0)
+            assertEquals("record must not list the archive per event", 0, root.listings.get())
+        } finally {
+            store.close()
+        }
+    }
+
+    @Test fun `warm bind conversation does not list the archive directory per call`() {
+        val dir = Files.createTempDirectory("oassist-bind-listing").toFile()
+        val root = object : File(dir.path) {
+            val listings = java.util.concurrent.atomic.AtomicInteger()
+            override fun listFiles(): Array<File>? {
+                listings.incrementAndGet()
+                return super.listFiles()
+            }
+        }
+        val store = DiagnosticStore(root, cipher)
+        try {
+            store.record(DiagnosticEvent(DiagnosticKind.OPERATION_START, "warm"))
+            store.export(ByteArrayOutputStream(), 0)
+            // Первый bind выполняет плановый срез подрезки биндов.
+            store.bindConversation("chat", "first")
+            root.listings.set(0)
+            store.bindConversation("chat", "second")
+            store.bindConversation("chat", "third")
+            store.bindConversation("chat", "fourth")
+            assertEquals("bind must not list the archive per call", 0, root.listings.get())
+        } finally {
+            store.close()
+        }
+    }
+
+    @Test fun `media extraction triggers for inline data keys and escaped keys`() {
+        val encoded = Base64.getEncoder().encodeToString("image-content".toByteArray())
+        for (body in listOf(
+            """{"type":"image","data":"$encoded"}""",
+            """{"type":"image","da\u0074a":"$encoded"}""",
+            """{"inlineData":{"data":"$encoded"}}""",
+        )) {
+            val store = DiagnosticStore(Files.createTempDirectory("oassist-media-trigger").toFile(), cipher)
+            store.record(DiagnosticEvent(DiagnosticKind.PROVIDER_REQUEST, "run", content = body))
+            val output = ByteArrayOutputStream()
+            store.export(output, 0, includeMedia = true)
+            val archive = unzip(output.toByteArray())
+            assertEquals("body=$body", "image-content", archive.filterKeys { it.startsWith("media/") }.values.single().decodeToString())
+            store.close()
+        }
+    }
+
+    @Test fun `content without media markers is stored unchanged`() {
+        val store = DiagnosticStore(Files.createTempDirectory("oassist-no-media").toFile(), cipher)
+        store.record(DiagnosticEvent(DiagnosticKind.AGENT_ROUND, "run", content = """{"messages":[{"role":"user","text":"привет, world"}]}"""))
+        val output = ByteArrayOutputStream()
+        store.export(output, 0, includeMedia = true)
+        val archive = unzip(output.toByteArray())
+        val event = archive.getValue("events.jsonl").decodeToString()
+        assertTrue(event.contains("привет, world"))
+        assertTrue(archive.keys.none { it.startsWith("media/") })
+        store.close()
+    }
+
+    @Test fun `failed directory listing does not disable deletion marker discovery`() {
+        val dir = Files.createTempDirectory("oassist-marker-listing").toFile()
+        File(dir, "gone.marker.deleted").writeBytes(cipher.encrypt("""{"operationIds":["gone"]}""".toByteArray()))
+        val flaky = object : File(dir.path) {
+            var listingFails = true
+            override fun listFiles(): Array<File>? = if (listingFails) null else super.listFiles()
+        }
+        val store = DiagnosticStore(flaky, cipher)
+        try {
+            // Листинг каталога падает: маркеры не найдены, но и не помечены
+            // как обнаруженные — после восстановления каталога они применяются.
+            store.health()
+            flaky.listingFails = false
+            store.record(DiagnosticEvent(DiagnosticKind.TOOL_RESULT, "gone", content = "private"))
+            store.record(DiagnosticEvent(DiagnosticKind.TOOL_RESULT, "kept", content = "kept-content"))
+            val output = ByteArrayOutputStream()
+            store.export(output, 0)
+            val events = unzip(output.toByteArray()).getValue("events.jsonl").decodeToString()
+            assertFalse(events.contains("private"))
+            assertTrue(events.contains("kept-content"))
+            // Счётчики байтов восстановлены после сбоя листинга, а не обнулены.
+            assertEquals(dir.listFiles()!!.sumOf { it.length() }, store.health().storedBytes)
+        } finally {
+            store.close()
+        }
+    }
+
+    @Test fun `list operations hides sessions deleted while their files remain`() {
+        val dir = Files.createTempDirectory("oassist-list-removed").toFile()
+        val store = DiagnosticStore(dir, cipher, deleteFile = { false })
+        try {
+            store.bindConversation("chat", "gone")
+            store.record(DiagnosticEvent(DiagnosticKind.OPERATION_START, "gone", attributes = mapOf("mode" to "CHAT")))
+            store.export(ByteArrayOutputStream(), 0)
+            store.removeConversation("chat")
+            // Файлы остались (удаление падает), но удалённая сессия не видима.
+            assertTrue(dir.listFiles()!!.any { it.extension == "event" })
+            assertTrue("deleted sessions must not be listed", store.listOperations(0).isEmpty())
+        } finally {
+            store.close()
+        }
+    }
+
+    @Test fun `list operations hides sessions with disputed ownership`() {
+        val dir = Files.createTempDirectory("oassist-list-unowned").toFile()
+        legacyEvent(dir, "root-a", """{"kind":"OPERATION_START","operationId":"root-a"}""")
+        legacyEvent(dir, "root-b", """{"kind":"OPERATION_START","operationId":"root-b"}""")
+        legacyEvent(dir, "conflict-start", """{"kind":"OPERATION_START","operationId":"conflict"}""")
+        legacyEvent(dir, "conflict-a", """{"kind":"TOOL_RESULT","operationId":"conflict","parentOperationId":"root-a"}""")
+        legacyEvent(dir, "conflict-b", """{"kind":"TOOL_RESULT","operationId":"conflict","parentOperationId":"root-b"}""")
+        val store = DiagnosticStore(dir, cipher)
+        try {
+            val shown = store.listOperations(0).map { it.operationId }.sorted()
+            assertEquals(listOf("root-a", "root-b"), shown)
+        } finally {
+            store.close()
+        }
+    }
+
     private fun unzip(data: ByteArray): Map<String, ByteArray> {
         val entries = mutableMapOf<String, ByteArray>()
         ZipInputStream(ByteArrayInputStream(data)).use { zip ->

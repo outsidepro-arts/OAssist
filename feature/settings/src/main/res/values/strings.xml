@@ -469,6 +469,7 @@
     <string name="diagnostics_continue">Продолжить</string>
     <string name="diagnostics_clear_action">Удалить</string>
     <string name="diagnostics_busy">Подготовка отчёта…</string>
+    <string name="diagnostics_loading">Загрузка состояния диагностики…</string>
     <string name="diagnostics_saved">Отчёт сохранён</string>
     <string name="diagnostics_cleared">Диагностика очищена</string>
     <string name="diagnostics_error">Не удалось выполнить операцию диагностики.</string>

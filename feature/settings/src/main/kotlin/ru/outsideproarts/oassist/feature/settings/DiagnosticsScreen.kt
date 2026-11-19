@@ -108,7 +108,13 @@ private fun restoreExportRequest(saved: Bundle?): ExportRequest? {
 fun DiagnosticsScreen(store: DiagnosticStore, onBack: () -> Unit) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
-    var health by remember(store) { mutableStateOf(DiagnosticHealth(false, false, 0, 0)) }
+    // null = состояние ещё прогружается: экран не должен утверждать
+    // «недоступна» и «выключена» до первого реального ответа хранилища.
+    var health by remember(store) { mutableStateOf<DiagnosticHealth?>(null) }
+    // Настройка записи известна мгновенно (память хранилища) и переживает
+    // пересоздание экрана независимо от скорости health().
+    var recordEnabled by remember(store) { mutableStateOf(store.contentEnabled()) }
+    var settingsBusy by remember { mutableStateOf(false) }
     // Настройки экспорта и выбор сессий переживают пересоздание Activity.
     var includeWeek by rememberSaveable { mutableStateOf(false) }
     var includeMedia by rememberSaveable { mutableStateOf(false) }
@@ -289,32 +295,44 @@ fun DiagnosticsScreen(store: DiagnosticStore, onBack: () -> Unit) {
         OAssistPanel(title = stringResource(R.string.diagnostics_title)) {
             Text(stringResource(R.string.diagnostics_explanation))
             OAssistSwitchRow(
-                checked = health.contentEnabled,
+                checked = recordEnabled,
                 onCheckedChange = { enabled ->
+                    // Оптимистичное переключение: тумблер не ждёт health(),
+                    // а состояние подтверждается записью настройки.
+                    recordEnabled = enabled
+                    settingsBusy = true
                     scope.launch {
-                        busy = true
                         try {
-                            health = withContext(Dispatchers.IO) {
+                            withContext(Dispatchers.IO) {
                                 store.setContentEnabled(enabled)
-                                store.health()
+                                health = store.health()
                             }
                         } catch (e: CancellationException) {
                             throw e
                         } catch (_: Exception) {
                             status = errorMessage
                             statusError = true
+                            // Настройка уже применена в памяти хранилища —
+                            // показываем фактическое состояние.
+                            recordEnabled = store.contentEnabled()
                         } finally {
-                            busy = false
+                            settingsBusy = false
                         }
                     }
                 },
                 label = stringResource(R.string.diagnostics_record),
                 stateLabelOn = onText,
                 stateLabelOff = offText,
-                enabled = !busy,
+                // Во время экспорта/очистки тумблер заблокирован: переключение
+                // сбивает поколение и роняет идущую выгрузку.
+                enabled = !settingsBusy && !busy,
             )
-            Text(stringResource(R.string.diagnostics_storage, Formatter.formatFileSize(context, health.storedBytes), health.droppedEvents))
-            if (!health.available) {
+            val loadedHealth = health
+            when {
+                loadedHealth == null -> OAssistLiveStatus(stringResource(R.string.diagnostics_loading))
+                else -> Text(stringResource(R.string.diagnostics_storage, Formatter.formatFileSize(context, loadedHealth.storedBytes), loadedHealth.droppedEvents))
+            }
+            if (health?.available == false) {
                 OAssistLiveStatus(stringResource(R.string.diagnostics_unavailable), assertive = true)
             }
             OAssistSwitchRow(

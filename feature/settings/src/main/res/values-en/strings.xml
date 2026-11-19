@@ -472,6 +472,7 @@
     <string name="diagnostics_continue">Continue</string>
     <string name="diagnostics_clear_action">Delete</string>
     <string name="diagnostics_busy">Preparing report…</string>
+    <string name="diagnostics_loading">Loading diagnostics status…</string>
     <string name="diagnostics_saved">Report saved</string>
     <string name="diagnostics_cleared">Diagnostics cleared</string>
     <string name="diagnostics_error">Could not complete the diagnostics operation.</string>

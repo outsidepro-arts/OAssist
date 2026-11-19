@@ -33,6 +33,8 @@ import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicLong
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.FutureTask
+import java.util.NavigableMap
+import java.util.TreeMap
 import java.util.zip.ZipEntry
 import java.util.zip.ZipOutputStream
 
@@ -109,6 +111,13 @@ internal object DiagnosticSanitizer {
 private data class CapturedMedia(val id: String, val bytes: ByteArray)
 
 private fun extractMedia(content: String): Pair<String, List<CapturedMedia>> {
+    // Медиа извлекается только по ключам с "data"/Base64 или data:-URI, а
+    // экранированные имена ключей содержат обратный слэш. Если ни одного
+    // триггера в содержимом нет, повторный разбор JSON ничего не изменит —
+    // он пропускается (санитизация уже вернула канонический JSON).
+    if ('\\' !in content && !content.contains("base64", ignoreCase = true) &&
+        "data:" !in content && "\"data\"" !in content
+    ) return content to emptyList()
     val parsed = runCatching { Json.parseToJsonElement(content) }.getOrNull() ?: return content to emptyList()
     val media = mutableListOf<CapturedMedia>()
     fun visit(value: JsonElement, mediaContext: Boolean = false): JsonElement = when (value) {
@@ -182,8 +191,8 @@ class DiagnosticStore private constructor(
     internal constructor(root: File, cipher: DiagnosticCipher, clock: () -> Long = System::currentTimeMillis, maxBytes: Long = MAX_BYTES, reserveBytes: Long = 16L * 1024 * 1024, maxMediaBytes: Long = 128L * 1024 * 1024) :
         this({ root }, cipher, { true }, {}, clock, {}, { true }, maxBytes, reserveBytes, maxMediaBytes, { it.delete() })
 
-    internal constructor(root: File, cipher: DiagnosticCipher, clock: () -> Long = System::currentTimeMillis, maxBytes: Long = MAX_BYTES, reserveBytes: Long = 16L * 1024 * 1024, maxMediaBytes: Long = 128L * 1024 * 1024, deleteFile: (File) -> Boolean) :
-        this({ root }, cipher, { true }, {}, clock, {}, { true }, maxBytes, reserveBytes, maxMediaBytes, deleteFile)
+    internal constructor(root: File, cipher: DiagnosticCipher, clock: () -> Long = System::currentTimeMillis, maxBytes: Long = MAX_BYTES, reserveBytes: Long = 16L * 1024 * 1024, maxMediaBytes: Long = 128L * 1024 * 1024, deleteFile: (File) -> Boolean, isAvailable: () -> Boolean = { true }) :
+        this({ root }, cipher, { true }, {}, clock, {}, isAvailable, maxBytes, reserveBytes, maxMediaBytes, deleteFile)
 
     private val lock = Any()
     // Never hold this lock during archive I/O or while acquiring lock.
@@ -200,6 +209,7 @@ class DiagnosticStore private constructor(
     private val eventIndexCache = LinkedHashMap<String, EventIndex>()
     private val bindingCache = LinkedHashMap<String, Pair<File, DiagnosticEvent>>()
     private val unreadableFiles = mutableMapOf<String, Int>()
+    private val unreadableBindings = mutableMapOf<String, Int>()
     private val loadedMarkers = mutableSetOf<String>()
     private val dropped = AtomicLong()
     private val pendingBytes = AtomicLong()
@@ -234,30 +244,81 @@ class DiagnosticStore private constructor(
     private val pendingRoots = mutableMapOf<String, Int>()
     private val runBytes = mutableMapOf<String, Long>()
     private var runIndexLoaded = false
+    private var lightMaintenanceDone = false
     private var startupMaintenanceDone = false
+    // Счётчики байтов архива: проверки квот на пути записи и bind не проходят
+    // листинг каталога (полный проход статов — O(число файлов) на событие).
+    // Учёт ведётся постановкой при создании файла и снятием при удалении;
+    // полный пересчёт — на точном проходе ротации и при первом обращении.
+    private val storedBytes = AtomicLong()
+    private val bindingBytes = AtomicLong()
+    private val mediaBytes = AtomicLong()
+    private var bytesInitialized = false
+    // Моменты последних точных проходов периодического обслуживания: ротация
+    // и подрезка биндов не сканируют каталог на каждое событие и каждый bind.
+    private var lastRotateSweepMillis = 0L
+    private var lastPruneSweepMillis = 0L
+    // Известные имена маркеров удаления: после первого прохода листинг не
+    // повторяется на каждое событие. Маркеры пишет только этот процесс
+    // (publishDeletionMarker регистрирует имя); чужие экземпляры на том же
+    // каталоге одновременно не работают.
+    private val markerNames = mutableSetOf<String>()
+    private var markersDiscovered = false
 
-    private fun ensureStartupMaintenance() {
-        if (startupMaintenanceDone || !available()) return
+    /**
+     * Лёгкое обслуживание без расшифровки архива: маркеры удаления и файлы,
+     * оставшиеся сбоем записи (`.partial`, осиротевшие `.media`). Выполняется
+     * на пути [health]/[clear] и перед записью события: не блокирует вызывающего
+     * проходом по Keystore. Тяжёлая чистка владения — только в
+     * [ensureStartupMaintenance] (экспорт, bind, удаление).
+     */
+    private fun ensureLightMaintenance() {
         loadDeletionMarkers()
-        var cleaned = true
-        val existing = files()
+        if (lightMaintenanceDone || !available()) return
+        // Флаг ставится только после успешного листинга: сбой каталога не
+        // должен навсегда отключить чистку осиротевших файлов.
+        val listing = root.listFiles() ?: return
+        val existing = listing.filter { it.isFile }
         val eventNames = existing.filter { it.extension == "event" }.map { it.nameWithoutExtension }.toSet()
+        var cleaned = true
         existing.filter { file ->
             file.name.endsWith(".partial") ||
                 (file.extension == "media" && file.nameWithoutExtension.substringBeforeLast('.', "") !in eventNames)
         }.forEach {
-            if (!it.delete()) {
+            val length = it.length()
+            if (it.delete()) {
+                noteBytes(it, -length)
+            } else {
                 cleaned = false
                 failure = "delete_failed"
             }
         }
+        lightMaintenanceDone = cleaned
+    }
+
+    /** Полное обслуживание: лёгкое + чистка владения (расшифровка по кэшу метаданных). */
+    private fun ensureStartupMaintenance() {
+        if (startupMaintenanceDone || !available()) return
+        ensureLightMaintenance()
+        var cleaned = true
         if (!cleanupDeletedEvents()) cleaned = false
         if (!cleanupUnownedEvents()) cleaned = false
         startupMaintenanceDone = cleaned
     }
 
     data class OperationSummary(val operationId: String, val timestampMillis: Long, val mode: String?, val chatId: String?)
-    private data class EventIndex(val file: File, val operationId: String, val parent: String?, val root: String?, val kind: DiagnosticKind, val chatId: String?, val hasContent: Boolean, val contentBytes: Long)
+    private data class EventIndex(
+        val file: File,
+        val operationId: String,
+        val parent: String?,
+        val root: String?,
+        val kind: DiagnosticKind,
+        val chatId: String?,
+        val hasContent: Boolean,
+        val contentBytes: Long,
+        val timestampMillis: Long,
+        val mode: String?,
+    )
     private data class ExportSnapshot(val health: DiagnosticHealth, val events: List<EventIndex>, val files: List<File>, val epoch: Long, val invalid: Int)
     @Serializable private data class DeletionMarker(val operationIds: Set<String>)
     private val pinned = mutableMapOf<File, Int>()
@@ -280,18 +341,33 @@ class DiagnosticStore private constructor(
         writer.awaitTermination(5, TimeUnit.SECONDS)
     }
 
+    /**
+     * Список операций из кэша метаданных: повторный проход не расшифровывает
+     * архив заново (расшифровка каждого файла — отдельный binder-вызов Keystore).
+     * Выборка повторяет фильтр экспорта: удалённые и сомнительные по владению
+     * операции не показываются, даже если их файлы ещё не удалены с диска.
+     */
     fun listOperations(sinceMillis: Long): List<OperationSummary> {
         flush()
         return synchronized(lock) {
-            ensureStartupMaintenance()
+            ensureLightMaintenance()
+            val entries = eventIndex()
+            val owned = ownedOperationIds(entries)
             val summaries = mutableMapOf<String, OperationSummary>()
             val started = mutableSetOf<String>()
-            files().filter { it.extension == "event" }.forEach { file ->
-                val event = runCatching { decode(file) }.getOrNull() ?: return@forEach
-                if (event.timestampMillis < sinceMillis || event.parentOperationId != null) return@forEach
-                if (event.kind == DiagnosticKind.OPERATION_START) started.add(event.operationId)
-                val prior = summaries[event.operationId]
-                summaries[event.operationId] = OperationSummary(event.operationId, minOf(prior?.timestampMillis ?: event.timestampMillis, event.timestampMillis), prior?.mode ?: event.attributes["mode"], prior?.chatId ?: event.attributes["chatId"])
+            entries.forEach { entry ->
+                if (entry.timestampMillis < sinceMillis || entry.parent != null) return@forEach
+                if (entry.operationId !in owned || isRemoved(entry.operationId) ||
+                    isRemoved(entry.parent) || isRemoved(entry.root)
+                ) return@forEach
+                if (entry.kind == DiagnosticKind.OPERATION_START) started.add(entry.operationId)
+                val prior = summaries[entry.operationId]
+                summaries[entry.operationId] = OperationSummary(
+                    entry.operationId,
+                    minOf(prior?.timestampMillis ?: entry.timestampMillis, entry.timestampMillis),
+                    prior?.mode ?: entry.mode,
+                    prior?.chatId ?: entry.chatId,
+                )
             }
             summaries.values.filter { it.operationId in started }.sortedByDescending { it.timestampMillis }
         }
@@ -330,9 +406,13 @@ class DiagnosticStore private constructor(
             sequence = 0,
             truncated = event.truncated || (cleanContent != null && cleanContent.length > MAX_PAYLOAD_CHARS),
         )
-        // Reserve room for the sequence assigned by the writer without reading its file here.
-        val queuedBytes = json.encodeToString(safe).toByteArray(StandardCharsets.UTF_8).size.toLong() +
-            20 + media.sumOf { it.bytes.size.toLong() }
+        // Оценка размера события в пути без полной сериализации: счётчик
+        // ограничивает объём недописанных событий (64 МБ), точность до байта
+        // не нужна. UTF-8 занимает не более 3 байт на символ, плюс запас на
+        // служебные поля.
+        val queuedBytes = ((safe.content?.length ?: 0) +
+            safe.operationId.length + safe.attributes.values.sumOf { it.length }) * 3L + 1024 +
+            media.sumOf { it.bytes.size.toLong() }
         if (pendingBytes.addAndGet(queuedBytes) > 64L * 1024 * 1024) {
             pendingBytes.addAndGet(-queuedBytes)
             dropped.incrementAndGet()
@@ -356,8 +436,11 @@ class DiagnosticStore private constructor(
                             settingsLoaded = true
                             if (failure == "credential_storage_locked") failure = null
                         }
-                        loadDeletionMarkers()
-                        ensureStartupMaintenance()
+                        // Лёгкое обслуживание включает загрузку маркеров удаления —
+                        // точку синхронизации для записей, допущенных до применения
+                        // tombstone. Тяжёлая чистка владения на каждое событие не
+                        // нужна: её выполняют холодные пути (экспорт, bind, удаление).
+                        ensureLightMaintenance()
                         if (isRemoved(safe.operationId) || isRemoved(safe.parentOperationId) || isRemoved(liveRoot)) {
                             removedOperations.add(safe.operationId)
                             dropped.incrementAndGet()
@@ -377,13 +460,22 @@ class DiagnosticStore private constructor(
                         rotate(bytes.size.toLong(), storedEvent.content != null, runId)
                         val sequenceFile = File(root, "sequence")
                         val sequencePending = File(root, "sequence.pending")
+                        // Учёт дельтой: запись поверх остатка неудачной прошлой
+                        // попытки не должна учитывать его байты повторно.
+                        val stalePendingLength = if (sequencePending.exists()) sequencePending.length() else 0L
                         sequencePending.writeText(sequence.get().toString())
-                        if (sequenceFile.exists() && !sequenceFile.delete()) error("sequence_write_failed")
+                        noteBytes(sequencePending, sequencePending.length() - stalePendingLength)
+                        if (sequenceFile.exists()) {
+                            val sequenceLength = sequenceFile.length()
+                            if (!sequenceFile.delete()) error("sequence_write_failed")
+                            noteBytes(sequenceFile, -sequenceLength)
+                        }
                         if (!sequencePending.renameTo(sequenceFile)) error("sequence_write_failed")
                         val name = "${storedEvent.sequence.toString().padStart(20, '0')}-${UUID.randomUUID()}"
                         val partial = File(root, "$name.partial")
                         ownedFiles.add(partial)
                         partial.writeBytes(bytes)
+                        noteBytes(partial, partial.length())
                         (if (allowed && enabled) media else emptyList()).forEach { blob ->
                             val encrypted = cipher.encrypt(blob.bytes)
                             rotateMedia(encrypted.size.toLong(), runId, ownedFiles.toSet())
@@ -393,7 +485,9 @@ class DiagnosticStore private constructor(
                             ownedFiles.add(pending)
                             ownedFiles.add(mediaFile)
                             pending.writeBytes(encrypted)
+                            noteBytes(pending, pending.length())
                             if (!pending.renameTo(mediaFile)) error("media_publish_failed")
+                            notePublished(mediaFile)
                         }
                         val eventFile = File(root, "$name.event")
                         if (!partial.renameTo(eventFile)) error("publish_failed")
@@ -406,6 +500,8 @@ class DiagnosticStore private constructor(
                             storedEvent.attributes["chatId"],
                             storedEvent.content != null,
                             if (storedEvent.content != null) textBytes else 0L,
+                            storedEvent.timestampMillis,
+                            storedEvent.attributes["mode"],
                         )
                         published = true
                     } catch (e: Exception) {
@@ -416,7 +512,10 @@ class DiagnosticStore private constructor(
                         }
                     } finally {
                         if (!published) ownedFiles.forEach { file ->
-                            if (file.exists() && !file.delete()) failure = "delete_failed"
+                            if (file.exists()) {
+                                val length = file.length()
+                                if (!file.delete()) failure = "delete_failed" else noteBytes(file, -length)
+                            }
                         }
                     }
                 } } finally {
@@ -440,15 +539,25 @@ class DiagnosticStore private constructor(
         ) activeOperations.remove(event.operationId)
     }
 
+    /**
+     * Быстрое состояние без тяжёлого обслуживания и расшифровки архива:
+     * размер — из счётчиков байтов (полный листинг — только при первом
+     * пересчёте), маркеры и стёртые частичные файлы — лёгкое обслуживание.
+     * Чистка владения остаётся на холодных путях (экспорт, bind, удаление),
+     * поэтому экран не ждёт скан архива.
+     */
     override fun health(): DiagnosticHealth = synchronized(lock) {
         try {
-            ensureStartupMaintenance()
+            ensureLightMaintenance()
         } catch (_: Exception) {
-            return@synchronized DiagnosticHealth(false, enabled, dropped.get(), files().sumOf { it.length() }, failure ?: "storage_unavailable")
+            return@synchronized DiagnosticHealth(false, enabled, dropped.get(), storedSize(), failure ?: "storage_unavailable")
         }
-        if (!available()) DiagnosticHealth(false, false, dropped.get(), 0, "credential_storage_locked")
-        else DiagnosticHealth(failure == null, enabled, dropped.get(), files().sumOf { it.length() }, failure)
+        if (!available()) DiagnosticHealth(false, enabled, dropped.get(), 0, "credential_storage_locked")
+        else DiagnosticHealth(failure == null, enabled, dropped.get(), storedSize(), failure)
     }
+
+    /** Фактическая настройка записи контента; не зависит от доступности хранилища. */
+    fun contentEnabled(): Boolean = enabled
 
     fun setContentEnabled(enabled: Boolean) {
         synchronized(lock) {
@@ -461,8 +570,14 @@ class DiagnosticStore private constructor(
         }
     }
 
+    /**
+     * Полный сброс архива без предварительного обслуживания: обслуживание
+     * расшифровывало и чистило архив перед удалением и растягивало очистку на
+     * минуты. Достаточно маркеров удаления (fail-closed для записей, которых
+     * коснулся сброс) и одного прохода удаления по листингу.
+     */
     fun clear() = synchronized(lock) {
-        ensureStartupMaintenance()
+        ensureLightMaintenance()
         synchronized(admissionLock) {
             generation.incrementAndGet()
             removedOperations.addAll(knownOperations)
@@ -474,9 +589,12 @@ class DiagnosticStore private constructor(
         runBytes.clear()
         runIndexLoaded = true
         files().filter { it.name != "sequence" && it.extension != "deleted" }.forEach { if (!it.delete()) failure = "delete_failed" }
+        // Учёт пересчитается с листинга при следующем обращении.
+        bytesInitialized = false
         eventIndexCache.clear()
         bindingCache.clear()
         unreadableFiles.clear()
+        unreadableBindings.clear()
         // Кэш считается непостроенным: после сброса индекс восстановится с диска,
         // и файлы, которые не удалось удалить, останутся видимы.
         eventsIndexed = false
@@ -519,13 +637,15 @@ class DiagnosticStore private constructor(
             if (target.exists()) return@synchronized
             val event = DiagnosticEvent(DiagnosticKind.STORAGE, operationId, attributes = mapOf("chatId" to chatId), timestampMillis = clock())
             val bytes = cipher.encrypt(json.encodeToString(event).toByteArray(StandardCharsets.UTF_8))
-            val allFiles = files()
-            if (allFiles.filter { it.extension == "binding" }.sumOf { it.length() } + bytes.size > reserveBytes ||
-                allFiles.sumOf { it.length() } + pendingBytes.get() + bytes.size > maxBytes
+            ensureBytesTracked()
+            if (bindingBytes.get() + bytes.size > reserveBytes ||
+                storedBytes.get() + pendingBytes.get() + bytes.size > maxBytes
             ) error("binding_quota_exceeded")
             pending = File(root, "${target.name}.partial")
             pending.writeBytes(bytes)
+            noteBytes(pending, bytes.size.toLong())
             if (!pending.renameTo(target)) error("publish_failed")
+            notePublished(target)
             bindingCache[target.name] = target to event
         } catch (e: Exception) {
             removedOperations.add(operationId)
@@ -540,14 +660,19 @@ class DiagnosticStore private constructor(
                 parents.filterValues { it in affected }.keys.forEach { affected.add(it) }
             } while (affected.size != count)
             removedOperations.addAll(affected)
+            val byName = filesByName()
             events.filter { it.operationId in affected }.forEach { entry ->
-                val prefix = entry.file.nameWithoutExtension + "."
-                files().filter { it == entry.file || it.name.startsWith(prefix) }.forEach { it.delete() }
+                (dependents(byName, entry.file) + entry.file).forEach { removeFile(it) }
             }
             dropped.incrementAndGet()
             failure = "binding_failed_${e.javaClass.simpleName}"
         } finally {
-            pending?.let { if (it.exists() && !it.delete()) failure = "delete_failed" }
+            pending?.let {
+                if (it.exists()) {
+                    val length = it.length()
+                    if (it.delete()) noteBytes(it, -length) else failure = "delete_failed"
+                }
+            }
         }
     }
 
@@ -625,15 +750,15 @@ class DiagnosticStore private constructor(
             synchronized(admissionLock) { removedOperations.removeAll(newlyRemoved) }
             throw error
         }
-        matchingBindings.forEach { if (!deleteFile(it.first)) failure = "delete_failed" }
+        matchingBindings.forEach { if (!removeFile(it.first)) failure = "delete_failed" }
+        val byName = filesByName()
         events.filter { it.operationId in affected }.forEach { entry ->
             val file = entry.file
-            val prefix = file.nameWithoutExtension + "."
             var mediaDeleted = true
-            files().filter { it != file && it.name.startsWith(prefix) }.forEach {
-                if (!deleteFile(it)) { failure = "delete_failed"; mediaDeleted = false }
+            dependents(byName, file).forEach {
+                if (!removeFile(it)) { failure = "delete_failed"; mediaDeleted = false }
             }
-            if (mediaDeleted && !deleteFile(file)) failure = "delete_failed"
+            if (mediaDeleted && !removeFile(file)) failure = "delete_failed"
         }
         cleanupUnownedEvents()
         invalidateExports()
@@ -784,7 +909,8 @@ class DiagnosticStore private constructor(
             val decoded = runCatching { decode(file) }.getOrNull()
             if (decoded != null) scannedEvents += file to decoded.toIndex(file) else unreadable.add(file.name)
         }
-        val scannedBindings = listing.filter { it.isFile && it.extension == "binding" }.mapNotNull { file ->
+        val bindingFiles = listing.filter { it.isFile && it.extension == "binding" }
+        val scannedBindings = bindingFiles.mapNotNull { file ->
             runCatching { decode(file) }.getOrNull()?.let { file to it }
         }
         synchronized(lock) {
@@ -792,6 +918,9 @@ class DiagnosticStore private constructor(
                 scannedEvents.forEach { (file, entry) -> if (file.exists()) eventIndexCache[file.name] = entry }
                 scannedBindings.forEach { (file, event) -> if (file.exists()) bindingCache[file.name] = file to event }
                 unreadable.forEach { unreadableFiles.putIfAbsent(it, 0) }
+                val decodedBindings = scannedBindings.mapTo(mutableSetOf()) { it.first.name }
+                bindingFiles.map { it.name }.filter { it !in decodedBindings }
+                    .forEach { unreadableBindings.putIfAbsent(it, 0) }
                 eventsIndexed = true
             }
         }
@@ -828,6 +957,29 @@ class DiagnosticStore private constructor(
         }
     }
 
+    /**
+     * Повтор только тех биндов, что не расшифровались при скане: по известным
+     * именам, без листинга каталога; стабильно нечитаемые прекращают попытки.
+     */
+    private fun retryUnreadableBindings() {
+        if (unreadableBindings.isEmpty()) return
+        unreadableBindings.keys.toList().forEach { name ->
+            val attempts = unreadableBindings[name] ?: return@forEach
+            val file = File(root, name)
+            if (attempts >= MAX_DECODE_ATTEMPTS || !file.exists()) {
+                unreadableBindings.remove(name)
+                return@forEach
+            }
+            val event = runCatching { decode(file) }.getOrNull()
+            if (event == null) {
+                unreadableBindings[name] = attempts + 1
+                return@forEach
+            }
+            bindingCache[name] = file to event
+            unreadableBindings.remove(name)
+        }
+    }
+
     private fun DiagnosticEvent.toIndex(file: File) = EventIndex(
         file,
         operationId,
@@ -837,21 +989,30 @@ class DiagnosticStore private constructor(
         attributes["chatId"],
         content != null,
         content?.toByteArray(StandardCharsets.UTF_8)?.size?.toLong() ?: 0,
+        timestampMillis,
+        attributes["mode"],
     )
 
     private fun loadDeletionMarkers() {
-        files().filter { it.extension == "deleted" }.forEach { file ->
+        if (!markersDiscovered) {
+            // Флаг ставится только после успешного листинга: сбой каталога
+            // (direct boot, I/O) не должен навсегда отключить поиск маркеров.
+            val listing = root.listFiles() ?: return
+            listing.filter { it.isFile && it.extension == "deleted" }.forEach { markerNames.add(it.name) }
+            markersDiscovered = true
+        }
+        markerNames.toList().forEach { name ->
             // Маркеры неизменяемы и не удаляются: повторный проход читает только новое.
-            if (file.name in loadedMarkers) return@forEach
+            if (name in loadedMarkers) return@forEach
             val marker = try {
-                json.decodeFromString<DeletionMarker>(cipher.decrypt(file.readBytes()).toString(StandardCharsets.UTF_8))
+                json.decodeFromString<DeletionMarker>(cipher.decrypt(File(root, name).readBytes()).toString(StandardCharsets.UTF_8))
             } catch (error: Exception) {
                 failure = "deletion_marker_unreadable"
                 throw IllegalStateException("deletion_marker_unreadable", error)
             }
             removedOperations.addAll(marker.operationIds)
             durablyRemovedOperations.addAll(marker.operationIds)
-            loadedMarkers.add(file.name)
+            loadedMarkers.add(name)
         }
     }
 
@@ -859,6 +1020,8 @@ class DiagnosticStore private constructor(
         val marker = File(root, "${UUID.randomUUID()}.deleted")
         val bytes = cipher.encrypt(json.encodeToString(DeletionMarker(operationIds)).toByteArray(StandardCharsets.UTF_8))
         atomicWrite(marker) { it.write(bytes) }
+        noteBytes(marker, marker.length())
+        markerNames.add(marker.name)
         durablyRemovedOperations.addAll(operationIds)
         loadedMarkers.add(marker.name)
     }
@@ -872,25 +1035,27 @@ class DiagnosticStore private constructor(
             entries.filter { it.parent in affected || it.root in affected }.forEach { affected.add(it.operationId) }
         } while (affected.size != count)
         removedOperations.addAll(affected)
+        val byName = filesByName()
         entries.filter { it.operationId in affected }.forEach { entry ->
-            val prefix = entry.file.nameWithoutExtension + "."
             var mediaDeleted = true
-            files().filter { it != entry.file && it.name.startsWith(prefix) }.forEach {
-                if (!deleteFile(it)) { failure = "delete_failed"; cleaned = false; mediaDeleted = false }
+            dependents(byName, entry.file).forEach {
+                if (!removeFile(it)) { failure = "delete_failed"; cleaned = false; mediaDeleted = false }
             }
-            if (mediaDeleted && !deleteFile(entry.file)) { failure = "delete_failed"; cleaned = false }
+            if (mediaDeleted && !removeFile(entry.file)) { failure = "delete_failed"; cleaned = false }
         }
         files().filter { it.extension == "binding" }.forEach { file ->
             val event = runCatching { decode(file) }.getOrNull()
-            if (event?.operationId in affected && !deleteFile(file)) { failure = "delete_failed"; cleaned = false }
+            if (event?.operationId in affected && !removeFile(file)) { failure = "delete_failed"; cleaned = false }
         }
         return cleaned
     }
 
     private fun ownedOperationIds(entries: List<EventIndex>): Set<String> {
-        val bindings = files().filter { it.extension == "binding" }.mapNotNull { file ->
-            runCatching { decode(file).operationId }.getOrNull()
-        }
+        // Бинды — из кэша; нерасшифрованные при скане пробуются ещё раз
+        // по известным именам (transient-сбой Keystore не должен лишать
+        // операцию владения) и не требуют листинга каталога.
+        retryUnreadableBindings()
+        val bindings = bindingEntries().map { it.second.operationId }
         val roots = mutableMapOf<String, MutableSet<String>>()
         fun addRoot(operation: String, root: String) {
             roots.getOrPut(operation) { mutableSetOf() }.add(root)
@@ -927,16 +1092,19 @@ class DiagnosticStore private constructor(
             }
         }
         var cleaned = true
+        val byName = filesByName()
         entries.filter { it.operationId in unowned }.forEach { entry ->
-            val prefix = entry.file.nameWithoutExtension + "."
-            files().filter { it == entry.file || it.name.startsWith(prefix) }.forEach { file ->
-                if (!deleteFile(file)) { failure = "delete_failed"; cleaned = false }
+            (dependents(byName, entry.file) + entry.file).forEach { file ->
+                if (!removeFile(file)) { failure = "delete_failed"; cleaned = false }
             }
         }
         return cleaned
     }
 
+    /** Подрезка просроченных биндов — не чаще периодического среза, не на каждый bind. */
     private fun pruneExpiredBindings() {
+        if (clock() - lastPruneSweepMillis < SWEEP_INTERVAL_MILLIS) return
+        lastPruneSweepMillis = clock()
         val eventFiles = files().filter { it.extension == "event" }
         val entries = eventIndex()
         if (entries.size != eventFiles.size) return
@@ -958,7 +1126,7 @@ class DiagnosticStore private constructor(
         val retained = entries.map { it.root ?: rootOf(it.operationId) }.toSet() + liveRetained
         bindings.forEach { (file, binding) ->
             if (binding.timestampMillis < clock() - RETENTION_MILLIS && binding.operationId !in retained) {
-                if (!file.delete()) failure = "delete_failed"
+                if (!removeFile(file)) failure = "delete_failed"
             }
         }
     }
@@ -986,6 +1154,76 @@ class DiagnosticStore private constructor(
 
     private fun files(): List<File> = root.listFiles()?.filter { it.isFile } ?: emptyList()
 
+    /** Постановка/снятие байтов файла на учёт; все вызовы — под [lock]. */
+    private fun noteBytes(file: File, delta: Long) {
+        storedBytes.addAndGet(delta)
+        when (file.extension) {
+            "binding" -> bindingBytes.addAndGet(delta)
+            "media" -> mediaBytes.addAndGet(delta)
+        }
+    }
+
+    /** Публикация переименованного файла: суб-счётчик ведётся по финальному имени. */
+    private fun notePublished(file: File) {
+        when (file.extension) {
+            "binding" -> bindingBytes.addAndGet(file.length())
+            "media" -> mediaBytes.addAndGet(file.length())
+        }
+    }
+
+    private fun removeFile(file: File): Boolean {
+        val length = file.length()
+        val removed = deleteFile(file)
+        if (removed) noteBytes(file, -length)
+        return removed
+    }
+
+    private fun ensureBytesTracked() {
+        if (bytesInitialized) return
+        // Счётчики не инициализируются по сбойному листингу (пустой список
+        // обнулил бы их и открыл бы превышение квот до пересчёта).
+        val listing = root.listFiles() ?: return
+        recountBytes(listing.filter { it.isFile })
+    }
+
+    private fun recountBytes(all: List<File>) {
+        var total = 0L
+        var bindings = 0L
+        var media = 0L
+        all.forEach {
+            val length = it.length()
+            total += length
+            when (it.extension) {
+                "binding" -> bindings += length
+                "media" -> media += length
+            }
+        }
+        storedBytes.set(total)
+        bindingBytes.set(bindings)
+        mediaBytes.set(media)
+        bytesInitialized = true
+    }
+
+    private fun storedSize(): Long {
+        ensureBytesTracked()
+        return storedBytes.get()
+    }
+
+    /** Имена файлов для поиска по префиксу без повторного листинга каталога. */
+    private fun filesByName(): NavigableMap<String, File> {
+        val byName = TreeMap<String, File>()
+        files().forEach { byName[it.name] = it }
+        return byName
+    }
+
+    private fun dependents(byName: NavigableMap<String, File>, base: File): List<File> {
+        val prefix = base.nameWithoutExtension + "."
+        return byName.tailMap(prefix).entries
+            .takeWhile { it.key.startsWith(prefix) }
+            .map { it.value }
+            .filter { it != base }
+    }
+
     private fun flush() {
         check(!writer.isShutdown) { "diagnostics_closed" }
         val barrier = FutureTask { Unit }
@@ -993,18 +1231,30 @@ class DiagnosticStore private constructor(
         barrier.get()
     }
 
+    /**
+     * Ротация с гейтом по счётчикам: без точного прохода, пока запись укладывается
+     * в лимит и периодический срез просроченного не подошёл. Точный проход
+     * пересчитывает счётчики по листингу (самолечение от дрейфа).
+     */
     private fun rotate(incoming: Long, content: Boolean, protectedRun: String, protectedFiles: Set<File> = emptySet()) {
-        val all = files().filter { it.name != "sequence" }.sortedBy { it.lastModified() }
-        var bytes = all.sumOf { it.length() }
+        ensureBytesTracked()
         val limit = if (content) maxBytes - reserveBytes else maxBytes
-        if (bytes + incoming > limit || all.any { it.lastModified() < clock() - RETENTION_MILLIS }) {
+        if (storedBytes.get() + incoming <= limit && clock() - lastRotateSweepMillis < SWEEP_INTERVAL_MILLIS) return
+        lastRotateSweepMillis = clock()
+        val listing = root.listFiles()
+        val all = (listing ?: emptyArray()).filter { it.isFile }.sortedBy { it.lastModified() }
+        // Пересчёт только по успешному листингу: сбойный не обнуляет счётчики.
+        if (listing != null) recountBytes(all)
+        val rotateFiles = all.filter { it.name != "sequence" }
+        var bytes = rotateFiles.sumOf { it.length() }
+        if (bytes + incoming > limit || rotateFiles.any { it.lastModified() < clock() - RETENTION_MILLIS }) {
             val groups = evictionGroups(contentOnly = content, protectedRun = protectedRun)
             groups.forEach { group ->
                 if (group.any { it in pinned || it in protectedFiles }) return@forEach
                 if (group.maxOf { it.lastModified() } < clock() - RETENTION_MILLIS || bytes + incoming > limit) {
                     group.forEach { file ->
                         val length = file.length()
-                        if (file.delete()) { bytes -= length; dropped.incrementAndGet() }
+                        if (removeFile(file)) { bytes -= length; dropped.incrementAndGet() }
                     }
                 }
             }
@@ -1013,7 +1263,12 @@ class DiagnosticStore private constructor(
     }
 
     private fun rotateMedia(incoming: Long, protectedRun: String, protectedFiles: Set<File> = emptySet()) {
-        val media = files().filter { it.extension == "media" }
+        ensureBytesTracked()
+        if (mediaBytes.get() + incoming <= maxMediaBytes) return
+        val listing = root.listFiles()
+        val all = (listing ?: emptyArray()).filter { it.isFile }.sortedBy { it.lastModified() }
+        if (listing != null) recountBytes(all)
+        val media = all.filter { it.extension == "media" }
         var bytes = media.sumOf { it.length() }
         if (bytes + incoming <= maxMediaBytes) return
         evictionGroups(contentOnly = true, protectedRun = protectedRun).filter { group -> group.any { it.extension == "media" } }.forEach { group ->
@@ -1021,7 +1276,7 @@ class DiagnosticStore private constructor(
             if (bytes + incoming > maxMediaBytes) {
                 group.forEach { file ->
                     val size = file.length()
-                    if (file.delete()) { if (file.extension == "media") bytes -= size; dropped.incrementAndGet() }
+                    if (removeFile(file)) { if (file.extension == "media") bytes -= size; dropped.incrementAndGet() }
                 }
             }
         }
@@ -1054,5 +1309,8 @@ class DiagnosticStore private constructor(
         const val MAX_BYTES = 256L * 1024 * 1024
         const val RETENTION_MILLIS = 7L * 24 * 60 * 60 * 1000
         const val MAX_DECODE_ATTEMPTS = 3
+
+        /** Минимальный интервал точных проходов ротации и подрезки биндов. */
+        const val SWEEP_INTERVAL_MILLIS = 30L * 60 * 1000
     }
 }
